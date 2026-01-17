@@ -73,6 +73,9 @@ test_*.db
 *~
 .DS_Store
 
+# Kiro
+.kiro/
+
 # Node.js / Frontend
 node_modules/
 npm-debug.log*
