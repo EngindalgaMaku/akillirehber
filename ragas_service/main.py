@@ -1,0 +1,769 @@
+"""RAGAS Evaluation Service - FastAPI application for RAG evaluation metrics."""
+
+import math
+import os
+import logging
+from typing import List, Optional
+from datetime import datetime, timezone
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+SERVICE_NAME = "RAGAS Evaluation Service"
+
+app = FastAPI(
+    title=SERVICE_NAME,
+    description="Service for evaluating RAG systems using RAGAS metrics",
+    version="1.0.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ==================== In-Memory Settings ====================
+
+# Runtime settings (can be changed via API)
+RUNTIME_SETTINGS = {
+    "provider": None,  # None = auto-select
+    "model": None,     # None = use provider default
+}
+
+
+# ==================== Schemas ====================
+
+class EvaluationInput(BaseModel):
+    """Input for single question evaluation."""
+    question: str
+    ground_truth: str
+    generated_answer: str
+    retrieved_contexts: List[str]
+    evaluation_model: Optional[str] = None
+    
+    # Reranker metadata (optional, for tracking)
+    reranker_provider: Optional[str] = None  # "cohere", "alibaba", or None
+    reranker_model: Optional[str] = None     # Model name or None
+
+
+class RagasSettings(BaseModel):
+    """RAGAS evaluation settings."""
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+class EvaluationOutput(BaseModel):
+    """Output metrics for single question evaluation."""
+    faithfulness: Optional[float] = None
+    answer_relevancy: Optional[float] = None
+    context_precision: Optional[float] = None
+    context_recall: Optional[float] = None
+    answer_correctness: Optional[float] = None
+    error: Optional[str] = None
+    
+    # Reranker metadata (tracking)
+    reranker_used: bool = False
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
+
+
+class BatchEvaluationInput(BaseModel):
+    """Input for batch evaluation."""
+    items: List[EvaluationInput]
+
+
+class BatchEvaluationOutput(BaseModel):
+    """Output for batch evaluation."""
+    results: List[EvaluationOutput]
+    total_processed: int
+    total_errors: int
+    
+    # Reranker usage statistics
+    reranker_usage: dict = {}  # {"cohere": 5, "alibaba": 3, "none": 2}
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+    status: str
+    timestamp: str
+    ragas_available: bool
+    llm_provider: str
+
+
+# ==================== LLM Provider Configurations ====================
+
+LLM_PROVIDERS_CONFIG = {
+    "openrouter": {
+        "env_key": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "openai/gpt-4o-mini",
+        "embedding_model": "openai/text-embedding-3-small",
+        "is_free": False,
+        "priority": 1,  # Highest priority (best quality)
+        "models": [
+            "openai/gpt-4o-mini",
+            "openai/gpt-4o",
+            "anthropic/claude-3-haiku",
+            "anthropic/claude-3-sonnet",
+            "anthropic/claude-3-opus",
+        ],
+    },
+    "claudegg": {
+        "env_key": "CLAUDEGG_API_KEY",
+        "base_url": "https://app.claude.gg/v1",
+        "default_model": "claude-sonnet-4-5",
+        "embedding_model": None,  # Claude.gg doesn't provide embeddings
+        "is_free": False,
+        "priority": 2,  # High quality Claude models
+        "models": [
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4",
+            "claude-3-7-sonnet",
+            "claude-haiku-4-5",
+        ],
+    },
+    "apiclaudegg": {
+        "env_key": "APICLAUDEGG_API_KEY",
+        "base_url": "https://api.claude.gg/v1",
+        "default_model": "gpt-5",
+        "embedding_model": None,  # api.claude.gg doesn't provide embeddings
+        "is_free": False,
+        "priority": 3,  # Multi-model provider (GPT-5, O3, Grok, DeepSeek, Gemini)
+        "models": [
+            "gpt-o3",
+            "o3",
+            "o3-mini",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "gpt-4.1-nano",
+            "grok-4",
+            "grok-3-mini",
+            "grok-3-mini-beta",
+            "grok-2",
+            "deepseek-r1",
+            "deepseek-v3",
+            "deepseek-chat",
+            "gemini-3-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini",
+            "gemini-lite",
+        ],
+    },
+    "groq": {
+        "env_key": "GROQ_API_KEY",
+        "base_url": "https://api.groq.com/openai/v1",
+        "default_model": "llama-3.1-8b-instant",
+        "embedding_model": None,  # Groq doesn't have embeddings
+        "is_free": False,
+        "priority": 4,
+        "models": [
+            "llama-3.1-8b-instant",
+            "llama-3.1-70b-versatile",
+            "mixtral-8x7b-32768",
+        ],
+    },
+    "openai": {
+        "env_key": "OPENAI_API_KEY",
+        "base_url": None,
+        "default_model": "gpt-4o-mini",
+        "embedding_model": "text-embedding-3-small",
+        "is_free": False,
+        "priority": 5,
+        "models": [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo",
+        ],
+    },
+}
+
+
+# ==================== RAGAS Integration ====================
+
+RAGAS_AVAILABLE = False
+
+
+def get_llm_config():
+    """Get LLM configuration based on settings or available API keys.
+
+    Priority:
+    1. Runtime settings (set via API)
+    2. Environment variables (RAGAS_PROVIDER, RAGAS_MODEL)
+    3. Auto-select based on available keys (free providers first)
+    """
+    # Check runtime settings first
+    runtime_provider = RUNTIME_SETTINGS.get("provider")
+    runtime_model = RUNTIME_SETTINGS.get("model")
+
+    # Then check environment variables
+    env_provider = os.getenv("RAGAS_PROVIDER", "").lower()
+    env_model = os.getenv("RAGAS_MODEL")
+
+    # Use runtime settings if set, otherwise env vars
+    preferred_provider = runtime_provider or env_provider or None
+    custom_model = runtime_model or env_model or None
+
+    # If preferred provider is set, try it first
+    if preferred_provider and preferred_provider in LLM_PROVIDERS_CONFIG:
+        config = LLM_PROVIDERS_CONFIG[preferred_provider]
+        api_key = os.getenv(config["env_key"])
+        if api_key:
+            return {
+                "provider": preferred_provider,
+                "api_key": api_key,
+                "base_url": config["base_url"],
+                "model": custom_model or config["default_model"],
+                "embedding_model": config["embedding_model"],
+                "is_free": config["is_free"],
+            }
+
+    # Auto-select based on priority (free providers first)
+    sorted_providers = sorted(
+        LLM_PROVIDERS_CONFIG.items(),
+        key=lambda x: x[1]["priority"]
+    )
+
+    for provider_name, config in sorted_providers:
+        api_key = os.getenv(config["env_key"])
+        if api_key:
+            return {
+                "provider": provider_name,
+                "api_key": api_key,
+                "base_url": config["base_url"],
+                "model": custom_model or config["default_model"],
+                "embedding_model": config["embedding_model"],
+                "is_free": config["is_free"],
+            }
+
+    return None
+
+
+def init_ragas():
+    """Initialize RAGAS metrics."""
+    global RAGAS_AVAILABLE
+    try:
+        # Just check if ragas is importable
+        import ragas  # noqa: F401
+        RAGAS_AVAILABLE = True
+        logger.info("RAGAS metrics initialized successfully")
+        return True
+    except ImportError as e:
+        logger.warning("RAGAS metrics not available: %s", e)
+        RAGAS_AVAILABLE = False
+        return False
+
+
+# Try to initialize on startup
+init_ragas()
+
+
+def safe_float(value, default=None):
+    """Convert value to float, handling NaN and None."""
+    if value is None:
+        return default
+    try:
+        f = float(value)
+        if math.isnan(f):
+            logger.warning("[SAFE_FLOAT] NaN detected, returning default: %s", default)
+            return default
+        if math.isinf(f):
+            logger.warning("[SAFE_FLOAT] Inf detected, returning default: %s", default)
+            return default
+        return f
+    except (ValueError, TypeError) as e:
+        logger.warning("[SAFE_FLOAT] Conversion error for value %s: %s", value, e)
+        return default
+
+
+def get_embeddings():
+    """Get embeddings instance - always use OpenRouter for consistency.
+
+    Embeddings must match the model used when creating course documents.
+    We always use OpenRouter with text-embedding-3-small for consistency.
+    """
+    from langchain_openai import OpenAIEmbeddings
+
+    # Always use OpenRouter for embeddings (same as course creation)
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key:
+        return OpenAIEmbeddings(
+            api_key=openrouter_key,
+            base_url="https://openrouter.ai/api/v1",
+            model="openai/text-embedding-3-small",
+            default_headers={
+                "HTTP-Referer": "http://localhost:8001",
+                "X-Title": SERVICE_NAME,
+            }
+        )
+
+    # Fallback to OpenAI if OpenRouter not available
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        return OpenAIEmbeddings(
+            api_key=openai_key,
+            model="text-embedding-3-small"
+        )
+
+    logger.warning("No embedding API key available (need OPENROUTER or OPENAI)")
+    return None
+
+
+def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
+    """Evaluate using RAGAS library with configured LLM provider."""
+    llm_config = get_llm_config()
+    if not llm_config:
+        return EvaluationOutput(error="No LLM API key configured")
+
+    try:
+        from datasets import Dataset
+        from ragas import evaluate
+        from ragas.metrics import (
+            faithfulness,
+            answer_relevancy,
+            context_precision,
+            context_recall,
+            answer_correctness,
+        )
+        from langchain_openai import ChatOpenAI
+
+        # DEBUG: Log the evaluation_model received from request
+        print(
+            f"[RAGAS DEBUG] evaluate_with_ragas - "
+            f"input_data.evaluation_model: {input_data.evaluation_model}",
+            flush=True
+        )
+        print(
+            f"[RAGAS DEBUG] evaluate_with_ragas - "
+            f"llm_config model: {llm_config['model']}",
+            flush=True
+        )
+
+        # Use evaluation_model from input if provided, otherwise use config
+        model_to_use = input_data.evaluation_model or llm_config["model"]
+        
+        # DEBUG: Log the final model being used
+        print(
+            f"[RAGAS DEBUG] evaluate_with_ragas - "
+            f"FINAL model_to_use: {model_to_use}",
+            flush=True
+        )
+        
+        # Configure LLM from config (use current provider settings)
+        llm_kwargs = {
+            "model": model_to_use,
+            "api_key": llm_config["api_key"],
+            "temperature": 0,
+        }
+
+        if llm_config["base_url"]:
+            llm_kwargs["base_url"] = llm_config["base_url"]
+            # Add headers for OpenRouter and Claude.gg
+            if llm_config["provider"] in ["openrouter", "claudegg"]:
+                llm_kwargs["default_headers"] = {
+                    "HTTP-Referer": "http://localhost:8001",
+                    "X-Title": SERVICE_NAME,
+                }
+
+        llm = ChatOpenAI(**llm_kwargs)
+        
+        embeddings = get_embeddings()
+
+        if not embeddings:
+            return EvaluationOutput(
+                error="No embeddings API key (need OPENROUTER or OPENAI)"
+            )
+
+        # Prepare dataset for RAGAS
+        data = {
+            "question": [input_data.question],
+            "answer": [input_data.generated_answer],
+            "contexts": [input_data.retrieved_contexts],
+            "ground_truth": [input_data.ground_truth],
+        }
+
+        dataset = Dataset.from_dict(data)
+
+        # Run evaluation
+        result = evaluate(
+            dataset,
+            metrics=[
+                faithfulness,
+                answer_relevancy,
+                context_precision,
+                context_recall,
+                answer_correctness,
+            ],
+            llm=llm,
+            embeddings=embeddings,
+        )
+
+        # Parse and log the result
+        parsed_result = _parse_ragas_result(result, input_data)
+        
+        # Log reranker usage if present
+        if input_data.reranker_provider:
+            logger.info(
+                "[RAGAS] Evaluation with reranker: %s/%s",
+                input_data.reranker_provider,
+                input_data.reranker_model or "default"
+            )
+        
+        # DEBUG: Log the actual metrics returned
+        logger.info(
+            "[RAGAS METRICS] Question: %s... | "
+            "Faithfulness: %s | Answer Relevancy: %s | "
+            "Context Precision: %s | Context Recall: %s | "
+            "Answer Correctness: %s | Reranker: %s",
+            input_data.question[:50],
+            parsed_result.faithfulness,
+            parsed_result.answer_relevancy,
+            parsed_result.context_precision,
+            parsed_result.context_recall,
+            parsed_result.answer_correctness,
+            f"{input_data.reranker_provider}/{input_data.reranker_model}" if input_data.reranker_provider else "none"
+        )
+        
+        return parsed_result
+
+    except Exception as e:
+        logger.error("RAGAS evaluation error: %s", e)
+        return EvaluationOutput(error=str(e))
+
+
+def _parse_ragas_result(result, input_data: EvaluationInput) -> EvaluationOutput:
+    """Parse RAGAS evaluation result into EvaluationOutput."""
+    # DEBUG: Log raw result structure
+    logger.info("[RAGAS RAW RESULT] Type: %s", type(result))
+    
+    # Determine reranker metadata
+    reranker_used = bool(input_data.reranker_provider)
+    reranker_provider = input_data.reranker_provider
+    reranker_model = input_data.reranker_model
+    
+    if hasattr(result, 'to_pandas'):
+        df = result.to_pandas()
+        logger.info("[RAGAS RAW RESULT] DataFrame columns: %s", df.columns.tolist())
+        logger.info("[RAGAS RAW RESULT] DataFrame values: %s", df.iloc[0].to_dict())
+        
+        return EvaluationOutput(
+            faithfulness=safe_float(
+                df['faithfulness'].iloc[0]
+            ) if 'faithfulness' in df else None,
+            answer_relevancy=safe_float(
+                df['answer_relevancy'].iloc[0]
+            ) if 'answer_relevancy' in df else None,
+            context_precision=safe_float(
+                df['context_precision'].iloc[0]
+            ) if 'context_precision' in df else None,
+            context_recall=safe_float(
+                df['context_recall'].iloc[0]
+            ) if 'context_recall' in df else None,
+            answer_correctness=safe_float(
+                df['answer_correctness'].iloc[0]
+            ) if 'answer_correctness' in df else None,
+            reranker_used=reranker_used,
+            reranker_provider=reranker_provider,
+            reranker_model=reranker_model,
+        )
+    if isinstance(result, dict):
+        logger.info("[RAGAS RAW RESULT] Dict keys: %s", result.keys())
+        logger.info("[RAGAS RAW RESULT] Dict values: %s", result)
+        
+        return EvaluationOutput(
+            faithfulness=safe_float(result.get("faithfulness")),
+            answer_relevancy=safe_float(result.get("answer_relevancy")),
+            context_precision=safe_float(result.get("context_precision")),
+            context_recall=safe_float(result.get("context_recall")),
+            answer_correctness=safe_float(result.get("answer_correctness")),
+            reranker_used=reranker_used,
+            reranker_provider=reranker_provider,
+            reranker_model=reranker_model,
+        )
+    # Try accessing as attributes
+    logger.info("[RAGAS RAW RESULT] Attributes: faithfulness=%s, answer_relevancy=%s", 
+                getattr(result, 'faithfulness', 'N/A'),
+                getattr(result, 'answer_relevancy', 'N/A'))
+    
+    return EvaluationOutput(
+        faithfulness=safe_float(getattr(result, 'faithfulness', None)),
+        answer_relevancy=safe_float(getattr(result, 'answer_relevancy', None)),
+        context_precision=safe_float(getattr(result, 'context_precision', None)),
+        context_recall=safe_float(getattr(result, 'context_recall', None)),
+        answer_correctness=safe_float(getattr(result, 'answer_correctness', None)),
+        reranker_used=reranker_used,
+        reranker_provider=reranker_provider,
+        reranker_model=reranker_model,
+    )
+
+
+def evaluate_simple(input_data: EvaluationInput) -> EvaluationOutput:
+    """Simple heuristic-based evaluation as fallback."""
+    try:
+        question = input_data.question.lower()
+        answer = input_data.generated_answer.lower()
+        ground_truth = input_data.ground_truth.lower()
+        contexts = " ".join(input_data.retrieved_contexts).lower()
+
+        # Tokenize
+        answer_words = set(answer.split())
+        context_words = set(contexts.split())
+        question_words = set(question.split())
+        ground_truth_words = set(ground_truth.split())
+
+        # Remove common stop words
+        stop_words = _get_stop_words()
+
+        answer_words -= stop_words
+        context_words -= stop_words
+        question_words -= stop_words
+        ground_truth_words -= stop_words
+
+        # Calculate metrics
+        faithfulness = _calc_faithfulness(answer_words, context_words)
+        relevancy = _calc_relevancy(answer_words, question_words)
+        precision = _calc_precision(context_words, ground_truth_words)
+        recall = _calc_recall(context_words, ground_truth_words)
+        correctness = _calc_correctness(answer_words, ground_truth_words)
+
+        return EvaluationOutput(
+            faithfulness=min(faithfulness, 1.0),
+            answer_relevancy=min(relevancy, 1.0),
+            context_precision=min(precision, 1.0),
+            context_recall=min(recall, 1.0),
+            answer_correctness=min(correctness, 1.0),
+            reranker_used=bool(input_data.reranker_provider),
+            reranker_provider=input_data.reranker_provider,
+            reranker_model=input_data.reranker_model,
+        )
+
+    except Exception as e:
+        logger.error("Simple evaluation error: %s", e)
+        return EvaluationOutput(error=str(e))
+
+
+def _get_stop_words():
+    """Get combined English and Turkish stop words."""
+    return {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "must", "shall",
+        "can", "need", "dare", "ought", "used", "to", "of", "in",
+        "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below",
+        "between", "under", "again", "further", "then", "once",
+        "here", "there", "when", "where", "why", "how", "all",
+        "each", "few", "more", "most", "other", "some", "such",
+        "no", "nor", "not", "only", "own", "same", "so", "than",
+        "too", "very", "just", "and", "but", "if", "or", "because",
+        "until", "while", "this", "that", "these", "those", "what",
+        "which", "who",
+        # Turkish stop words
+        "bir", "ve", "bu", "da", "de", "ile", "icin", "gibi", "kadar",
+        "daha", "en", "cok", "var", "yok", "olan", "olarak", "ise",
+        "ancak", "ama", "fakat", "veya", "ya", "hem", "ne", "ki",
+    }
+
+
+def _calc_faithfulness(answer_words, context_words):
+    """Calculate faithfulness score."""
+    if answer_words and context_words:
+        return len(answer_words & context_words) / len(answer_words)
+    return 0.0
+
+
+def _calc_relevancy(answer_words, question_words):
+    """Calculate answer relevancy score."""
+    if question_words and answer_words:
+        relevancy = len(answer_words & question_words) / max(len(question_words), 1)
+        return min(relevancy * 1.5, 1.0) if len(answer_words) > 5 else relevancy
+    return 0.0
+
+
+def _calc_precision(context_words, ground_truth_words):
+    """Calculate context precision score."""
+    if context_words and ground_truth_words:
+        return len(context_words & ground_truth_words) / max(len(context_words), 1)
+    return 0.0
+
+
+def _calc_recall(context_words, ground_truth_words):
+    """Calculate context recall score."""
+    if ground_truth_words and context_words:
+        return len(context_words & ground_truth_words) / max(len(ground_truth_words), 1)
+    return 0.0
+
+
+def _calc_correctness(answer_words, ground_truth_words):
+    """Calculate answer correctness score."""
+    if ground_truth_words and answer_words:
+        return len(answer_words & ground_truth_words) / max(len(ground_truth_words), 1)
+    return 0.0
+
+
+# ==================== Endpoints ====================
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """Health check endpoint."""
+    llm_config = get_llm_config()
+    provider_info = llm_config["provider"] if llm_config else "none"
+    if llm_config and llm_config.get("is_free"):
+        provider_info += " (free)"
+    return HealthResponse(
+        status="healthy",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        ragas_available=RAGAS_AVAILABLE,
+        llm_provider=provider_info
+    )
+
+
+@app.post("/evaluate", response_model=EvaluationOutput)
+async def evaluate_question(input_data: EvaluationInput):
+    """Evaluate a single question using RAGAS metrics."""
+    llm_config = get_llm_config()
+
+    # Try RAGAS first if available and API key exists
+    if RAGAS_AVAILABLE and (llm_config or input_data.evaluation_model):
+        if input_data.evaluation_model:
+            logger.info(
+                "Using RAGAS with custom model: %s",
+                input_data.evaluation_model
+            )
+        else:
+            free_info = " (FREE)" if llm_config.get("is_free") else ""
+            logger.info(
+                "Using RAGAS with %s (%s)%s",
+                llm_config['provider'],
+                llm_config['model'],
+                free_info
+            )
+        result = evaluate_with_ragas(input_data)
+        if not result.error:
+            return result
+        logger.warning("RAGAS failed, falling back to simple: %s", result.error)
+
+    # Fallback to simple evaluation
+    logger.info("Using simple heuristic evaluation")
+    return evaluate_simple(input_data)
+
+
+@app.post("/evaluate-batch", response_model=BatchEvaluationOutput)
+async def evaluate_batch(input_data: BatchEvaluationInput):
+    """Evaluate a batch of questions."""
+    results = []
+    errors = 0
+    reranker_usage = {}
+
+    for item in input_data.items:
+        result = await evaluate_question(item)
+        results.append(result)
+        if result.error:
+            errors += 1
+        
+        # Track reranker usage
+        provider = result.reranker_provider or "none"
+        reranker_usage[provider] = reranker_usage.get(provider, 0) + 1
+
+    return BatchEvaluationOutput(
+        results=results,
+        total_processed=len(results),
+        total_errors=errors,
+        reranker_usage=reranker_usage
+    )
+
+
+@app.get("/providers")
+async def list_providers():
+    """List available LLM providers and their status."""
+    providers = []
+    for name, config in LLM_PROVIDERS_CONFIG.items():
+        api_key = os.getenv(config["env_key"])
+        providers.append({
+            "name": name,
+            "available": bool(api_key),
+            "is_free": config["is_free"],
+            "default_model": config["default_model"],
+            "models": config.get("models", [config["default_model"]]),
+            "priority": config["priority"],
+        })
+    return {
+        "providers": sorted(providers, key=lambda x: x["priority"]),
+        "current": get_llm_config(),
+    }
+
+
+@app.get("/settings")
+async def get_settings():
+    """Get current RAGAS settings."""
+    llm_config = get_llm_config()
+    return {
+        "provider": RUNTIME_SETTINGS.get("provider"),
+        "model": RUNTIME_SETTINGS.get("model"),
+        "current_provider": llm_config["provider"] if llm_config else None,
+        "current_model": llm_config["model"] if llm_config else None,
+        "is_free": llm_config["is_free"] if llm_config else False,
+    }
+
+
+@app.post("/settings")
+async def update_settings(settings: RagasSettings):
+    """Update RAGAS settings."""
+    if settings.provider is not None:
+        # Validate provider
+        if settings.provider and settings.provider not in LLM_PROVIDERS_CONFIG:
+            valid = list(LLM_PROVIDERS_CONFIG.keys())
+            return {"error": f"Invalid provider. Valid: {valid}"}
+        RUNTIME_SETTINGS["provider"] = settings.provider or None
+
+    if settings.model is not None:
+        RUNTIME_SETTINGS["model"] = settings.model or None
+
+    llm_config = get_llm_config()
+    return {
+        "message": "Settings updated",
+        "provider": RUNTIME_SETTINGS.get("provider"),
+        "model": RUNTIME_SETTINGS.get("model"),
+        "current_provider": llm_config["provider"] if llm_config else None,
+        "current_model": llm_config["model"] if llm_config else None,
+        "is_free": llm_config["is_free"] if llm_config else False,
+    }
+
+
+@app.get("/")
+async def root():
+    """Root endpoint."""
+    llm_config = get_llm_config()
+    provider_info = llm_config["provider"] if llm_config else "none"
+    if llm_config and llm_config.get("is_free"):
+        provider_info += " (free)"
+    return {
+        "service": SERVICE_NAME,
+        "version": "1.0.0",
+        "ragas_available": RAGAS_AVAILABLE,
+        "llm_provider": provider_info,
+        "docs": "/docs"
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001)

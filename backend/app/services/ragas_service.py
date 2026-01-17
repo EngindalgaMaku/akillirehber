@@ -1,0 +1,509 @@
+"""RAGAS Evaluation Service for running RAG evaluations."""
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+import httpx
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.models.db_models import (
+    EvaluationRun, EvaluationResult, RunSummary, 
+    TestQuestion, Course
+)
+from app.services.course_service import get_or_create_settings
+from app.services.weaviate_service import WeaviateService
+from app.services.llm_service import LLMService
+
+logger = logging.getLogger(__name__)
+
+
+class RagasEvaluationService:
+    """Service for running RAGAS evaluations."""
+    
+    def __init__(self, db: Session):
+        self.db = db
+        settings = get_settings()
+        self.ragas_url = getattr(settings, 'ragas_url', 'http://rag-ragas:8001')
+        self.weaviate_service = WeaviateService()
+    
+    def run_evaluation(self, run_id: int):
+        """Run evaluation for all questions in a test set."""
+
+        # Get run
+        run = self.db.query(EvaluationRun).filter(
+            EvaluationRun.id == run_id
+        ).first()
+        if not run:
+            logger.error("Run %s not found", run_id)
+            return
+
+        # DEBUG: Log run config
+        logger.info(f"[SELECTIVE EVAL DEBUG] Run {run_id} config: {run.config}")
+        logger.info(f"[SELECTIVE EVAL DEBUG] Run {run_id} test_set_id: {run.test_set_id}")
+
+        # Update status to running
+        run.status = "running"
+        run.started_at = datetime.now(timezone.utc)
+        self.db.commit()
+        
+        try:
+            # Get questions (filtered by question_ids if provided in config)
+            question_query = self.db.query(TestQuestion).filter(
+                TestQuestion.test_set_id == run.test_set_id
+            )
+            
+            # Filter by question_ids if provided
+            if run.config and run.config.get("question_ids"):
+                question_ids = run.config["question_ids"]
+                logger.info(f"[SELECTIVE EVAL DEBUG] Filtering by question_ids: {question_ids}")
+                question_query = question_query.filter(TestQuestion.id.in_(question_ids))
+            else:
+                logger.info(f"[SELECTIVE EVAL DEBUG] No question_ids filter - evaluating all questions")
+            
+            questions = question_query.all()
+            logger.info(f"[SELECTIVE EVAL DEBUG] Found {len(questions)} questions to evaluate")
+            logger.info(f"[SELECTIVE EVAL DEBUG] Question IDs: {[q.id for q in questions]}")
+            
+            # Get course settings for RAG config
+            course_settings = get_or_create_settings(self.db, run.course_id)
+            
+            # Get course for collection name
+            course = self.db.query(Course).filter(Course.id == run.course_id).first()
+            
+            # Process each question
+            successful = 0
+            failed = 0
+            total_latency = 0
+            
+            metrics_sum = {
+                "faithfulness": 0,
+                "answer_relevancy": 0,
+                "context_precision": 0,
+                "context_recall": 0,
+                "answer_correctness": 0,
+            }
+            
+            for i, question in enumerate(questions):
+                try:
+                    result = self._evaluate_question(
+                        run, question, course, course_settings, run.config
+                    )
+                    
+                    if result.error_message:
+                        failed += 1
+                    else:
+                        successful += 1
+                        total_latency += result.latency_ms or 0
+                        
+                        # Sum metrics
+                        if result.faithfulness:
+                            metrics_sum["faithfulness"] += result.faithfulness
+                        if result.answer_relevancy:
+                            metrics_sum["answer_relevancy"] += result.answer_relevancy
+                        if result.context_precision:
+                            metrics_sum["context_precision"] += result.context_precision
+                        if result.context_recall:
+                            metrics_sum["context_recall"] += result.context_recall
+                        if result.answer_correctness:
+                            metrics_sum["answer_correctness"] += result.answer_correctness
+                    
+                    # Update progress
+                    run.processed_questions = i + 1
+                    self.db.commit()
+                    
+                except Exception as e:
+                    logger.error(f"Error evaluating question {question.id}: {e}")
+                    failed += 1
+                    
+                    # Create error result
+                    error_result = EvaluationResult(
+                        run_id=run.id,
+                        question_id=question.id,
+                        question_text=question.question,
+                        ground_truth_text=question.ground_truth,
+                        error_message=str(e),
+                    )
+                    self.db.add(error_result)
+                    
+                    run.processed_questions = i + 1
+                    self.db.commit()
+            
+            # Create summary
+            total = successful + failed
+            summary = RunSummary(
+                run_id=run.id,
+                avg_faithfulness=metrics_sum["faithfulness"] / successful if successful > 0 else None,
+                avg_answer_relevancy=metrics_sum["answer_relevancy"] / successful if successful > 0 else None,
+                avg_context_precision=metrics_sum["context_precision"] / successful if successful > 0 else None,
+                avg_context_recall=metrics_sum["context_recall"] / successful if successful > 0 else None,
+                avg_answer_correctness=metrics_sum["answer_correctness"] / successful if successful > 0 else None,
+                avg_latency_ms=total_latency / successful if successful > 0 else None,
+                total_questions=total,
+                successful_questions=successful,
+                failed_questions=failed,
+            )
+            self.db.add(summary)
+            
+            # Update run status
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
+            self.db.commit()
+            
+            logger.info(f"Evaluation run {run_id} completed: {successful}/{total} successful")
+            
+        except Exception as e:
+            logger.error(f"Evaluation run {run_id} failed: {e}")
+            run.status = "failed"
+            run.error_message = str(e)
+            run.completed_at = datetime.now(timezone.utc)
+            self.db.commit()
+    
+    def _evaluate_question(
+        self,
+        run: EvaluationRun,
+        question: TestQuestion,
+        course: Course,
+        course_settings,
+        config: Optional[dict]
+    ) -> EvaluationResult:
+        """Evaluate a single question."""
+
+        start_time = time.time()
+
+        # Get config values - prefer course settings, fallback to run config
+        alpha = course_settings.search_alpha if course_settings.search_alpha is not None else (config.get("search_alpha", 0.5) if config else 0.5)
+        top_k = course_settings.search_top_k if course_settings.search_top_k is not None else (config.get("top_k", 5) if config else 5)
+        
+        # Get evaluation model from config if provided
+        evaluation_model = config.get("evaluation_model") if config else None
+        
+        # Get embedding for the question
+        from app.services.embedding_service import EmbeddingService
+        embedding_service = EmbeddingService()
+        query_vector = embedding_service.get_embedding(
+            question.question,
+            model=course_settings.default_embedding_model
+        )
+        
+        # Search for relevant chunks
+        search_results = self.weaviate_service.hybrid_search(
+            course_id=course.id,
+            query=question.question,
+            query_vector=query_vector,
+            alpha=alpha,
+            limit=top_k
+        )
+
+        # Filter results by minimum relevance score
+        min_score = getattr(course_settings, 'min_relevance_score', 0.0) or 0.0
+        if min_score > 0 and search_results:
+            search_results = [r for r in search_results if r.score >= min_score]
+
+        # Extract contexts
+        retrieved_contexts = []
+        for result in search_results:
+            content = result.content
+            if content:
+                retrieved_contexts.append(content)
+        
+        # Build context for LLM
+        context_text = "\n\n---\n\n".join(retrieved_contexts) if retrieved_contexts else ""
+        
+        # Generate answer using LLM
+        system_prompt = course_settings.system_prompt or "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+        
+        user_prompt = f"""Bağlam:
+{context_text}
+
+Soru: {question.question}
+
+Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
+
+        try:
+            llm_service = LLMService(
+                provider=course_settings.llm_provider,
+                model=course_settings.llm_model,
+                temperature=course_settings.llm_temperature,
+                max_tokens=course_settings.llm_max_tokens
+            )
+            generated_answer = llm_service.generate_response([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ])
+        except Exception as e:
+            logger.error(f"LLM error: {e}")
+            generated_answer = ""
+        
+        # Prepare ground truths (combine primary + alternatives)
+        ground_truths = [question.ground_truth]
+        if question.alternative_ground_truths:
+            ground_truths.extend(question.alternative_ground_truths)
+        
+        # Call RAGAS service for metrics (sync version for BackgroundTask)
+        metrics = self._get_ragas_metrics_sync(
+            question.question,
+            ground_truths,
+            generated_answer,
+            retrieved_contexts,
+            evaluation_model,
+            reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
+            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None
+        )
+        
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        # Create result
+        result = EvaluationResult(
+            run_id=run.id,
+            question_id=question.id,
+            question_text=question.question,
+            ground_truth_text=question.ground_truth,
+            generated_answer=generated_answer,
+            retrieved_contexts=retrieved_contexts,
+            faithfulness=metrics.get("faithfulness"),
+            answer_relevancy=metrics.get("answer_relevancy"),
+            context_precision=metrics.get("context_precision"),
+            context_recall=metrics.get("context_recall"),
+            answer_correctness=metrics.get("answer_correctness"),
+            latency_ms=latency_ms,
+            error_message=metrics.get("error"),
+            # Model information used for THIS question
+            llm_provider=course_settings.llm_provider,
+            llm_model=course_settings.llm_model,
+            embedding_model=course_settings.default_embedding_model,
+            evaluation_model=evaluation_model,
+            search_alpha=alpha,
+            search_top_k=top_k,
+        )
+        
+        self.db.add(result)
+        self.db.commit()
+        self.db.refresh(result)
+        
+        return result
+    
+    def _get_ragas_metrics_sync(
+        self,
+        question: str,
+        ground_truths: list,
+        generated_answer: str,
+        retrieved_contexts: list,
+        evaluation_model: str = None,
+        reranker_provider: str = None,
+        reranker_model: str = None
+    ) -> dict:
+        """Get RAGAS metrics from evaluation service (sync version with retry).
+        
+        Args:
+            question: The question text
+            ground_truths: List of acceptable ground truth answers
+            generated_answer: The generated answer to evaluate
+            retrieved_contexts: List of retrieved context chunks
+            evaluation_model: Optional OpenRouter model to use for evaluation
+            reranker_provider: Optional reranker provider used (cohere/alibaba)
+            reranker_model: Optional reranker model used
+        """
+        # RAGAS expects a single ground_truth string, so we join multiple truths
+        # The first one is the primary, others are alternatives
+        combined_ground_truth = ground_truths[0] if ground_truths else ""
+        
+        payload = {
+            "question": question,
+            "ground_truth": combined_ground_truth,
+            "generated_answer": generated_answer,
+            "retrieved_contexts": retrieved_contexts,
+        }
+        
+        # Add evaluation_model if provided
+        if evaluation_model:
+            payload["evaluation_model"] = evaluation_model
+        
+        # Add reranker metadata if provided
+        if reranker_provider:
+            payload["reranker_provider"] = reranker_provider
+            payload["reranker_model"] = reranker_model
+        
+        # DEBUG: Log the payload being sent to RAGAS service
+        print(
+            f"[RAGAS DEBUG] Sending to RAGAS service - "
+            f"evaluation_model param: {evaluation_model}, "
+            f"reranker: {reranker_provider}/{reranker_model if reranker_model else 'none'}",
+            flush=True
+        )
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with httpx.Client(timeout=180.0) as client:
+                    response = client.post(
+                        f"{self.ragas_url}/evaluate",
+                        json=payload,
+                    )
+
+                    if response.status_code == 200:
+                        return response.json()
+                    logger.error("RAGAS API error: %s", response.status_code)
+                    return {"error": f"RAGAS API error: {response.status_code}"}
+
+            except Exception as e:
+                logger.error("Error calling RAGAS API (attempt %d/%d): %s",
+                           attempt + 1, max_retries, e)
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # Wait before retry
+                else:
+                    return {"error": str(e)}
+
+    def run_evaluation_for_questions(self, run_id: int, question_ids: list):
+        """Run evaluation for specific questions only (for incremental evaluation).
+        
+        This is used when re-evaluating specific questions in an existing run.
+        It preserves the original total_questions count and only updates the
+        specific questions being re-evaluated.
+        """
+        
+        # Get run
+        run = self.db.query(EvaluationRun).filter(
+            EvaluationRun.id == run_id
+        ).first()
+        if not run:
+            logger.error("Run %s not found", run_id)
+            return
+
+        logger.info(f"[SELECTIVE EVAL DEBUG] Running evaluation for run {run_id}, questions: {question_ids}")
+
+        # Store original total_questions - don't change it during re-evaluation
+        original_total = run.total_questions
+
+        # Update status to running if not already
+        if run.status != "running":
+            run.status = "running"
+            if not run.started_at:
+                run.started_at = datetime.now(timezone.utc)
+            self.db.commit()
+        
+        try:
+            # Get specific questions
+            questions = self.db.query(TestQuestion).filter(
+                TestQuestion.id.in_(question_ids)
+            ).all()
+            
+            logger.info(f"[SELECTIVE EVAL DEBUG] Found {len(questions)} questions to evaluate")
+            
+            # Get course settings for RAG config
+            course_settings = get_or_create_settings(self.db, run.course_id)
+            
+            # Get course for collection name
+            course = self.db.query(Course).filter(Course.id == run.course_id).first()
+            
+            # Process each question
+            new_successful = 0
+            new_failed = 0
+            
+            for question in questions:
+                try:
+                    result = self._evaluate_question(
+                        run, question, course, course_settings, run.config
+                    )
+                    
+                    if result.error_message:
+                        new_failed += 1
+                    else:
+                        new_successful += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error evaluating question {question.id}: {e}")
+                    new_failed += 1
+                    
+                    # Create error result
+                    error_result = EvaluationResult(
+                        run_id=run.id,
+                        question_id=question.id,
+                        question_text=question.question,
+                        ground_truth_text=question.ground_truth,
+                        error_message=str(e),
+                    )
+                    self.db.add(error_result)
+            
+            self.db.commit()
+            
+            # Recalculate summary with all results
+            # Get successful results (no error)
+            successful_results = self.db.query(EvaluationResult).filter(
+                EvaluationResult.run_id == run.id,
+                EvaluationResult.error_message.is_(None)
+            ).all()
+            
+            # Get failed results (with error)
+            failed_count = self.db.query(func.count(EvaluationResult.id)).filter(
+                EvaluationResult.run_id == run.id,
+                EvaluationResult.error_message.isnot(None)
+            ).scalar() or 0
+            
+            successful_count = len(successful_results)
+            actual_total = successful_count + failed_count
+            
+            # Update processed_questions to actual results count
+            run.processed_questions = actual_total
+            
+            # Keep total_questions as the original value or actual results, whichever is larger
+            # This ensures we don't lose track of the original test set size
+            run.total_questions = max(original_total, actual_total)
+            
+            if successful_results:
+                metrics_sum = {
+                    "faithfulness": sum(r.faithfulness for r in successful_results if r.faithfulness),
+                    "answer_relevancy": sum(r.answer_relevancy for r in successful_results if r.answer_relevancy),
+                    "context_precision": sum(r.context_precision for r in successful_results if r.context_precision),
+                    "context_recall": sum(r.context_recall for r in successful_results if r.context_recall),
+                    "answer_correctness": sum(r.answer_correctness for r in successful_results if r.answer_correctness),
+                }
+                total_latency = sum(r.latency_ms for r in successful_results if r.latency_ms)
+                
+                # Update or create summary
+                summary = self.db.query(RunSummary).filter(RunSummary.run_id == run.id).first()
+                if summary:
+                    summary.avg_faithfulness = metrics_sum["faithfulness"] / successful_count if successful_count > 0 else None
+                    summary.avg_answer_relevancy = metrics_sum["answer_relevancy"] / successful_count if successful_count > 0 else None
+                    summary.avg_context_precision = metrics_sum["context_precision"] / successful_count if successful_count > 0 else None
+                    summary.avg_context_recall = metrics_sum["context_recall"] / successful_count if successful_count > 0 else None
+                    summary.avg_answer_correctness = metrics_sum["answer_correctness"] / successful_count if successful_count > 0 else None
+                    summary.avg_latency_ms = total_latency / successful_count if successful_count > 0 else None
+                    summary.total_questions = actual_total
+                    summary.successful_questions = successful_count
+                    summary.failed_questions = failed_count
+                else:
+                    summary = RunSummary(
+                        run_id=run.id,
+                        avg_faithfulness=metrics_sum["faithfulness"] / successful_count if successful_count > 0 else None,
+                        avg_answer_relevancy=metrics_sum["answer_relevancy"] / successful_count if successful_count > 0 else None,
+                        avg_context_precision=metrics_sum["context_precision"] / successful_count if successful_count > 0 else None,
+                        avg_context_recall=metrics_sum["context_recall"] / successful_count if successful_count > 0 else None,
+                        avg_answer_correctness=metrics_sum["answer_correctness"] / successful_count if successful_count > 0 else None,
+                        avg_latency_ms=total_latency / successful_count if successful_count > 0 else None,
+                        total_questions=actual_total,
+                        successful_questions=successful_count,
+                        failed_questions=failed_count,
+                    )
+                    self.db.add(summary)
+            
+            # Always mark as completed after re-evaluation finishes
+            # The status should only be "failed" if there was an exception during processing
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
+            run.error_message = None  # Clear any previous error message
+            
+            self.db.commit()
+            
+            logger.info(f"Evaluation for run {run_id} completed: {new_successful}/{len(questions)} new questions successful, total: {successful_count}/{actual_total}")
+            
+        except Exception as e:
+            logger.error(f"Evaluation run {run_id} failed: {e}")
+            run.status = "failed"
+            run.error_message = str(e)
+            run.completed_at = datetime.now(timezone.utc)
+            self.db.commit()
+
