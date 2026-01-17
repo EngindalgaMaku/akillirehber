@@ -36,12 +36,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD:-ragpassword}@postgres:5432/${POSTGRES_DB:-ragchatbot}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ragchatbot}
       - WEAVIATE_URL=http://weaviate:8080
       - RAGAS_URL=http://ragas:8001
       - SECRET_KEY=${SECRET_KEY}
       - ALGORITHM=${ALGORITHM:-HS256}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-30}
       - ENVIRONMENT=production
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -64,7 +65,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 40s
     labels:
       - "coolify.managed=true"
 
@@ -111,6 +112,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-raguser}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB:-ragchatbot}
+      - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -160,3 +162,34 @@ networks:
 volumes:
   postgres_data:
   weaviate_data:
+
+# ===========================================
+# Coolify Deployment Notes
+# ===========================================
+# 
+# 1. Coolify'da yeni bir "Docker Compose" resource oluşturun
+# 2. Bu dosyayı repository'den seçin veya yapıştırın
+# 3. Aşağıdaki environment variable'ları Coolify'da ayarlayın:
+#
+# ZORUNLU:
+#   - SECRET_KEY: JWT için güçlü bir secret key (openssl rand -hex 32)
+#   - POSTGRES_PASSWORD: PostgreSQL şifresi
+#   - NEXT_PUBLIC_API_URL: Backend API URL'i (örn: https://api.yourdomain.com)
+#
+# OPSIYONEL (En az bir LLM provider gerekli):
+#   - OPENROUTER_API_KEY: OpenRouter API key (önerilen)
+#   - CLAUDEGG_API_KEY: Claude.gg API key
+#   - GROQ_API_KEY: Groq API key
+#   - OPENAI_API_KEY: OpenAI API key
+#   - COHERE_API_KEY: Cohere API key (reranker için)
+#   - DASHSCOPE_API_KEY: Alibaba DashScope API key
+#
+# 4. Port mapping'leri Coolify'ın reverse proxy'sine göre ayarlayın
+# 5. Volume'lar otomatik olarak persist edilecektir
+# 6. Health check'ler servislerin hazır olmasını bekler
+#
+# Deployment sonrası:
+# - Frontend: https://yourdomain.com
+# - Backend API: https://api.yourdomain.com
+# - API Docs: https://api.yourdomain.com/docs
+#
