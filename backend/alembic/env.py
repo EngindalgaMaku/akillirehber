@@ -7,16 +7,12 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# Import application modules
-import sys
-from pathlib import Path
-
-# Add the backend directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from app.config import get_settings
 from app.database import Base
-from app.models import db_models  # noqa: F401 - Import to register models
+from app.models import (  # noqa: F401
+    db_models,
+    giskard_models,
+)  # Import to register models
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

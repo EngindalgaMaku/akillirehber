@@ -13,8 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
+# First install large packages that rarely change (for better caching)
+COPY requirements-base.txt .
+RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements-base.txt
+
+# Then install other packages that may change more frequently
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
 
 # Stage 2: Production
 FROM python:3.12-slim as production
@@ -27,7 +32,13 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
+
+# Set up Numba cache directory for UMAP
+ENV NUMBA_CACHE_DIR=/tmp/numba_cache
+RUN mkdir -p /tmp/numba_cache && \
+    chmod 777 /tmp/numba_cache
 
 # Copy wheels from builder and install
 COPY --from=builder /app/wheels /wheels
@@ -50,5 +61,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Copy entrypoint script
+COPY --chown=appuser:appgroup docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Run the application using entrypoint script
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

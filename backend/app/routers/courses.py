@@ -104,7 +104,7 @@ async def create_new_course(
     """
     Create a new course.
 
-    Only teachers can create courses.
+    Only teachers and admins can create courses.
 
     - **name**: Course name (required)
     - **description**: Course description (optional)

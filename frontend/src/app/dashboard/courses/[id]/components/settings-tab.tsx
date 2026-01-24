@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useModelProviders } from "@/hooks/useModelProviders";
 import { api, CustomLLMModel } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +52,9 @@ const EMBEDDING_MODELS = [
   { value: "alibaba/text-embedding-v4", label: "Alibaba text-embedding-v4 (1024 dim)" },
   { value: "cohere/embed-multilingual-v3.0", label: "Cohere embed-multilingual-v3.0 (1024 dim)" },
   { value: "cohere/embed-multilingual-light-v3.0", label: "Cohere embed-multilingual-light-v3.0 (384 dim)" },
+  { value: "jina/jina-embeddings-v2", label: "Jina AI jina-embeddings-v2 (768 dim)" },
+  { value: "jina/jina-embeddings-v3", label: "Jina AI jina-embeddings-v3 (1024 dim)" },
+  { value: "qwen/qwen3-embedding-8b", label: "Qwen qwen3-embedding-8b (1024 dim)" },
 ];
 
 const RERANKER_MODELS = {
@@ -746,6 +750,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
                   <SelectItem value="deepseek">DeepSeek</SelectItem>
                   <SelectItem value="cohere">Cohere</SelectItem>
                   <SelectItem value="alibaba">Alibaba</SelectItem>
+                  <SelectItem value="zai">Z.ai</SelectItem>
                 </SelectContent>
               </Select>
             </div>

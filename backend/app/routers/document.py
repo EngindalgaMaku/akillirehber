@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api", tags=["document"])
 document_processor = DocumentProcessor()
 
 # Maximum file size: 10MB
-MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_FILE_SIZE = 100 * 1024 * 1024
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)

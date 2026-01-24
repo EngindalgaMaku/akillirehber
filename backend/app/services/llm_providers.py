@@ -22,8 +22,11 @@ LLM_PROVIDERS = {
             "google/gemini-pro-1.5",
             "meta-llama/llama-3.1-8b-instruct",
             # Büyük Modeller
+            "meta-llama/llama-3.3-70b-instruct:free",
             "meta-llama/llama-3.1-70b-instruct",
-            "anthropic/claude-3-opus"
+            "anthropic/claude-3-opus",
+            "qwen/qwen3-next-80b-a3b-instruct:free",
+            "mistralai/mistral-small-3.1-24b-instruct:free"
         ]
     },
     "claudegg": {
@@ -134,6 +137,16 @@ LLM_PROVIDERS = {
             # Büyük/Güçlü
             "qwen-max",
             "qwen3-max"
+        ]
+    },
+    "zai": {
+        "base_url": "https://api.z.ai/api/anthropic/v1/messages",
+        "env_key": "ZAI_API_KEY",
+        "default_headers": {
+            "anthropic-version": "2023-06-01"
+        },
+        "models": [
+            "glm-4.7"
         ]
     }
 }

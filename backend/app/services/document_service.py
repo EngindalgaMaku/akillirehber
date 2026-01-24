@@ -8,14 +8,27 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.models.db_models import Document, Chunk, Course, User, ProcessingStatusEnum
-from app.models.schemas import DocumentResponse
-from app.services.document_processor import DocumentProcessor, DocumentProcessingError
+from app.models.db_models import (
+    Document,
+    Chunk,
+    Course,
+    User,
+    UserRole,
+    ProcessingStatusEnum,
+    ProcessingStatus,
+    DiagnosticReport,
+)
+from app.services.document_processor import (
+    DocumentProcessor,
+    DocumentProcessingError,
+)
 from app.services.processing_status_manager import ProcessingStatusManager
 
 
 document_processor = DocumentProcessor()
 logger = logging.getLogger(__name__)
+
+MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
 
 
 def get_document_by_id(db: Session, document_id: int) -> Optional[Document]:
@@ -71,9 +84,16 @@ async def upload_document(
             detail="Uploaded file is empty",
         )
 
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        max_mb = MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {max_mb}MB",
+        )
+
     # Create document record first
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
-    
+
     db_document = Document(
         filename=unique_filename,
         original_filename=file.filename,
@@ -82,6 +102,7 @@ async def upload_document(
         char_count=0,  # Will be updated after processing
         content="",  # Will be updated after processing
         course_id=course.id,
+        user_id=user.id,
         is_processed=False,
     )
     db.add(db_document)
@@ -90,7 +111,7 @@ async def upload_document(
 
     # Initialize processing status manager
     status_manager = ProcessingStatusManager(db)
-    
+
     try:
         # Create initial processing status
         status_manager.create_status(db_document.id, ProcessingStatusEnum.PENDING)
@@ -158,21 +179,36 @@ def delete_document(db: Session, document_id: int, user: User) -> bool:
             detail="Document not found",
         )
 
-    # Verify user owns the course
-    course = db.query(Course).filter(Course.id == document.course_id).first()
-    if course.teacher_id != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only delete documents from your own courses",
-        )
+    if document.course_id is not None:
+        course = db.query(Course).filter(Course.id == document.course_id).first()
+        if not course or course.teacher_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delete documents from your own courses",
+            )
+    else:
+        if user.role != UserRole.ADMIN and document.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delete your own documents",
+            )
 
     # Delete vectors from Weaviate
-    try:
-        from app.services.weaviate_service import get_weaviate_service
-        weaviate_service = get_weaviate_service()
-        weaviate_service.delete_by_document(document.course_id, document_id)
-    except Exception:
-        pass  # Continue even if Weaviate deletion fails
+    if document.course_id is not None:
+        try:
+            from app.services.weaviate_service import get_weaviate_service
+            weaviate_service = get_weaviate_service()
+            weaviate_service.delete_by_document(document.course_id, document_id)
+        except Exception:
+            pass  # Continue even if Weaviate deletion fails
+
+    # Delete processing status + diagnostics first to avoid FK/NOT NULL issues
+    db.query(ProcessingStatus).filter(ProcessingStatus.document_id == document_id).delete(
+        synchronize_session=False
+    )
+    db.query(DiagnosticReport).filter(DiagnosticReport.document_id == document_id).delete(
+        synchronize_session=False
+    )
 
     # Delete document (chunks will be cascade deleted)
     db.delete(document)
@@ -432,3 +468,111 @@ def get_document_processing_status(db: Session, document_id: int):
     """
     status_manager = ProcessingStatusManager(db)
     return status_manager.get_status(document_id)
+
+
+def get_documents_by_user(db: Session, user_id: int) -> List[Document]:
+    """Get all documents for a user (across all courses)."""
+    return (
+        db.query(Document)
+        .filter(Document.user_id == user_id)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+
+
+async def upload_user_document(
+    db: Session, file: UploadFile, user: User, course_id: Optional[int] = None
+) -> Document:
+    """Upload and process a document for a user (not tied to a specific course)."""
+    # Read file content
+    content = await file.read()
+
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Uploaded file is empty",
+        )
+
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        max_mb = MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {max_mb}MB",
+        )
+
+    # Create document record first
+    unique_filename = f"{uuid.uuid4()}_{file.filename}"
+    
+    db_document = Document(
+        filename=unique_filename,
+        original_filename=file.filename,
+        file_type="unknown",  # Will be updated after processing
+        file_size=len(content),
+        char_count=0,  # Will be updated after processing
+        content="",  # Will be updated after processing
+        course_id=course_id,  # Can be None for user-specific docs
+        user_id=user.id,
+        is_processed=False,
+    )
+    db.add(db_document)
+    db.commit()
+    db.refresh(db_document)
+
+    # Initialize processing status manager
+    status_manager = ProcessingStatusManager(db)
+    
+    try:
+        # Create initial processing status
+        status_manager.create_status(db_document.id, ProcessingStatusEnum.PENDING)
+        
+        # Update status to extracting
+        status_manager.update_status(db_document.id, ProcessingStatusEnum.EXTRACTING)
+        
+        # Extract text content
+        text, file_type = document_processor.process_document(
+            content, file.filename, file.content_type
+        )
+
+        # Update document with extracted information
+        db_document.file_type = file_type.value
+        db_document.char_count = len(text)
+        db_document.content = text
+
+        db.commit()
+
+        # Update status to completed
+        status_manager.update_status(db_document.id, ProcessingStatusEnum.COMPLETED)
+
+        logger.info(f"Successfully processed document: {db_document.filename}")
+
+    except DocumentProcessingError as e:
+        # Update status to error
+        status_manager.update_status(
+            db_document.id,
+            ProcessingStatusEnum.ERROR,
+            error_message=str(e),
+            error_details={
+                "error_type": e.error_type,
+                "context": e.context,
+            },
+        )
+        logger.error(f"Document processing failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Document processing failed: {str(e)}",
+        )
+    except Exception as e:
+        # Update status to error
+        status_manager.update_status(
+            db_document.id,
+            ProcessingStatusEnum.ERROR,
+            error_message=f"Unexpected error: {str(e)}",
+            error_details={"exception_type": type(e).__name__},
+        )
+        logger.error(f"Unexpected error during document processing: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error during document processing",
+        )
+
+    return db_document

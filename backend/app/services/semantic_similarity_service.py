@@ -13,9 +13,13 @@ import logging
 from app.services.embedding_service import get_embedding_service
 from app.services.llm_service import get_llm_service
 from app.services.weaviate_service import get_weaviate_service
+from app.services.embedding_cache import EmbeddingCache
 from app.models.db_models import Course
 
 logger = logging.getLogger(__name__)
+
+# Initialize embedding cache
+_embedding_cache = EmbeddingCache(ttl=3600, max_entries=10000)
 
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -90,13 +94,25 @@ class SemanticSimilarityService:
         Returns:
             Similarity score between 0.0 and 1.0
         """
-        # Get embeddings for both texts
-        embedding1 = self.embedding_service.get_embedding(
-            text1, model=embedding_model
-        )
-        embedding2 = self.embedding_service.get_embedding(
-            text2, model=embedding_model
-        )
+        # Check cache for text1
+        cached_emb1 = _embedding_cache.get(text1, embedding_model)
+        if cached_emb1 is None:
+            embedding1 = self.embedding_service.get_embedding(
+                text1, model=embedding_model
+            )
+            _embedding_cache.set(text1, embedding_model, embedding1)
+        else:
+            embedding1 = cached_emb1
+
+        # Check cache for text2
+        cached_emb2 = _embedding_cache.get(text2, embedding_model)
+        if cached_emb2 is None:
+            embedding2 = self.embedding_service.get_embedding(
+                text2, model=embedding_model
+            )
+            _embedding_cache.set(text2, embedding_model, embedding2)
+        else:
+            embedding2 = cached_emb2
 
         # Compute cosine similarity
         score = cosine_similarity(embedding1, embedding2)
@@ -127,16 +143,36 @@ class SemanticSimilarityService:
         if not ground_truths:
             return 0.0, "", []
 
+        # Batch compute embeddings for all ground truths
+        # First check cache for all texts
+        all_texts = [generated_answer] + ground_truths
+        found, missing = _embedding_cache.get_batch(all_texts, embedding_model)
+
+        # Compute embeddings for missing texts in batch
+        if missing:
+            missing_texts = [all_texts[i] for i in missing]
+            new_embeddings = self.embedding_service.get_embeddings(
+                missing_texts, model=embedding_model
+            )
+            # Cache new embeddings
+            _embedding_cache.set_batch(
+                missing_texts, embedding_model, new_embeddings
+            )
+            # Update found dict
+            for i, emb in zip(missing, new_embeddings):
+                found[i] = emb
+
+        # Get generated answer embedding
+        gen_emb = found[0]
+
+        # Compute similarities in parallel
         all_scores = []
         max_score = 0.0
         best_match = ground_truths[0]
 
-        for ground_truth in ground_truths:
-            score = self.compute_similarity(
-                generated_answer,
-                ground_truth,
-                embedding_model
-            )
+        for i, ground_truth in enumerate(ground_truths):
+            gt_emb = found[i + 1]  # +1 because index 0 is generated_answer
+            score = cosine_similarity(gen_emb, gt_emb)
 
             all_scores.append({
                 "ground_truth": ground_truth,
@@ -249,7 +285,7 @@ class SemanticSimilarityService:
             generated_answer: The generated answer to evaluate
             ground_truths: List of ground truth answers
             embedding_model: Embedding model to use for cosine similarity
-            retrieved_contexts: List of retrieved chunks from RAG (for Hit@1/MRR)
+            retrieved_contexts: List of retrieved chunks from RAG
             lang: Language code (not used in lightweight implementation)
 
         Returns:
@@ -263,59 +299,33 @@ class SemanticSimilarityService:
         )
 
         # Compute Hit@1 and MRR based on retrieved contexts
-        # These measure if the ground truth is present in retrieved chunks
         hit_at_1 = 0.0
         mrr = 0.0
-        
-        if retrieved_contexts and len(retrieved_contexts) > 0 and ground_truths:
-            # For each ground truth, check if it appears in retrieved contexts
-            # Find the highest-ranked context that contains ground truth info
+
+        if (retrieved_contexts and len(retrieved_contexts) > 0 and
+                ground_truths):
             best_rank = float('inf')
-            
-            # Lower threshold for more lenient matching (0.5 = 50% similarity)
             RELEVANCE_THRESHOLD = 0.5
-            
+
             for ground_truth in ground_truths:
                 for rank, context in enumerate(retrieved_contexts, start=1):
-                    # Check if this context is relevant to ground truth
-                    # Use embedding similarity as relevance measure
                     similarity = self.compute_similarity(
                         context,
                         ground_truth,
                         embedding_model
                     )
-                    
-                    # Log for debugging
-                    logger.debug(
-                        f"Chunk rank {rank} vs ground_truth similarity: {similarity:.3f}"
-                    )
-                    
-                    # If similarity is above threshold, consider this context relevant
+
                     if similarity >= RELEVANCE_THRESHOLD:
                         if rank < best_rank:
                             best_rank = rank
-                            logger.info(
-                                f"Found relevant chunk at rank {rank} "
-                                f"(similarity: {similarity:.3f})"
-                            )
-                        break  # Found relevant context for this ground truth
-            
-            # Calculate Hit@1 and MRR based on best rank
+                        break
+
             if best_rank != float('inf'):
                 hit_at_1 = 1.0 if best_rank == 1 else 0.0
                 mrr = 1.0 / best_rank
-                logger.info(
-                    f"Retrieval metrics - Hit@1: {hit_at_1}, "
-                    f"MRR: {mrr:.3f} (best_rank: {best_rank})"
-                )
             else:
-                # Ground truth not found in any retrieved context
                 hit_at_1 = 0.0
                 mrr = 0.0
-                logger.warning(
-                    "No relevant chunk found for ground truth "
-                    f"(threshold: {RELEVANCE_THRESHOLD})"
-                )
 
         result = {
             'similarity_score': max_score,
@@ -423,6 +433,7 @@ class SemanticSimilarityService:
                 "Bu konuyla ilgili ders materyallerinde bilgi "
                 "bulunamadı.",
                 [],
+                f"{actual_provider}/{actual_model}",
                 f"{actual_provider}/{actual_model}"
             )
 
@@ -458,25 +469,10 @@ Soru: {question}"""}
             max_tokens=settings.llm_max_tokens
         )
 
-        # Log system prompt for debugging
-        print(f"\n{'='*80}")
-        print(f"🔍 SEMANTIC SIMILARITY - GENERATING ANSWER")
-        print(f"{'='*80}")
-        print(f"Question: {question[:100]}...")
-        print(f"LLM: {actual_provider}/{actual_model}")
-        print(f"System Prompt (first 200 chars):\n{system_prompt[:200]}...")
-        print(f"{'='*80}\n")
-        
-        logger.info(
-            "Generating answer with system prompt (first 100 chars): %s...",
-            system_prompt[:100]
-        )
-        logger.info("Using LLM: %s/%s", actual_provider, actual_model)
+        logger.debug("Using LLM: %s/%s", actual_provider, actual_model)
 
         generated_answer = llm_service.generate_response(messages)
         llm_model_used = f"{actual_provider}/{actual_model}"
-        
-        print(f"✅ Generated answer (first 100 chars): {generated_answer[:100]}...\n")
 
         return generated_answer, contexts, llm_model_used
 

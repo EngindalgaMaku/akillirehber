@@ -2,7 +2,7 @@
 
 from typing import Optional
 from math import ceil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import secrets
 import string
 
@@ -540,8 +540,8 @@ async def get_statistics(
 
     # Calculate new users this month
     # Get first day of current month
-    now = datetime.utcnow()
-    first_day_of_month = datetime(now.year, now.month, 1)
+    now = datetime.now(UTC)
+    first_day_of_month = datetime(now.year, now.month, 1, tzinfo=UTC)
 
     new_users_this_month = db.query(func.count(User.id)).filter(
         User.created_at >= first_day_of_month
@@ -616,7 +616,7 @@ async def reset_user_password(
     hashed_temp_password = get_password_hash(temporary_password)
 
     # Set expiration to 24 hours from now
-    expires_at = datetime.utcnow() + timedelta(hours=24)
+    expires_at = datetime.now(UTC) + timedelta(hours=24)
 
     # Invalidate any existing temporary passwords for this user
     db.query(TemporaryPassword).filter(

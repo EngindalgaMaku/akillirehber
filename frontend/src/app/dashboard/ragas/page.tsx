@@ -3,6 +3,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { useModelProviders } from "@/hooks/useModelProviders";
 import { api, Course, TestSet, EvaluationRun, RagasSettings, RagasProvider, QuickTestResponse, QuickTestResult } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,7 @@ import Link from "next/link";
 
 export default function RagasPage() {
   const { user } = useAuth();
+  const { getLLMProviders, getLLMModels } = useModelProviders();
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const [testSets, setTestSets] = useState<TestSet[]>([]);
@@ -86,17 +88,54 @@ export default function RagasPage() {
   useEffect(() => { if (selectedCourseId) { setResultsPage(0); loadSavedResults(true); } }, [selectedGroup]);
 
   const loadCourses = async () => {
-    try { const data = await api.getCourses(); setCourses(data); if (data.length > 0) { setSelectedCourseId(data[0].id); } }
+    try {
+      const data = await api.getCourses();
+      setCourses(data);
+      if (data.length > 0) {
+        // Check localStorage for previously selected course
+        const savedCourseId = localStorage.getItem('ragas_selected_course_id');
+        if (savedCourseId && data.find(c => c.id === parseInt(savedCourseId))) {
+          setSelectedCourseId(parseInt(savedCourseId));
+        } else {
+          setSelectedCourseId(data[0].id);
+        }
+      }
+    }
     catch { toast.error("Dersler yüklenirken hata oluştu"); }
     finally { setIsLoading(false); }
   };
 
   const loadRagasSettings = async () => {
+    if (!selectedCourseId) return;
     try {
-      const [settings, providersData] = await Promise.all([api.getRagasSettings(), api.getRagasProviders()]);
-      setRagasSettings(settings); setRagasProviders(providersData.providers);
+      const [settings, providersData] = await Promise.all([
+        api.getRagasSettings(),
+        api.getRagasProviders(),
+      ]);
+      setRagasSettings(settings);
+      setRagasProviders(providersData.providers);
       setSelectedProvider(settings.current_provider || ""); setSelectedModel(settings.current_model || "");
     } catch { console.log("RAGAS settings not available"); }
+  };
+
+  const getProviderModels = (providerName: string) => {
+    const ragasModels = ragasProviders.find((p) => p.name === providerName)?.models || [];
+    const backendModels = getLLMModels(providerName);
+    if (ragasModels.length === 0) return backendModels;
+    if (backendModels.length === 0) return ragasModels;
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const m of ragasModels) {
+      if (seen.has(m)) continue;
+      seen.add(m);
+      merged.push(m);
+    }
+    for (const m of backendModels) {
+      if (seen.has(m)) continue;
+      seen.add(m);
+      merged.push(m);
+    }
+    return merged;
   };
 
   const handleSaveSettings = async () => {
@@ -244,7 +283,13 @@ export default function RagasPage() {
                         <Label className="text-sm font-medium">Model</Label>
                         <Select value={selectedModel || ""} onValueChange={setSelectedModel}>
                           <SelectTrigger className="h-11"><SelectValue placeholder="Model seçin" /></SelectTrigger>
-                          <SelectContent>{(ragasProviders.find(p => p.name === selectedProvider)?.models || []).map((model) => (<SelectItem key={model} value={model}>{model}</SelectItem>))}</SelectContent>
+                          <SelectContent>
+                            {getProviderModels(selectedProvider).map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {model}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
                         </Select>
                       </div>
                     )}
@@ -265,7 +310,11 @@ export default function RagasPage() {
                 </DialogContent>
               </Dialog>
 
-              <Select value={selectedCourseId?.toString() || ""} onValueChange={(v) => setSelectedCourseId(Number(v))}>
+              <Select value={selectedCourseId?.toString() || ""} onValueChange={(v) => {
+                const courseId = Number(v);
+                setSelectedCourseId(courseId);
+                localStorage.setItem('ragas_selected_course_id', courseId.toString());
+              }}>
                 <SelectTrigger className="w-56 bg-white/20 border-0 text-white hover:bg-white/30 backdrop-blur-sm h-10"><BookOpen className="w-4 h-4 mr-2" /><SelectValue placeholder="Ders seçin" /></SelectTrigger>
                 <SelectContent>{courses.map((course) => (<SelectItem key={course.id} value={course.id.toString()}>{course.name}</SelectItem>))}</SelectContent>
               </Select>
@@ -519,11 +568,11 @@ export default function RagasPage() {
                               <div className="flex items-center gap-3 mt-3">
                                 {(() => {
                                   const overallAvg = (
-                                    (testSetRun.avg_faithfulness || 0) +
-                                    (testSetRun.avg_answer_relevancy || 0) +
-                                    (testSetRun.avg_context_precision || 0) +
-                                    (testSetRun.avg_context_recall || 0) +
-                                    (testSetRun.avg_answer_correctness || 0)
+                                    (testSetRun.avg_faithfulness ?? 0) +
+                                    (testSetRun.avg_answer_relevancy ?? 0) +
+                                    (testSetRun.avg_context_precision ?? 0) +
+                                    (testSetRun.avg_context_recall ?? 0) +
+                                    (testSetRun.avg_answer_correctness ?? 0)
                                   ) / 5;
                                   
                                   return (
@@ -536,19 +585,19 @@ export default function RagasPage() {
                                       </div>
                                       <div className="flex items-center gap-2 text-xs">
                                         <span className={`px-2 py-1 rounded ${getMetricBgColor(testSetRun.avg_faithfulness)}`}>
-                                          <span className="text-slate-500">F:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_faithfulness)}`}>{(testSetRun.avg_faithfulness * 100).toFixed(0)}%</span>
+                                          <span className="text-slate-500">F:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_faithfulness)}`}>{((testSetRun.avg_faithfulness ?? 0) * 100).toFixed(0)}%</span>
                                         </span>
                                         <span className={`px-2 py-1 rounded ${getMetricBgColor(testSetRun.avg_answer_relevancy)}`}>
-                                          <span className="text-slate-500">AR:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_answer_relevancy)}`}>{(testSetRun.avg_answer_relevancy * 100).toFixed(0)}%</span>
+                                          <span className="text-slate-500">AR:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_answer_relevancy)}`}>{((testSetRun.avg_answer_relevancy ?? 0) * 100).toFixed(0)}%</span>
                                         </span>
                                         <span className={`px-2 py-1 rounded ${getMetricBgColor(testSetRun.avg_context_precision)}`}>
-                                          <span className="text-slate-500">CP:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_context_precision)}`}>{(testSetRun.avg_context_precision * 100).toFixed(0)}%</span>
+                                          <span className="text-slate-500">CP:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_context_precision)}`}>{((testSetRun.avg_context_precision ?? 0) * 100).toFixed(0)}%</span>
                                         </span>
                                         <span className={`px-2 py-1 rounded ${getMetricBgColor(testSetRun.avg_context_recall)}`}>
-                                          <span className="text-slate-500">CR:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_context_recall)}`}>{(testSetRun.avg_context_recall * 100).toFixed(0)}%</span>
+                                          <span className="text-slate-500">CR:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_context_recall)}`}>{((testSetRun.avg_context_recall ?? 0) * 100).toFixed(0)}%</span>
                                         </span>
                                         <span className={`px-2 py-1 rounded ${getMetricBgColor(testSetRun.avg_answer_correctness)}`}>
-                                          <span className="text-slate-500">AC:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_answer_correctness)}`}>{(testSetRun.avg_answer_correctness * 100).toFixed(0)}%</span>
+                                          <span className="text-slate-500">AC:</span> <span className={`font-semibold ${getMetricColor(testSetRun.avg_answer_correctness)}`}>{((testSetRun.avg_answer_correctness ?? 0) * 100).toFixed(0)}%</span>
                                         </span>
                                       </div>
                                     </>

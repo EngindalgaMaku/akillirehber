@@ -5,6 +5,7 @@ import { api, Document, Chunk } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -19,6 +20,9 @@ import {
   Zap,
   Trash2,
   Database,
+  CheckCircle2,
+  AlertCircle,
+  X,
 } from "lucide-react";
 
 interface ProcessingTabProps {
@@ -38,12 +42,21 @@ interface ProcessingOptions {
   max_chunk_size: number;
 }
 
+interface ProcessingProgress {
+  docId: number;
+  docName: string;
+  status: "processing" | "success" | "error";
+  operation: "chunking" | "embedding";
+  error?: string;
+}
+
 const EMBEDDING_MODELS = [
   { value: "openai/text-embedding-3-small", label: "OpenAI text-embedding-3-small (1536 dim)" },
   { value: "openai/text-embedding-3-large", label: "OpenAI text-embedding-3-large (3072 dim)" },
   { value: "alibaba/text-embedding-v4", label: "Alibaba text-embedding-v4 (1024 dim)" },
   { value: "cohere/embed-multilingual-v3.0", label: "Cohere embed-multilingual-v3.0 (1024 dim)" },
   { value: "cohere/embed-multilingual-light-v3.0", label: "Cohere embed-multilingual-light-v3.0 (384 dim)" },
+  { value: "qwen/qwen3-embedding-8b", label: "Qwen qwen3-embedding-8b (1024 dim)" },
 ];
 
 const CHUNKS_PER_PAGE = 10;
@@ -52,13 +65,15 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
+  const [selectedDocIds, setSelectedDocIds] = useState<number[]>([]);
   const [docChunks, setDocChunks] = useState<Chunk[]>([]);
   const [chunkPage, setChunkPage] = useState(1);
-  
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDeletingChunks, setIsDeletingChunks] = useState(false);
   const [isEmbedding, setIsEmbedding] = useState(false);
   const [isDeletingVectors, setIsDeletingVectors] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState<ProcessingProgress[]>([]);
 
   const [options, setOptions] = useState<ProcessingOptions>({
     strategy: "recursive",
@@ -88,14 +103,18 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
 
   const loadDocuments = useCallback(async () => {
     try {
-      const data = await api.getCourseDocuments(courseId);
-      setDocuments(data);
+      const data = await api.getUserDocuments();
+      const filtered = data.filter((d) => d.course_id === courseId);
+      setDocuments(filtered);
+      if (selectedDocId && !filtered.some((d) => d.id === selectedDocId)) {
+        setSelectedDocId(null);
+      }
     } catch {
       toast.error("Dokümanlar yüklenirken hata oluştu");
     } finally {
       setIsLoading(false);
     }
-  }, [courseId]);
+  }, [courseId, selectedDocId]);
 
   const loadChunks = useCallback(async (docId: number) => {
     try {
@@ -122,6 +141,10 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
 
   const handleProcess = async () => {
     if (!selectedDocId) return;
+    if (!selectedDoc || !selectedDoc.char_count || selectedDoc.char_count <= 0) {
+      toast.error("Bu dokümandan metin çıkarılamadı (içerik boş). Lütfen dosyayı yeniden yükleyin.");
+      return;
+    }
     setIsProcessing(true);
     try {
       const result = await api.processDocument(selectedDocId, {
@@ -162,6 +185,10 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
 
   const handleEmbed = async () => {
     if (!selectedDocId) return;
+    if (!selectedDoc || !selectedDoc.char_count || selectedDoc.char_count <= 0) {
+      toast.error("Bu dokümandan metin çıkarılamadı (içerik boş). Lütfen dosyayı yeniden yükleyin.");
+      return;
+    }
     setIsEmbedding(true);
     try {
       const result = await api.embedDocument(selectedDocId, options.embedding_model);
@@ -186,6 +213,192 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
       toast.error(error instanceof Error ? error.message : "Silme hatası");
     } finally {
       setIsDeletingVectors(false);
+    }
+  };
+
+  const handleBulkProcess = async () => {
+    if (selectedDocIds.length === 0) {
+      toast.error("En az bir doküman seçin");
+      return;
+    }
+
+    setIsProcessing(true);
+    
+    // Initialize processing progress for all selected documents
+    const initialProgress: ProcessingProgress[] = selectedDocIds.map((docId) => {
+      const doc = documents.find((d) => d.id === docId);
+      return {
+        docId,
+        docName: doc?.original_filename || `Doküman ${docId}`,
+        status: "processing",
+        operation: "chunking",
+      };
+    });
+    setProcessingProgress(initialProgress);
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Process documents sequentially
+    for (const docId of selectedDocIds) {
+      const doc = documents.find((d) => d.id === docId);
+      if (!doc || !doc.char_count || doc.char_count <= 0) {
+        errorCount++;
+        setProcessingProgress((prev) =>
+          prev.map((p) =>
+            p.docId === docId
+              ? { ...p, status: "error", error: "İçerik boş" }
+              : p
+          )
+        );
+        continue;
+      }
+
+      try {
+        await api.processDocument(docId, {
+          strategy: options.strategy,
+          chunk_size: options.chunk_size,
+          overlap: options.overlap,
+          similarity_threshold: options.similarity_threshold,
+          embedding_model: options.embedding_model,
+          min_chunk_size: options.min_chunk_size,
+          max_chunk_size: options.max_chunk_size,
+        });
+        successCount++;
+        
+        // Update progress for this document
+        setProcessingProgress((prev) =>
+          prev.map((p) =>
+            p.docId === docId ? { ...p, status: "success" } : p
+          )
+        );
+      } catch (error) {
+        errorCount++;
+        const errorMessage = error instanceof Error ? error.message : "İşleme hatası";
+        
+        // Update progress for this document with error
+        setProcessingProgress((prev) =>
+          prev.map((p) =>
+            p.docId === docId ? { ...p, status: "error", error: errorMessage } : p
+          )
+        );
+      }
+    }
+
+    // Show summary toast
+    if (successCount > 0 && errorCount === 0) {
+      toast.success(`${successCount} doküman başarıyla chunklandı`);
+    } else if (successCount > 0 && errorCount > 0) {
+      toast.warning(`${successCount} doküman chunklandı, ${errorCount} doküman işlenemedi`);
+    } else if (errorCount > 0) {
+      toast.error(`${errorCount} doküman işlenemedi`);
+    }
+
+    setIsProcessing(false);
+    setSelectedDocIds([]);
+    
+    // Reload documents after a short delay
+    setTimeout(() => {
+      loadDocuments();
+    }, 1000);
+  };
+
+  const handleBulkEmbed = async () => {
+    if (selectedDocIds.length === 0) {
+      toast.error("En az bir doküman seçin");
+      return;
+    }
+
+    setIsEmbedding(true);
+    
+    // Initialize processing progress for all selected documents
+    const initialProgress: ProcessingProgress[] = selectedDocIds.map((docId) => {
+      const doc = documents.find((d) => d.id === docId);
+      return {
+        docId,
+        docName: doc?.original_filename || `Doküman ${docId}`,
+        status: "processing",
+        operation: "embedding",
+      };
+    });
+    setProcessingProgress(initialProgress);
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Embed documents sequentially
+    for (const docId of selectedDocIds) {
+      const doc = documents.find((d) => d.id === docId);
+      if (!doc || !doc.char_count || doc.char_count <= 0) {
+        errorCount++;
+        setProcessingProgress((prev) =>
+          prev.map((p) =>
+            p.docId === docId
+              ? { ...p, status: "error", error: "İçerik boş" }
+              : p
+          )
+        );
+        continue;
+      }
+
+      try {
+        await api.embedDocument(docId, options.embedding_model);
+        successCount++;
+        
+        // Update progress for this document
+        setProcessingProgress((prev) =>
+          prev.map((p) =>
+            p.docId === docId ? { ...p, status: "success" } : p
+          )
+        );
+      } catch (error) {
+        errorCount++;
+        const errorMessage = error instanceof Error ? error.message : "Embedding hatası";
+        
+        // Update progress for this document with error
+        setProcessingProgress((prev) =>
+          prev.map((p) =>
+            p.docId === docId ? { ...p, status: "error", error: errorMessage } : p
+          )
+        );
+      }
+    }
+
+    // Show summary toast
+    if (successCount > 0 && errorCount === 0) {
+      toast.success(`${successCount} doküman başarıyla embed edildi`);
+    } else if (successCount > 0 && errorCount > 0) {
+      toast.warning(`${successCount} doküman embed edildi, ${errorCount} doküman işlenemedi`);
+    } else if (errorCount > 0) {
+      toast.error(`${errorCount} doküman işlenemedi`);
+    }
+
+    setIsEmbedding(false);
+    setSelectedDocIds([]);
+    
+    // Reload documents after a short delay
+    setTimeout(() => {
+      loadDocuments();
+    }, 1000);
+  };
+
+  const clearProcessingProgress = () => {
+    setProcessingProgress([]);
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedDocIds(documents.map((d) => d.id));
+    } else {
+      setSelectedDocIds([]);
+    }
+  };
+
+  const handleSelectDoc = (docId: number, checked: boolean) => {
+    if (checked) {
+      setSelectedDocIds([...selectedDocIds, docId]);
+    } else {
+      setSelectedDocIds(selectedDocIds.filter((id) => id !== docId));
     }
   };
 
@@ -216,9 +429,144 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Left: Document Selection & Chunks */}
       <div className="lg:col-span-2 space-y-6">
-        {/* Document Selection */}
+        {/* Bulk Document Selection */}
         <div className="bg-white rounded-lg border border-slate-200 p-4">
-          <Label className="text-sm font-medium">Doküman Seçin</Label>
+          <div className="flex items-center justify-between mb-3">
+            <Label className="text-sm font-medium">Toplu İşleme</Label>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">
+                {selectedDocIds.length} seçili
+              </span>
+              <Checkbox
+                checked={selectedDocIds.length > 0 && selectedDocIds.length === documents.length}
+                onCheckedChange={handleSelectAll}
+                disabled={isProcessing || isEmbedding}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 mb-3">
+            <Button
+              size="sm"
+              onClick={handleBulkProcess}
+              disabled={isProcessing || selectedDocIds.length === 0}
+            >
+              {isProcessing ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Zap className="w-4 h-4 mr-2" />
+              )}
+              Toplu Chunkla
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleBulkEmbed}
+              disabled={isEmbedding || selectedDocIds.length === 0}
+            >
+              {isEmbedding ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Database className="w-4 h-4 mr-2" />
+              )}
+              Toplu Embed
+            </Button>
+          </div>
+          <div className="max-h-48 overflow-y-auto border border-slate-200 rounded">
+            {documents.length === 0 ? (
+              <div className="p-4 text-center text-sm text-slate-500">
+                Henüz doküman yok
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-200">
+                {documents.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="flex items-center gap-3 p-3 hover:bg-slate-50"
+                  >
+                    <Checkbox
+                      checked={selectedDocIds.includes(doc.id)}
+                      onCheckedChange={(checked) => handleSelectDoc(doc.id, checked)}
+                      disabled={isProcessing || isEmbedding}
+                    />
+                    <FileText className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-slate-900 truncate">
+                        {doc.original_filename}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {doc.chunk_count > 0
+                          ? `${doc.chunk_count} chunk`
+                          : "Chunklanmamış"}
+                        {doc.embedding_status === "completed" && (
+                          <span className="ml-2 text-green-600">
+                            • {doc.vector_count} vektör
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Processing Progress */}
+        {processingProgress.length > 0 && (
+          <div className="bg-white rounded-lg border border-slate-200 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <Label className="text-sm font-medium">
+                İşleme Durumu ({processingProgress.length} doküman)
+              </Label>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearProcessingProgress}
+                className="text-slate-500 hover:text-slate-700"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {processingProgress.map((progress) => (
+                <div
+                  key={progress.docId}
+                  className="flex items-center gap-3 p-2 bg-slate-50 rounded border border-slate-200"
+                >
+                  {progress.status === "processing" && (
+                    <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                  )}
+                  {progress.status === "success" && (
+                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  )}
+                  {progress.status === "error" && (
+                    <AlertCircle className="w-4 h-4 text-red-500" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">
+                      {progress.docName}
+                    </p>
+                    {progress.error && (
+                      <p className="text-xs text-red-600 truncate">{progress.error}</p>
+                    )}
+                  </div>
+                  <span className="text-xs text-slate-500">
+                    {progress.operation === "chunking" ? "Chunklanıyor" : "Embed ediliyor"}
+                  </span>
+                  {progress.status === "success" && (
+                    <span className="text-xs text-green-600">Başarılı</span>
+                  )}
+                  {progress.status === "error" && (
+                    <span className="text-xs text-red-600">Hata</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Single Document Selection */}
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <Label className="text-sm font-medium">Tekil Doküman Seçimi</Label>
           <Select
             value={selectedDocId?.toString() || ""}
             onValueChange={(v) => setSelectedDocId(v ? Number(v) : null)}

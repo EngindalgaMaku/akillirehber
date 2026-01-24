@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { useModelProviders } from "@/hooks/useModelProviders";
 import { 
   api, 
   Course, 
   SemanticSimilarityQuickTestResponse,
   SemanticSimilarityBatchTestResponse,
-  SemanticSimilarityResult
+  SemanticSimilarityResult,
+  SemanticSimilarityResultListResponse,
+  SemanticSimilarityGroupInfo,
+  BatchTestSession,
+  BatchTestSessionListResponse
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,27 +36,33 @@ import {
   DialogTrigger 
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { 
-  Target, 
-  Plus, 
-  Loader2, 
-  X, 
-  Save, 
-  ChevronDown, 
-  History, 
-  Eye, 
-  Trash2, 
-  BookOpen, 
-  Sparkles,
-  FileJson,
+import {
+  Target,
+  FileText,
+  History,
   Download,
+  Trash2,
+  Save,
+  Play,
+  Pause,
+  Square,
+  Loader2,
   Settings,
-  FileText
+  RefreshCw,
+  BarChart3,
+  BookOpen,
+  Sparkles,
+  ChevronDown,
+  Plus,
+  X,
+  FileJson,
+  Eye,
 } from "lucide-react";
 import { generateSemanticSimilarityPDF } from "./exportToPDF";
 
 export default function SemanticSimilarityPage() {
   const { user } = useAuth();
+  const { getEmbeddingModels, getLLMProviders, getLLMModels, isLoading: providersLoading } = useModelProviders();
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -62,8 +73,6 @@ export default function SemanticSimilarityPage() {
   const [selectedLlmProvider, setSelectedLlmProvider] = useState<string>("");
   const [selectedLlmModel, setSelectedLlmModel] = useState<string>("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [llmProviders, setLlmProviders] = useState<Record<string, string[]>>({});
-  const [availableLlmModels, setAvailableLlmModels] = useState<string[]>([]);
 
   // Quick Test State
   const [isQuickTestExpanded, setIsQuickTestExpanded] = useState(false);
@@ -79,13 +88,26 @@ export default function SemanticSimilarityPage() {
   const [batchTestJson, setBatchTestJson] = useState("");
   const [isBatchTesting, setIsBatchTesting] = useState(false);
   const [batchTestResult, setBatchTestResult] = useState<SemanticSimilarityBatchTestResponse | null>(null);
+  const batchTestStartTimeRef = useRef<number | null>(null);
+  const [batchTestElapsedTime, setBatchTestElapsedTime] = useState<string>("00:00:00");
+  const [repeatCount, setRepeatCount] = useState<number>(3);
+  const [currentRunNumber, setCurrentRunNumber] = useState<number>(1);
+  const [totalRuns, setTotalRuns] = useState<number>(3);
+  const [allRunResults, setAllRunResults] = useState<SemanticSimilarityBatchTestResponse[]>([]);
+
+  // Batch Test Sessions State
+  const [batchTestSessions, setBatchTestSessions] = useState<BatchTestSession[]>([]);
+  const [isSessionsLoading, setIsSessionsLoading] = useState(false);
+  const [isResumingSession, setIsResumingSession] = useState(false);
 
   // Saved Results State
   const [isSavedResultsExpanded, setIsSavedResultsExpanded] = useState(false);
   const [savedResults, setSavedResults] = useState<SemanticSimilarityResult[]>([]);
-  const [savedResultsGroups, setSavedResultsGroups] = useState<string[]>([]);
+  const [savedResultsGroups, setSavedResultsGroups] = useState<SemanticSimilarityGroupInfo[]>([]);
   const [savedResultsTotal, setSavedResultsTotal] = useState(0);
-  const [savedResultsAggregate, setSavedResultsAggregate] = useState<any>(null);
+  const [savedResultsAggregate, setSavedResultsAggregate] = useState<
+    SemanticSimilarityResultListResponse["aggregate"] | null
+  >(null);
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [resultsPage, setResultsPage] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -100,18 +122,43 @@ export default function SemanticSimilarityPage() {
   // View Result Dialog State
   const [viewingResult, setViewingResult] = useState<SemanticSimilarityResult | null>(null);
 
+  // Statistics Modal State
+  const [isStatisticsModalOpen, setIsStatisticsModalOpen] = useState(false);
+  const [statisticsModalResults, setStatisticsModalResults] = useState<SemanticSimilarityResult[]>([]);
+  const [isLoadingStatisticsResults, setIsLoadingStatisticsResults] = useState(false);
+
   // PDF Export State
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
 
+  // W&B Export State
+  const [isWandbExporting, setIsWandbExporting] = useState(false);
+
+  // W&B Run Management State
+  const [isWandbRunsModalOpen, setIsWandbRunsModalOpen] = useState(false);
+  const [wandbRuns, setWandbRuns] = useState<Array<{
+    id: string;
+    name: string;
+    state: string;
+    created_at: string | null;
+    config: Record<string, unknown>;
+    missing_fields: string[];
+  }>>([]);
+  const [isLoadingWandbRuns, setIsLoadingWandbRuns] = useState(false);
+  const [updatingRunIds, setUpdatingRunIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     loadCourses();
-    loadLlmProviders();
   }, []);
+
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+  }, [isSettingsOpen]);
 
   useEffect(() => {
     if (selectedCourseId) {
       loadSavedResults(true);
       loadCourseSettings();
+      loadBatchTestSessions();
     }
   }, [selectedCourseId]);
 
@@ -122,21 +169,94 @@ export default function SemanticSimilarityPage() {
     }
   }, [selectedGroup]);
 
-  useEffect(() => {
-    // Load models when provider changes
-    if (selectedLlmProvider && llmProviders[selectedLlmProvider]) {
-      setAvailableLlmModels(llmProviders[selectedLlmProvider]);
-    } else {
-      setAvailableLlmModels([]);
+  const exportSelectedGroupToWandb = async () => {
+    if (!selectedCourseId) {
+      toast.error("Lütfen bir ders seçin");
+      return;
     }
-  }, [selectedLlmProvider, llmProviders]);
 
-  const loadLlmProviders = async () => {
+    if (!selectedGroup || selectedGroup === "__all__" || selectedGroup === "__no_group__") {
+      toast.error("W&B'ye göndermek için bir grup seçin");
+      return;
+    }
+
+    setIsWandbExporting(true);
     try {
-      const providers = await api.getLLMProviders();
-      setLlmProviders(providers);
-    } catch {
-      console.log("LLM providers not available");
+      toast.loading("W&B'ye aktarılıyor...", { id: "wandb-export" });
+      const res = await api.wandbExportSemanticSimilarityGroup({
+        course_id: selectedCourseId,
+        group_name: selectedGroup,
+      });
+
+      if (res.run_url) {
+        toast.success(`Aktarıldı: ${res.exported_count} kayıt`, { id: "wandb-export" });
+        window.open(res.run_url, "_blank");
+      } else {
+        toast.success(`Aktarıldı: ${res.exported_count} kayıt`, { id: "wandb-export" });
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "W&B aktarımı başarısız";
+      toast.error(msg, { id: "wandb-export" });
+    } finally {
+      setIsWandbExporting(false);
+    }
+  };
+
+  const loadWandbRuns = async () => {
+    if (!selectedCourseId) {
+      toast.error("Lütfen bir ders seçin");
+      return;
+    }
+    setIsLoadingWandbRuns(true);
+    try {
+      const data = await api.getWandbRuns(selectedCourseId);
+      setWandbRuns(data.runs);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "W&B run’ları alınamadı";
+      toast.error(msg);
+    } finally {
+      setIsLoadingWandbRuns(false);
+    }
+  };
+
+  const updateSelectedWandbRun = async (run: {
+    id: string;
+    name: string;
+    config: Record<string, unknown>;
+    missing_fields: string[];
+  }) => {
+    if (!selectedCourseId) {
+      toast.error("Lütfen bir ders seçin");
+      return;
+    }
+    const groupName = run.config.group_name as string | undefined;
+    if (!groupName) {
+      toast.error("Run'ın group_name bilgisi bulunamadı");
+      return;
+    }
+    setUpdatingRunIds((prev) => new Set(prev).add(run.id));
+    try {
+      const res = await api.updateWandbRun({
+        run_id: run.id,
+        group_name: groupName,
+        course_id: selectedCourseId,
+      });
+      if (res.success) {
+        toast.success(`Güncellendi: ${res.run_name} (${res.updated_fields?.join(", ")})`);
+        // Refresh runs list
+        await loadWandbRuns();
+      } else {
+        toast.error(res.message || "Güncelleme başarısız");
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Güncelleme hatası";
+      toast.error(msg);
+    } finally {
+      setUpdatingRunIds((prev) => {
+        const next = new Set(prev);
+        next.delete(run.id);
+        return next;
+      });
     }
   };
 
@@ -145,7 +265,13 @@ export default function SemanticSimilarityPage() {
       const data = await api.getCourses();
       setCourses(data);
       if (data.length > 0) {
-        setSelectedCourseId(data[0].id);
+        // Check localStorage for previously selected course
+        const savedCourseId = localStorage.getItem('semantic_similarity_selected_course_id');
+        if (savedCourseId && data.find(c => c.id === parseInt(savedCourseId))) {
+          setSelectedCourseId(parseInt(savedCourseId));
+        } else {
+          setSelectedCourseId(data[0].id);
+        }
       }
     } catch {
       toast.error("Dersler yüklenirken hata oluştu");
@@ -204,16 +330,20 @@ export default function SemanticSimilarityPage() {
         skip,
         RESULTS_PER_PAGE
       );
+      // Sort results alphabetically by question (Turkish locale)
+      const sortedResults = [...data.results].sort((a, b) => 
+        a.question.localeCompare(b.question, 'tr')
+      );
       if (reset) {
-        setSavedResults(data.results);
+        setSavedResults(sortedResults);
         setResultsPage(1);
       } else {
-        setSavedResults(prev => [...prev, ...data.results]);
+        setSavedResults(prev => [...prev, ...sortedResults]);
         setResultsPage(prev => prev + 1);
       }
       setSavedResultsTotal(data.total);
       setSavedResultsGroups(data.groups);
-      setSavedResultsAggregate(data.aggregate);
+      setSavedResultsAggregate(data.aggregate ?? null);
     } catch {
       /* ignore */
     }
@@ -223,6 +353,293 @@ export default function SemanticSimilarityPage() {
     setIsLoadingMore(true);
     await loadSavedResults(false);
     setIsLoadingMore(false);
+  };
+
+  const loadBatchTestSessions = async () => {
+    if (!selectedCourseId) return;
+    setIsSessionsLoading(true);
+    try {
+      const data = await api.getBatchTestSessions(selectedCourseId);
+      // Sadece in_progress ve failed durumundaki oturumları göster
+      const filteredSessions = data.sessions.filter(session => 
+        session.status === 'in_progress' || session.status === 'failed'
+      );
+      setBatchTestSessions(filteredSessions);
+    } catch (error) {
+      console.log("Failed to load batch test sessions:", error);
+      toast.error("Batch test oturumları yüklenirken hata oluştu");
+    } finally {
+      setIsSessionsLoading(false);
+    }
+  };
+
+  const handleResumeSession = async (sessionId: number) => {
+    if (!selectedCourseId) return;
+    setIsResumingSession(true);
+    batchTestStartTimeRef.current = Date.now();
+    setBatchTestElapsedTime("00:00:00");
+    try {
+      // Get token from localStorage with correct key
+      const token = localStorage.getItem('akilli_rehber_token');
+      if (!token) {
+        throw new Error('Oturum süresi dolmuş, lütfen tekrar giriş yapın');
+      }
+      
+      // Use the resume endpoint to stream results
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/semantic-similarity/batch-test-sessions/${sessionId}/resume`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Oturum devam ettirilemedi');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      type StreamingResult = {
+        question: string;
+        ground_truth: string;
+        generated_answer: string;
+        similarity_score: number;
+        best_match_ground_truth: string;
+        latency_ms: number;
+        retrieved_contexts?: string[];
+        rouge1?: number | null;
+        rouge2?: number | null;
+        rougel?: number | null;
+        bertscore_precision?: number | null;
+        bertscore_recall?: number | null;
+        bertscore_f1?: number | null;
+        hit_at_1?: number | null;
+        mrr?: number | null;
+        system_prompt_used?: string;
+        error_message?: string;
+      };
+
+      const results: StreamingResult[] = [];
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+
+          try {
+            const data = JSON.parse(payload);
+
+            if (data.event === 'progress') {
+              results.push(data.result as StreamingResult);
+
+              if (data.result?.error_message) {
+                toast.error(
+                  `Soru ${data.index + 1}/${data.total} başarısız: ${data.result.error_message}`
+                );
+              }
+
+              // Calculate elapsed time
+              if (batchTestStartTimeRef.current) {
+                const elapsedMs = Date.now() - batchTestStartTimeRef.current;
+                const elapsedSeconds = Math.floor(elapsedMs / 1000);
+                const hours = Math.floor(elapsedSeconds / 3600);
+                const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+                const seconds = elapsedSeconds % 60;
+                setBatchTestElapsedTime(
+                  `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+                );
+              }
+
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
+              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
+              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
+              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+
+              setBatchTestResult({
+                results: results as SemanticSimilarityBatchTestResponse['results'],
+                aggregate: {
+                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+                  min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+                  max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
+                  total_latency_ms: 0,
+                  test_count: results.length,
+                  avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
+                  avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
+                  avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
+                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
+                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
+                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                },
+                embedding_model_used: data.embedding_model_used || '',
+                llm_model_used: data.llm_model_used || undefined
+              });
+            } else if (data.event === 'complete') {
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
+              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
+              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
+              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+
+              setBatchTestResult({
+                results: results as SemanticSimilarityBatchTestResponse['results'],
+                aggregate: {
+                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+                  min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+                  max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
+                  total_latency_ms: 0,
+                  test_count: results.length,
+                  avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
+                  avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
+                  avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
+                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
+                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
+                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                },
+                embedding_model_used: data.embedding_model_used || '',
+                llm_model_used: data.llm_model_used || undefined
+              });
+              toast.success(`Oturum tamamlandı: ${data.completed}/${data.total}`);
+              loadBatchTestSessions();
+            } else if (data.event === 'error') {
+              console.error('Test error:', data.error);
+              loadBatchTestSessions();
+            }
+          } catch (jsonError) {
+            console.error('Failed to parse SSE JSON:', jsonError, 'Line:', line);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Resume session error:", error);
+      toast.error(error instanceof Error ? error.message : "Oturum devam ettirilemedi");
+      loadBatchTestSessions();
+    } finally {
+      setIsResumingSession(false);
+    }
+  };
+
+  const handleCancelSession = async (sessionId: number) => {
+    if (!confirm("Bu oturumu iptal etmek istediğinizden emin misiniz?")) return;
+
+    try {
+      await api.cancelBatchTestSession(sessionId);
+      toast.success("Oturum iptal edildi");
+      loadBatchTestSessions();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "İptal başarısız");
+    }
+  };
+
+  const handleDeleteSession = async (sessionId: number) => {
+    if (!confirm("Bu oturumu kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.")) return;
+
+    try {
+      await api.deleteBatchTestSession(sessionId);
+      toast.success("Oturum silindi");
+      loadBatchTestSessions();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Silme başarısız");
+    }
+  };
+
+  const getSessionStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-emerald-100 text-emerald-700';
+      case 'in_progress':
+        return 'bg-blue-100 text-blue-700';
+      case 'failed':
+        return 'bg-red-100 text-red-700';
+      case 'cancelled':
+        return 'bg-slate-100 text-slate-700';
+      default:
+        return 'bg-slate-100 text-slate-700';
+    }
+  };
+
+  const getSessionStatusText = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'Tamamlandı';
+      case 'in_progress':
+        return 'Devam Ediyor';
+      case 'failed':
+        return 'Başarısız';
+      case 'cancelled':
+        return 'İptal Edildi';
+      default:
+        return status;
+    }
+  };
+
+  const loadAllResultsForStatistics = async () => {
+    if (!selectedCourseId) return;
+    setIsLoadingStatisticsResults(true);
+    try {
+      let groupFilter: string | undefined;
+      if (selectedGroup === "__all__" || selectedGroup === "") {
+        groupFilter = undefined;
+      } else if (selectedGroup === "__no_group__") {
+        groupFilter = "";
+      } else {
+        groupFilter = selectedGroup;
+      }
+      
+      const data = await api.getSemanticSimilarityResults(
+        selectedCourseId,
+        groupFilter,
+        0,
+        10000 // Large limit to get all results
+      );
+      // Sort results alphabetically by question (Turkish locale)
+      const sortedResults = [...data.results].sort((a, b) => 
+        a.question.localeCompare(b.question, 'tr')
+      );
+      setStatisticsModalResults(sortedResults);
+    } catch {
+      console.log("Failed to load all results for statistics");
+    } finally {
+      setIsLoadingStatisticsResults(false);
+    }
+  };
+
+  const copyTableToExcel = () => {
+    const headers = ["#", "Soru", "ROUGE-1 (%)", "ROUGE-2 (%)", "ROUGE-L (%)", "BERTScore P (%)", "BERTScore R (%)", "BERTScore F1 (%)", "Gecikme (ms)"];
+    const rows = statisticsModalResults.map((r, idx) => [
+      idx + 1,
+        `"${r.question.replace(/"/g, '""')}"`,
+        r.rouge1 != null ? (r.rouge1 * 100).toFixed(2) : "-",
+        r.rouge2 != null ? (r.rouge2 * 100).toFixed(2) : "-",
+        r.rougel != null ? (r.rougel * 100).toFixed(2) : "-",
+        r.bertscore_precision != null ? (r.bertscore_precision * 100).toFixed(2) : "-",
+        r.bertscore_recall != null ? (r.bertscore_recall * 100).toFixed(2) : "-",
+        r.bertscore_f1 != null ? (r.bertscore_f1 * 100).toFixed(2) : "-",
+        r.latency_ms
+      ]);
+    
+    const csv = [headers.join("\t"), ...rows.map(row => row.join("\t"))].join("\n");
+    navigator.clipboard.writeText(csv).then(() => {
+      toast.success("Tablo kopyalandı! Excel'e yapıştırabilirsiniz.");
+    }).catch(() => {
+      toast.error("Kopyalama başarısız");
+    });
   };
 
   const handleQuickTest = async () => {
@@ -259,13 +676,32 @@ export default function SemanticSimilarityPage() {
       return;
     }
 
+    // Check if there's already an active session
+    const activeSessions = batchTestSessions.filter(s => 
+      s.status === 'in_progress' || s.status === 'failed'
+    );
+    
+    if (activeSessions.length > 0) {
+      const activeSession = activeSessions[0];
+      if (confirm(
+        `Bu ders için zaten aktif bir oturum var. Mevcut oturumu devam ettirmek ister misiniz?\n\nOturum: ${activeSession.group_name}\nDurum: ${activeSession.status}\nİlerleme: ${activeSession.completed_tests}/${activeSession.total_tests}`
+      )) {
+        handleResumeSession(activeSession.id);
+        return;
+      }
+    }
+
     setIsBatchTesting(true);
     setBatchTestResult(null);
+    setAllRunResults([]);
+    setCurrentRunNumber(1);
+    batchTestStartTimeRef.current = Date.now();
+    setBatchTestElapsedTime("00:00:00");
 
     try {
-      let parsedData = JSON.parse(batchTestJson);
+      const parsedData = JSON.parse(batchTestJson);
       let testCases = parsedData;
-      
+
       // Eğer RAGAS test set formatındaysa (questions array içinde), onu çıkar
       if (parsedData.questions && Array.isArray(parsedData.questions)) {
         testCases = parsedData.questions;
@@ -274,102 +710,194 @@ export default function SemanticSimilarityPage() {
           setSaveGroupName(parsedData.name);
         }
       }
+
+      console.log(`Starting ${totalRuns} repeated batch tests with ${testCases.length} test cases each`);
       
-      console.log("Starting streaming batch test with", testCases.length, "test cases");
-      
-      // Get token from localStorage with correct key
       const token = localStorage.getItem('akilli_rehber_token');
       if (!token) {
         throw new Error('Oturum süresi dolmuş, lütfen tekrar giriş yapın');
       }
-      
-      // Streaming endpoint kullan
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/semantic-similarity/batch-test-stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          course_id: selectedCourseId,
-          test_cases: testCases,
-          llm_provider: selectedLlmProvider || undefined,
-          llm_model: selectedLlmModel || undefined
-        })
-      });
 
-      if (!response.ok) {
-        throw new Error('Batch test başarısız');
+      // Run the batch test multiple times
+      const allRunResults: SemanticSimilarityBatchTestResponse[] = [];
+      
+      for (let run = 1; run <= totalRuns; run++) {
+        setCurrentRunNumber(run);
+        
+        // Create a batch test session with unique name
+        const groupName = saveGroupName || `Batch Test - Run ${run}`;
+        let session;
+        try {
+          session = await api.createBatchTestSession({
+            course_id: selectedCourseId,
+            test_cases: testCases,
+            llm_provider: selectedLlmProvider || undefined,
+            llm_model: selectedLlmModel || undefined
+          });
+          
+          toast.success(`Oturum oluşturuldu: ${groupName} (${run}/${totalRuns})`);
+        } catch (error) {
+          // Check if error is about duplicate session
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes("An active session with these test cases already exists")) {
+            // Find existing session and ask user if they want to resume it
+            const existingSessions = batchTestSessions.filter(s => 
+              s.status === 'in_progress' || s.status === 'failed'
+            );
+            
+            if (existingSessions.length > 0) {
+              const existingSession = existingSessions[0];
+              if (confirm(
+                `Bu test için zaten aktif bir oturum var. Mevcut oturumu devam ettirmek ister misiniz?\n\nOturum: ${existingSession.group_name}\nDurum: ${existingSession.status}\nİlerleme: ${existingSession.completed_tests}/${existingSession.total_tests}`
+              )) {
+                await runSingleBatchTest(existingSession.id, run);
+                allRunResults.push(batchTestResult!);
+                continue;
+              }
+            }
+          }
+          throw error;
+        }
+        
+        // Refresh the sessions list
+        loadBatchTestSessions();
+        
+        // Run this single batch test
+        const runResult = await runSingleBatchTest(session.id, run, testCases.length);
+        allRunResults.push(runResult);
+        
+        // Small delay between runs
+        if (run < totalRuns) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      const results: any[] = [];
       
-      while (reader) {
+      // Calculate combined statistics from all runs
+      const combinedResults = allRunResults.flatMap(r => r.results);
+      const combinedAggregate = calculateCombinedAggregate(allRunResults);
+      
+      setAllRunResults(allRunResults);
+      setBatchTestResult({
+        results: combinedResults,
+        aggregate: combinedAggregate,
+        embedding_model_used: selectedEmbeddingModel || '',
+        llm_model_used: selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined
+      });
+      
+      toast.success(`Tüm ${totalRuns} test başarıyla tamamlandı!`);
+      
+    } catch (error) {
+      console.error("Batch test error:", error);
+      toast.error(error instanceof Error ? error.message : "Test başarısız");
+      // Refresh the sessions list to update status
+      loadBatchTestSessions();
+    } finally {
+      setIsBatchTesting(false);
+    }
+  };
+
+  const runSingleBatchTest = async (sessionId: number, runNumber: number, testCasesCount: number): Promise<SemanticSimilarityBatchTestResponse> => {
+    batchTestStartTimeRef.current = Date.now();
+    setBatchTestElapsedTime("00:00:00");
+    
+    // Use the resume endpoint to stream results
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/semantic-similarity/batch-test-sessions/${sessionId}/resume`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('akilli_rehber_token')}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('Batch test başarısız');
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Response body is not readable');
+    }
+
+    const decoder = new TextDecoder();
+    type StreamingResult = {
+      question: string;
+      ground_truth: string;
+      generated_answer: string;
+      similarity_score: number;
+      best_match_ground_truth: string;
+      latency_ms: number;
+      retrieved_contexts?: string[];
+      rouge1?: number | null;
+      rouge2?: number | null;
+      rougel?: number | null;
+      bertscore_precision?: number | null;
+      bertscore_recall?: number | null;
+      bertscore_f1?: number | null;
+      hit_at_1?: number | null;
+      mrr?: number | null;
+      system_prompt_used?: string;
+      error_message?: string;
+    };
+
+    const results: StreamingResult[] = [];
+    let buffer = "";
+    
+    try {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (!value) continue;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6));
-            
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+
+          try {
+            const data = JSON.parse(payload);
+
             if (data.event === 'progress') {
-              results.push(data.result);
-              
-              // Calculate aggregates
-              const validResults = results.filter(r => r.similarity_score != null);
-              const rouge1Results = results.filter(r => r.rouge1 != null);
-              const rouge2Results = results.filter(r => r.rouge2 != null);
-              const rougelResults = results.filter(r => r.rougel != null);
-              const bertPrecisionResults = results.filter(r => r.bertscore_precision != null);
-              const bertRecallResults = results.filter(r => r.bertscore_recall != null);
-              const bertF1Results = results.filter(r => r.bertscore_f1 != null);
-              
-              // Geçici sonuçları göster
+              results.push(data.result as StreamingResult);
+
+              if (data.result?.error_message) {
+                toast.error(
+                  `Soru ${data.index + 1}/${data.total} başarısız: ${data.result.error_message}`
+                );
+              }
+
+              // Calculate elapsed time
+              if (batchTestStartTimeRef.current) {
+                const elapsedMs = Date.now() - batchTestStartTimeRef.current;
+                const elapsedSeconds = Math.floor(elapsedMs / 1000);
+                const hours = Math.floor(elapsedSeconds / 3600);
+                const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+                const seconds = elapsedSeconds % 60;
+                setBatchTestElapsedTime(
+                  `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+                );
+              }
+
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
+              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
+              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
+              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+
               setBatchTestResult({
-                results: results,
+                results: results as SemanticSimilarityBatchTestResponse['results'],
                 aggregate: {
-                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score, 0) / validResults.length,
-                  min_similarity: Math.min(...validResults.map(r => r.similarity_score)),
-                  max_similarity: Math.max(...validResults.map(r => r.similarity_score)),
+                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+                  min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+                  max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
                   total_latency_ms: 0,
-                  test_count: testCases.length,
-                  successful_count: results.length,
-                  failed_count: 0,
-                  avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
-                  avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
-                  avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
-                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
-                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
-                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
-                },
-                embedding_model_used: selectedEmbeddingModel || '',
-                llm_model_used: selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined
-              });
-            } else if (data.event === 'complete') {
-              // Final update with correct metadata from backend
-              const validResults = results.filter(r => r.similarity_score != null);
-              const rouge1Results = results.filter(r => r.rouge1 != null);
-              const rouge2Results = results.filter(r => r.rouge2 != null);
-              const rougelResults = results.filter(r => r.rougel != null);
-              const bertPrecisionResults = results.filter(r => r.bertscore_precision != null);
-              const bertRecallResults = results.filter(r => r.bertscore_recall != null);
-              const bertF1Results = results.filter(r => r.bertscore_f1 != null);
-              
-              setBatchTestResult({
-                results: results,
-                aggregate: {
-                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score, 0) / validResults.length,
-                  min_similarity: Math.min(...validResults.map(r => r.similarity_score)),
-                  max_similarity: Math.max(...validResults.map(r => r.similarity_score)),
-                  total_latency_ms: 0,
-                  test_count: testCases.length,
-                  successful_count: results.length,
-                  failed_count: 0,
+                  test_count: results.length,
                   avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
                   avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
                   avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
@@ -380,24 +908,78 @@ export default function SemanticSimilarityPage() {
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
               });
-              toast.success(`Batch test tamamlandı: ${data.completed}/${data.total}`);
+            } else if (data.event === 'complete') {
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
+              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
+              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
+              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+
+              const finalResult: SemanticSimilarityBatchTestResponse = {
+                results: results as SemanticSimilarityBatchTestResponse['results'],
+                aggregate: {
+                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+                  min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+                  max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
+                  total_latency_ms: 0,
+                  test_count: testCasesCount,
+                  avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
+                  avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
+                  avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
+                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
+                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
+                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                },
+                embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
+                llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
+              };
+              
+              toast.success(`Run ${runNumber} tamamlandı: ${data.completed}/${data.total}`);
+              loadBatchTestSessions();
+              return finalResult;
             } else if (data.event === 'error') {
               console.error('Test error:', data.error);
+              loadBatchTestSessions();
+              throw new Error('Test başarısız');
             }
+          } catch (jsonError) {
+            console.error('Failed to parse SSE JSON:', jsonError, 'Line:', line);
           }
         }
       }
-      
     } catch (error) {
       console.error("Batch test error:", error);
-      if (error instanceof SyntaxError) {
-        toast.error("Geçersiz JSON formatı");
-      } else {
-        toast.error(error instanceof Error ? error.message : "Test başarısız");
-      }
-    } finally {
-      setIsBatchTesting(false);
+      throw error;
     }
+  };
+
+  const calculateCombinedAggregate = (runs: SemanticSimilarityBatchTestResponse[]): SemanticSimilarityBatchTestResponse['aggregate'] => {
+    // Combine all results from all runs
+    const allResults = runs.flatMap(r => r.results);
+    
+    const validResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.similarity_score !== undefined);
+    const rouge1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rouge1 !== undefined);
+    const rouge2Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rouge2 !== undefined);
+    const rougelResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rougel !== undefined);
+    const bertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_precision !== undefined);
+    const bertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_recall !== undefined);
+    const bertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_f1 !== undefined);
+
+    return {
+      avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+      min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+      max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
+      total_latency_ms: 0,
+      test_count: allResults.length,
+      avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
+      avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
+      avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
+      avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
+      avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
+      avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+    };
   };
 
   const handleSaveResult = async () => {
@@ -485,6 +1067,12 @@ export default function SemanticSimilarityPage() {
       }
 
       setIsSaveDialogOpen(false);
+      
+      // Eğer grup adı belirtildiyse, otomatik olarak o grubu seç
+      if (saveGroupName && saveGroupName.trim() !== "") {
+        setSelectedGroup(saveGroupName);
+      }
+      
       setSaveGroupName("");
       loadSavedResults(true);
     } catch (error) {
@@ -680,13 +1268,15 @@ export default function SemanticSimilarityPage() {
     setQuickTestAlternatives(newAlternatives);
   };
 
-  const getMetricColor = (value: number) => {
+  const getMetricColor = (value?: number | null) => {
+    if (value === undefined || value === null) return "text-slate-400";
     if (value >= 0.8) return "text-emerald-600";
     if (value >= 0.6) return "text-amber-600";
     return "text-red-600";
   };
 
-  const getMetricBgColor = (value: number) => {
+  const getMetricBgColor = (value?: number | null) => {
+    if (value === undefined || value === null) return "bg-slate-50 border-slate-200";
     if (value >= 0.8) return "bg-emerald-50 border-emerald-200";
     if (value >= 0.6) return "bg-amber-50 border-amber-200";
     return "bg-red-50 border-red-200";
@@ -727,6 +1317,14 @@ export default function SemanticSimilarityPage() {
             </div>
             
             <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="bg-white/20 hover:bg-white/30 text-white border-0 backdrop-blur-sm h-10"
+                onClick={() => window.location.href = '/dashboard/semantic-similarity/analysis'}
+              >
+                <BarChart3 className="w-4 h-4 mr-2" />Analiz
+              </Button>
               <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
                 <DialogTrigger asChild>
                   <Button variant="secondary" size="sm" className="bg-white/20 hover:bg-white/30 text-white border-0 backdrop-blur-sm h-10">
@@ -744,12 +1342,24 @@ export default function SemanticSimilarityPage() {
                       <Select value={selectedEmbeddingModel || ""} onValueChange={setSelectedEmbeddingModel}>
                         <SelectTrigger className="h-11"><SelectValue placeholder="Model seçin" /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="openai/text-embedding-3-small">OpenAI text-embedding-3-small (1536 dim)</SelectItem>
-                          <SelectItem value="openai/text-embedding-3-large">OpenAI text-embedding-3-large (3072 dim)</SelectItem>
-                          <SelectItem value="openai/text-embedding-ada-002">OpenAI text-embedding-ada-002 (1536 dim)</SelectItem>
-                          <SelectItem value="alibaba/text-embedding-v4">Alibaba text-embedding-v4 (1024 dim)</SelectItem>
-                          <SelectItem value="cohere/embed-multilingual-v3.0">Cohere embed-multilingual-v3.0 (1024 dim)</SelectItem>
-                          <SelectItem value="cohere/embed-multilingual-light-v3.0">Cohere embed-multilingual-light-v3.0 (384 dim)</SelectItem>
+                          {getEmbeddingModels().map((model) => {
+                            const [provider, modelName] = model.split('/');
+                            const displayName = modelName.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                            const dimensions = model.includes('v2') ? '768 dim' : 
+                                             model.includes('v3') ? '1024 dim' :
+                                             model.includes('v4') ? '1024 dim' :
+                                             model.includes('small') ? '1536 dim' :
+                                             model.includes('large') ? '3072 dim' :
+                                             model.includes('ada') ? '1536 dim' :
+                                             model.includes('light') ? '384 dim' :
+                                             model.includes('8b') ? '1024 dim' : '';
+                            
+                            return (
+                              <SelectItem key={model} value={model}>
+                                {provider.charAt(0).toUpperCase() + provider.slice(1)} {displayName} ({dimensions})
+                              </SelectItem>
+                            );
+                          })}
                         </SelectContent>
                       </Select>
                     </div>
@@ -758,7 +1368,7 @@ export default function SemanticSimilarityPage() {
                       <Select value={selectedLlmProvider || ""} onValueChange={(v) => { setSelectedLlmProvider(v); setSelectedLlmModel(""); }}>
                         <SelectTrigger className="h-11"><SelectValue placeholder="Provider seçin" /></SelectTrigger>
                         <SelectContent>
-                          {Object.keys(llmProviders).map((provider) => (
+                          {getLLMProviders().map((provider) => (
                             <SelectItem key={provider} value={provider}>{provider}</SelectItem>
                           ))}
                         </SelectContent>
@@ -769,7 +1379,7 @@ export default function SemanticSimilarityPage() {
                       <Select value={selectedLlmModel || ""} onValueChange={setSelectedLlmModel} disabled={!selectedLlmProvider}>
                         <SelectTrigger className="h-11"><SelectValue placeholder={selectedLlmProvider ? "Model seçin" : "Önce provider seçin"} /></SelectTrigger>
                         <SelectContent>
-                          {availableLlmModels.map((model) => (
+                          {getLLMModels(selectedLlmProvider).map((model) => (
                             <SelectItem key={model} value={model}>{model}</SelectItem>
                           ))}
                         </SelectContent>
@@ -790,7 +1400,11 @@ export default function SemanticSimilarityPage() {
                 </DialogContent>
               </Dialog>
 
-              <Select value={selectedCourseId?.toString() || ""} onValueChange={(v) => setSelectedCourseId(Number(v))}>
+              <Select value={selectedCourseId?.toString() || ""} onValueChange={(v) => {
+                const courseId = Number(v);
+                setSelectedCourseId(courseId);
+                localStorage.setItem('semantic_similarity_selected_course_id', courseId.toString());
+              }}>
                 <SelectTrigger className="w-56 bg-white/20 border-0 text-white hover:bg-white/30 backdrop-blur-sm h-10"><BookOpen className="w-4 h-4 mr-2" /><SelectValue placeholder="Ders seçin" /></SelectTrigger>
                 <SelectContent>{courses.map((course) => (<SelectItem key={course.id} value={course.id.toString()}>{course.name}</SelectItem>))}</SelectContent>
               </Select>
@@ -1008,14 +1622,14 @@ export default function SemanticSimilarityPage() {
                         )}
 
                         {/* ROUGE and BERTScore Metrics */}
-                        {(quickTestResult.rouge1 !== null || quickTestResult.rouge2 !== null || quickTestResult.rougel !== null || 
-                          quickTestResult.bertscore_f1 !== null) && (
+                        {(quickTestResult.rouge1 != null || quickTestResult.rouge2 != null || quickTestResult.rougel != null || 
+                          quickTestResult.bertscore_f1 != null) && (
                           <div>
                             <Label className="text-sm font-medium text-slate-700">
                               Ek Metrikler
                             </Label>
                             <div className="mt-2 grid grid-cols-2 gap-3">
-                              {quickTestResult.rouge1 !== null && (
+                              {quickTestResult.rouge1 != null && (
                                 <div className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl border border-purple-200 shadow-sm">
                                   <p className="text-xs text-purple-600 font-medium">ROUGE-1</p>
                                   <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.rouge1)}`}>
@@ -1023,7 +1637,7 @@ export default function SemanticSimilarityPage() {
                                   </p>
                                 </div>
                               )}
-                              {quickTestResult.rouge2 !== null && (
+                              {quickTestResult.rouge2 != null && (
                                 <div className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl border border-purple-200 shadow-sm">
                                   <p className="text-xs text-purple-600 font-medium">ROUGE-2</p>
                                   <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.rouge2)}`}>
@@ -1031,7 +1645,7 @@ export default function SemanticSimilarityPage() {
                                   </p>
                                 </div>
                               )}
-                              {quickTestResult.rougel !== null && (
+                              {quickTestResult.rougel != null && (
                                 <div className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl border border-purple-200 shadow-sm">
                                   <p className="text-xs text-purple-600 font-medium">ROUGE-L</p>
                                   <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.rougel)}`}>
@@ -1039,7 +1653,7 @@ export default function SemanticSimilarityPage() {
                                   </p>
                                 </div>
                               )}
-                              {quickTestResult.bertscore_f1 !== null && (
+                              {quickTestResult.bertscore_f1 != null && (
                                 <div className="p-4 bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-xl border border-indigo-200 shadow-sm">
                                   <p className="text-xs text-indigo-600 font-medium">BERTScore F1</p>
                                   <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.bertscore_f1)}`}>
@@ -1152,6 +1766,27 @@ export default function SemanticSimilarityPage() {
                       </p>
                     </div>
 
+                    <div>
+                      <Label className="text-sm font-medium text-slate-700">Tekrar Sayısı (1-10)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={repeatCount}
+                        onChange={(e) => {
+                          const value = parseInt(e.target.value);
+                          if (value >= 1 && value <= 10) {
+                            setRepeatCount(value);
+                            setTotalRuns(value);
+                          }
+                        }}
+                        className="mt-1.5 border-slate-200 focus:border-cyan-400 focus:ring-cyan-400"
+                      />
+                      <p className="text-xs text-slate-500 mt-2">
+                        Test kaç kez otomatik olarak tekrarlanacak. Her çalışma ayrı bir oturum olarak kaydedilecek.
+                      </p>
+                    </div>
+
                     <Button
                       onClick={handleBatchTest}
                       disabled={isBatchTesting || !batchTestJson}
@@ -1165,7 +1800,7 @@ export default function SemanticSimilarityPage() {
                       ) : (
                         <>
                           <FileJson className="w-4 h-4 mr-2" />
-                          Batch Test Başlat
+                          {totalRuns > 1 ? `${totalRuns} Kez Test Başlat` : "Batch Test Başlat"}
                         </>
                       )}
                     </Button>
@@ -1175,15 +1810,40 @@ export default function SemanticSimilarityPage() {
                   <div className="space-y-4">
                     {batchTestResult ? (
                       <>
+                        {totalRuns > 1 && (
+                          <div className="mb-4 p-3 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-200">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm font-semibold text-indigo-900">
+                                  {totalRuns} Kez Çalıştırma Tamamlandı
+                                </p>
+                                <p className="text-xs text-indigo-600 mt-1">
+                                  Her çalışma ayrı bir oturum olarak kaydedildi.
+                                  Toplam {batchTestResult.aggregate.test_count} test sonucu birleştirildi.
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs text-indigo-600">Run {currentRunNumber}/{totalRuns}</p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
                         <div>
                           <Label className="text-sm font-medium text-slate-700">
-                            Özet İstatistikler
+                            {totalRuns > 1 ? "Birleştirilmiş İstatistikler" : "Özet İstatistikler"}
                           </Label>
                           <div className="mt-2 grid grid-cols-3 gap-3">
                             <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
                               <p className="text-xs text-slate-500 font-medium">Test Sayısı</p>
                               <p className="text-2xl font-bold text-slate-900">
                                 {batchTestResult.aggregate.test_count}
+                              </p>
+                            </div>
+                            <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border border-amber-200 shadow-sm">
+                              <p className="text-xs text-amber-600 font-medium">Geçen Süre</p>
+                              <p className="text-2xl font-bold text-amber-700">
+                                {batchTestElapsedTime}
                               </p>
                             </div>
                             {batchTestResult.aggregate.avg_rouge1 != null && (
@@ -1271,7 +1931,10 @@ export default function SemanticSimilarityPage() {
                               </thead>
                               <tbody className="divide-y divide-slate-100">
                                 {batchTestResult.results.map((result, idx) => (
-                                  <tr key={idx} className="hover:bg-slate-50">
+                                  <tr
+                                    key={idx}
+                                    className="hover:bg-slate-50"
+                                  >
                                     <td className="px-3 py-2 text-slate-700 truncate max-w-[200px]">
                                       {result.question}
                                     </td>
@@ -1331,6 +1994,141 @@ export default function SemanticSimilarityPage() {
             )}
           </Card>
 
+          {/* Batch Test Sessions Card */}
+          <Card className="overflow-hidden border-0 shadow-lg bg-white">
+            <button
+              onClick={() => setIsBatchTestExpanded(!isBatchTestExpanded)}
+              className="w-full px-6 py-5 flex items-center justify-between hover:bg-slate-50 transition-all duration-200"
+            >
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-lg">
+                  <FileJson className="w-6 h-6 text-white" />
+                </div>
+                <div className="text-left">
+                  <h2 className="text-xl font-bold text-slate-900">Batch Test Oturumları</h2>
+                  <p className="text-sm text-slate-600">
+                    {batchTestSessions.length} kayıtlı oturum
+                  </p>
+                </div>
+              </div>
+              <div
+                className={`p-2 rounded-full bg-slate-100 transition-transform duration-200 ${
+                  isBatchTestExpanded ? "rotate-180" : ""
+                }`}
+              >
+                <ChevronDown className="w-5 h-5 text-slate-600" />
+              </div>
+            </button>
+
+            {isBatchTestExpanded && (
+              <div className="px-6 pb-6 pt-2 border-t border-slate-100">
+                {isSessionsLoading ? (
+                  <div className="text-center py-8 text-slate-400">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+                    <p className="text-sm">Oturumlar yükleniyor...</p>
+                  </div>
+                ) : batchTestSessions.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400">
+                    <FileJson className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                    <p className="font-medium">Henüz oturum yok</p>
+                    <p className="text-xs mt-1">Batch test başlattığınızda oturumlar burada görünecek</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {batchTestSessions.map((session) => (
+                      <div
+                        key={session.id}
+                        className="p-4 bg-slate-50 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${getSessionStatusColor(session.status)}`}>
+                                {getSessionStatusText(session.status)}
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {new Date(session.started_at).toLocaleString("tr-TR")}
+                              </span>
+                            </div>
+                            <p className="text-sm font-medium text-slate-900 truncate">
+                              {session.group_name}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
+                              <span className="text-slate-600">
+                                Toplam: {session.total_tests}
+                              </span>
+                              <span className="text-slate-600">
+                                Tamamlandı: {session.completed_tests}
+                              </span>
+                              {session.failed_tests > 0 && (
+                                <span className="text-red-600">
+                                  Başarısız: {session.failed_tests}
+                                </span>
+                              )}
+                              {session.llm_model && (
+                                <span className="text-purple-600">
+                                  LLM: {session.llm_model}
+                                </span>
+                              )}
+                            </div>
+                            {session.status === 'in_progress' && (
+                              <div className="mt-2">
+                                <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+                                  <span>İlerleme</span>
+                                  <span>{Math.round((session.completed_tests / session.total_tests) * 100)}%</span>
+                                </div>
+                                <div className="w-full bg-slate-200 rounded-full h-2">
+                                  <div
+                                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${(session.completed_tests / session.total_tests) * 100}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 ml-2">
+                            {(session.status === 'in_progress' || session.status === 'failed') && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleResumeSession(session.id)}
+                                disabled={isResumingSession}
+                                className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                              >
+                                {isResumingSession ? <Loader2 className="w-4 h-4 animate-spin" /> : <Target className="w-4 h-4" />}
+                              </Button>
+                            )}
+                            {session.status === 'in_progress' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleCancelSession(session.id)}
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {session.status !== 'in_progress' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteSession(session.id)}
+                                className="text-slate-500 hover:text-red-600 hover:bg-red-50"
+                                title="Oturumu Sil"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+
           {/* Saved Results Card */}
           <Card className="overflow-hidden border-0 shadow-lg bg-white">
             <button
@@ -1371,13 +2169,13 @@ export default function SemanticSimilarityPage() {
                       <SelectContent>
                         <SelectItem value="__all__">Tüm gruplar</SelectItem>
                         {savedResultsGroups
-                          .filter((g) => g && g.trim() !== "")
+                          .filter((g) => g.name && g.name.trim() !== "")
                           .map((g) => (
-                            <SelectItem key={g} value={g}>
-                              {g}
+                            <SelectItem key={g.name} value={g.name}>
+                              {g.name}
                             </SelectItem>
                           ))}
-                        {savedResultsGroups.some((g) => !g || g.trim() === "") && (
+                        {savedResultsGroups.some((g) => !g.name || g.name.trim() === "") && (
                           <SelectItem value="__no_group__">Grupsuz</SelectItem>
                         )}
                       </SelectContent>
@@ -1395,6 +2193,17 @@ export default function SemanticSimilarityPage() {
                           : `Genel İstatistikler (Tüm ${savedResultsAggregate.test_count} Test)`}
                       </h3>
                       <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            loadAllResultsForStatistics();
+                            setIsStatisticsModalOpen(true);
+                          }}
+                          className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
+                        >
+                          <Target className="w-3 h-3 mr-1" /> İstatistik Tablosu
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
@@ -1419,6 +2228,41 @@ export default function SemanticSimilarityPage() {
                               <FileText className="w-3 h-3 mr-1" /> PDF Rapor
                             </>
                           )}
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={exportSelectedGroupToWandb}
+                          disabled={
+                            isWandbExporting ||
+                            !selectedCourseId ||
+                            !selectedGroup ||
+                            selectedGroup === "__all__" ||
+                            selectedGroup === "__no_group__"
+                          }
+                          className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                        >
+                          {isWandbExporting ? (
+                            <>
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Aktarılıyor...
+                            </>
+                          ) : (
+                            <>W&B'ye Gönder</>
+                          )}
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setIsWandbRunsModalOpen(true);
+                            loadWandbRuns();
+                          }}
+                          disabled={!selectedCourseId}
+                          className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
+                        >
+                          <Settings className="w-3 h-3 mr-1" /> W&B Run’ları
                         </Button>
                       </div>
                     </div>
@@ -1577,17 +2421,22 @@ export default function SemanticSimilarityPage() {
                   />
                 </div>
                 {savedResultsGroups.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {savedResultsGroups.map((g) => (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => setSaveGroupName(g)}
-                        className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded"
-                      >
-                        {g}
-                      </button>
-                    ))}
+                  <div>
+                    <Label className="text-xs text-slate-500 mb-2">Mevcut Gruplar (Tıklayarak Seçin)</Label>
+                    <div className="max-h-32 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50">
+                      <div className="flex flex-wrap gap-1">
+                        {savedResultsGroups.map((g) => (
+                          <button
+                            key={g.name}
+                            type="button"
+                            onClick={() => setSaveGroupName(g.name)}
+                            className="px-2 py-1 text-xs bg-white hover:bg-teal-50 border border-slate-200 rounded transition-colors"
+                          >
+                            {g.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1684,8 +2533,100 @@ export default function SemanticSimilarityPage() {
                     </div>
                   )}
 
+                  {/* Yapılandırma Ayarları */}
+                  <div>
+                    <Label className="text-sm font-medium flex items-center gap-2">
+                      <Settings className="w-4 h-4 text-teal-600" />
+                      Yapılandırma Ayarları
+                    </Label>
+                    <div className="mt-2 space-y-3">
+                      {/* Embedding Model */}
+                      <div className="p-4 bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl border border-teal-200">
+                        <div className="flex items-start gap-3">
+                          <div className="p-2 bg-teal-100 rounded-lg">
+                            <Target className="w-5 h-5 text-teal-600" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-xs text-teal-600 font-medium mb-1">Embedding Model</p>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {viewingResult.embedding_model_used || "Belirtilmemiş"}
+                            </p>
+                            {viewingResult.embedding_model_used && (
+                              <p className="text-xs text-slate-500 mt-1">
+                                {viewingResult.embedding_model_used.includes("openai") ? "OpenAI" :
+                                 viewingResult.embedding_model_used.includes("alibaba") ? "Alibaba" :
+                                 viewingResult.embedding_model_used.includes("cohere") ? "Cohere" :
+                                 "Diğer"} sağlayıcısı kullanıldı
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* LLM Model */}
+                      {viewingResult.llm_model_used && (
+                        <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-200">
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 bg-purple-100 rounded-lg">
+                              <Sparkles className="w-5 h-5 text-purple-600" />
+                            </div>
+                            <div className="flex-1">
+                              <p className="text-xs text-purple-600 font-medium mb-1">LLM Model</p>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {viewingResult.llm_model_used}
+                              </p>
+                              {viewingResult.llm_model_used.includes("/") && (
+                                <p className="text-xs text-slate-500 mt-1">
+                                  {viewingResult.llm_model_used.split("/")[0]} sağlayıcısı
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Sistem Prompt */}
+                      {viewingResult.system_prompt_used && (
+                        <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border border-amber-200">
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 bg-amber-100 rounded-lg">
+                              <FileText className="w-5 h-5 text-amber-600" />
+                            </div>
+                            <div className="flex-1">
+                              <p className="text-xs text-amber-600 font-medium mb-1">Sistem Promptu</p>
+                              <p className="text-xs text-slate-700 line-clamp-3 font-mono bg-white/50 rounded p-2 mt-1">
+                                {viewingResult.system_prompt_used}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Gecikme (Latency) */}
+                      <div className="p-4 bg-gradient-to-br from-slate-50 to-gray-100 rounded-xl border border-slate-200">
+                        <div className="flex items-start gap-3">
+                          <div className="p-2 bg-slate-100 rounded-lg">
+                            <History className="w-5 h-5 text-slate-600" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-xs text-slate-600 font-medium mb-1">İşlem Süresi</p>
+                            <p className="text-sm font-bold text-slate-900">
+                              {viewingResult.latency_ms}ms
+                            </p>
+                            <p className="text-xs text-slate-500 mt-1">
+                              {viewingResult.latency_ms < 500 ? "Çok hızlı" :
+                               viewingResult.latency_ms < 1000 ? "Hızlı" :
+                               viewingResult.latency_ms < 2000 ? "Normal" :
+                               "Yavaş"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* ROUGE ve BERTScore Metrikleri */}
-                  {(viewingResult.rouge1 != null || viewingResult.rouge2 != null || 
+                  {(viewingResult.rouge1 != null || viewingResult.rouge2 != null ||
                     viewingResult.rougel != null || viewingResult.bertscore_f1 != null) && (
                     <div>
                       <Label className="text-sm font-medium">Metrikler</Label>
@@ -1765,40 +2706,6 @@ export default function SemanticSimilarityPage() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
-                      <p className="text-xs text-slate-600">Gecikme</p>
-                      <p className="text-xl font-bold text-slate-900">
-                        {viewingResult.latency_ms}ms
-                      </p>
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
-                      <p className="text-xs text-slate-600">Embedding Model</p>
-                      <p className="text-sm font-medium text-slate-900 truncate">
-                        {viewingResult.embedding_model_used}
-                      </p>
-                    </div>
-                    {viewingResult.llm_model_used && (
-                      <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 col-span-2">
-                        <p className="text-xs text-slate-600">LLM Model</p>
-                        <p className="text-sm font-medium text-slate-900">
-                          {viewingResult.llm_model_used}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {viewingResult.system_prompt_used && (
-                    <div>
-                      <Label className="text-sm font-medium text-amber-700">⚠️ Kullanılan Sistem Promptu</Label>
-                      <div className="mt-2 p-4 bg-amber-50 rounded-lg border border-amber-200">
-                        <pre className="text-xs text-slate-700 whitespace-pre-wrap font-mono">
-                          {viewingResult.system_prompt_used}
-                        </pre>
-                      </div>
-                    </div>
-                  )}
-
                   {viewingResult.retrieved_contexts && viewingResult.retrieved_contexts.length > 0 && (
                     <div>
                       <Label className="text-sm font-medium">Alınan Bağlamlar ({viewingResult.retrieved_contexts.length})</Label>
@@ -1818,6 +2725,569 @@ export default function SemanticSimilarityPage() {
               )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => setViewingResult(null)}>
+                  Kapat
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* W&B Runs Management Modal */}
+          <Dialog open={isWandbRunsModalOpen} onOpenChange={setIsWandbRunsModalOpen}>
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-600" />
+                  W&B Run’ları Yönet
+                </DialogTitle>
+                <DialogDescription>
+                  Eksik llm_model_used/embedding_model_used alanlarını DB’den güncelle.
+                </DialogDescription>
+              </DialogHeader>
+
+              {isLoadingWandbRuns ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                  <span>W&B run’ları yükleniyor...</span>
+                </div>
+              ) : wandbRuns.length === 0 ? (
+                <div className="text-center py-12 text-slate-500">
+                  <p className="text-sm">W&B run’ı bulunamadı.</p>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <div className="space-y-3">
+                    {wandbRuns.map((run) => (
+                      <div
+                        key={run.id}
+                        className="border border-slate-200 rounded-lg p-4 hover:bg-slate-50 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-slate-900 truncate">{run.name}</p>
+                            <p className="text-xs text-slate-500 mt-1">
+                              ID: {run.id} | Durum: {run.state} |{" "}
+                              {run.created_at
+                                ? new Date(run.created_at).toLocaleString("tr-TR")
+                                : "Tarih bilinmiyor"}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-1">
+                              Grup: {(run.config.group_name as string) || "Bilinmiyor"}
+                            </p>
+                            {run.missing_fields.length > 0 && (
+                              <div className="mt-2">
+                                <span className="text-xs font-medium text-amber-600">Eksik alanlar:</span>{" "}
+                                <span className="text-xs text-amber-700">
+                                  {run.missing_fields.join(", ")}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            {run.missing_fields.length > 0 ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => updateSelectedWandbRun(run)}
+                                disabled={updatingRunIds.has(run.id)}
+                                className="h-8 text-xs"
+                              >
+                                {updatingRunIds.has(run.id) ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                                    Güncelleniyor...
+                                  </>
+                                ) : (
+                                  <>
+                                    <RefreshCw className="w-3 h-3 mr-1" />
+                                    Güncelle
+                                  </>
+                                )}
+                              </Button>
+                            ) : (
+                              <div className="flex items-center justify-center h-8 px-3 text-xs text-green-700 bg-green-100 rounded border border-green-300">
+                                Güncel
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          {/* Statistics Modal */}
+          <Dialog open={isStatisticsModalOpen} onOpenChange={setIsStatisticsModalOpen}>
+            <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Target className="w-5 h-5 text-teal-600" />
+                  İstatistik Sonuçları
+                </DialogTitle>
+                <DialogDescription>
+                  {selectedGroup && selectedGroup !== "__all__"
+                    ? `"${selectedGroup === "__no_group__" ? "Grupsuz" : selectedGroup}" grubunun detaylı istatistikleri`
+                    : "Tüm sonuçların detaylı istatistikleri"}
+                </DialogDescription>
+              </DialogHeader>
+              
+              {savedResultsAggregate && (
+                <div className="space-y-6 py-4">
+                  {/* Özet İstatistikler Tablosu */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 mb-3">Özet İstatistikler</h3>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-medium text-slate-700">Metrik</th>
+                            <th className="px-4 py-3 text-center font-medium text-slate-700">Değer</th>
+                            <th className="px-4 py-3 text-left font-medium text-slate-700">Açıklama</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          <tr className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-medium text-slate-900">Test Sayısı</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className="px-3 py-1 bg-teal-100 text-teal-700 rounded-full font-bold">
+                                {savedResultsAggregate.test_count}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">Toplam test sayısı</td>
+                          </tr>
+                          {savedResultsAggregate.avg_rouge1 != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama ROUGE-1</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_rouge1)}`}>
+                                  {(savedResultsAggregate.avg_rouge1 * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">1-gram örtüşme oranı</td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_rouge2 != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama ROUGE-2</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_rouge2)}`}>
+                                  {(savedResultsAggregate.avg_rouge2 * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">2-gram örtüşme oranı</td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_rougel != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama ROUGE-L</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_rougel)}`}>
+                                  {(savedResultsAggregate.avg_rougel * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">En uzun ortak alt dizi oranı</td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_bertscore_precision != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore Precision</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_bertscore_precision)}`}>
+                                  {(savedResultsAggregate.avg_bertscore_precision * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">BERT hassasiyet skoru</td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_bertscore_recall != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore Recall</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_bertscore_recall)}`}>
+                                  {(savedResultsAggregate.avg_bertscore_recall * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">BERT geri çağırma skoru</td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_bertscore_f1 != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore F1</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_bertscore_f1)}`}>
+                                  {(savedResultsAggregate.avg_bertscore_f1 * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">BERT F1 skoru</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Yapılandırma Ayarları */}
+                  {statisticsModalResults.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 mb-3">Yapılandırma Ayarları</h3>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-slate-100">
+                          {/* Embedding Model */}
+                          {statisticsModalResults[0]?.embedding_model_used && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 bg-gradient-to-r from-teal-50 to-cyan-50">
+                                <div className="flex items-center gap-2">
+                                  <Target className="w-4 h-4 text-teal-600" />
+                                  <span className="text-xs text-teal-600 font-medium">Embedding Model</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {statisticsModalResults[0].embedding_model_used}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  {statisticsModalResults[0].embedding_model_used.includes("openai") ? "OpenAI" :
+                                   statisticsModalResults[0].embedding_model_used.includes("alibaba") ? "Alibaba" :
+                                   statisticsModalResults[0].embedding_model_used.includes("cohere") ? "Cohere" :
+                                   "Diğer"} sağlayıcısı kullanıldı
+                                </p>
+                              </td>
+                            </tr>
+                          )}
+                          {/* LLM Model */}
+                          {statisticsModalResults[0]?.llm_model_used && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 bg-gradient-to-r from-purple-50 to-pink-50">
+                                <div className="flex items-center gap-2">
+                                  <Sparkles className="w-4 h-4 text-purple-600" />
+                                  <span className="text-xs text-purple-600 font-medium">LLM Model</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {statisticsModalResults[0].llm_model_used}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  {statisticsModalResults[0].llm_model_used.includes("/") && (
+                                    <span>{statisticsModalResults[0].llm_model_used.split("/")[0]} sağlayıcısı</span>
+                                  )}
+                                </p>
+                              </td>
+                            </tr>
+                          )}
+                          {/* Ortalama Gecikme */}
+                          <tr className="hover:bg-slate-50">
+                            <td className="px-4 py-3 bg-gradient-to-r from-slate-50 to-gray-100">
+                              <div className="flex items-center gap-2">
+                                <History className="w-4 h-4 text-slate-600" />
+                                <span className="text-xs text-slate-600 font-medium">Ortalama Gecikme</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                                <p className="text-sm font-bold text-slate-900">
+                                  {(savedResults.reduce((sum, r) => sum + r.latency_ms, 0) / savedResults.length).toFixed(0)}ms
+                                </p>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  {savedResults.reduce((sum, r) => sum + r.latency_ms, 0) / savedResults.length < 500 ? "Çok hızlı" :
+                                   savedResults.reduce((sum, r) => sum + r.latency_ms, 0) / savedResults.length < 1000 ? "Hızlı" :
+                                   savedResults.reduce((sum, r) => sum + r.latency_ms, 0) / savedResults.length < 2000 ? "Normal" :
+                                   "Yavaş"}
+                                </p>
+                            </td>
+                          </tr>
+                          {/* Test Sayısı */}
+                          <tr className="hover:bg-slate-50">
+                            <td className="px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50">
+                              <div className="flex items-center gap-2">
+                                <Target className="w-4 h-4 text-blue-600" />
+                                <span className="text-xs text-blue-600 font-medium">Test Sayısı</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <p className="text-sm font-bold text-slate-900">
+                                {savedResultsAggregate?.test_count || savedResults.length}
+                              </p>
+                              <p className="text-xs text-slate-500 mt-1">
+                                Toplam test sayısı
+                              </p>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                  {/* Detaylı Sonuçlar Tablosu */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-slate-900">Detaylı Sonuçlar</h3>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={copyTableToExcel}
+                        className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
+                        disabled={isLoadingStatisticsResults || statisticsModalResults.length === 0}
+                      >
+                        <Download className="w-3 h-3 mr-1" /> Kopyala (Excel)
+                      </Button>
+                    </div>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      {isLoadingStatisticsResults ? (
+                        <div className="p-8 text-center text-slate-500">
+                          <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+                          <p className="text-sm">Sonuçlar yükleniyor...</p>
+                        </div>
+                      ) : statisticsModalResults.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500">
+                          <p className="text-sm">Kayıtlı sonuç bulunamadı</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="max-h-[400px] overflow-y-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-50 sticky top-0">
+                                <tr>
+                                  <th className="px-3 py-2 text-left font-medium text-slate-700">#</th>
+                                  <th className="px-3 py-2 text-left font-medium text-slate-700">Soru</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-1</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-2</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-L</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERT P</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERT R</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERT F1</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">Gecikme</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {statisticsModalResults.map((result, idx) => (
+                              <tr
+                                key={result.id}
+                                className="hover:bg-slate-50 cursor-pointer transition-colors"
+                                onClick={() => {
+                                  setViewingResult(result);
+                                  setIsStatisticsModalOpen(false);
+                                }}
+                              >
+                                <td className="px-3 py-2 text-slate-600 font-medium">{idx + 1}</td>
+                                <td className="px-3 py-2 text-slate-900 truncate max-w-[200px]" title={result.question}>
+                                  <div className="flex items-center gap-2">
+                                    <Eye className="w-3 h-3 text-teal-600 flex-shrink-0" />
+                                    <span>{result.question}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.rouge1 != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.rouge1)}`}>
+                                      {(result.rouge1 * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.rouge2 != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.rouge2)}`}>
+                                      {(result.rouge2 * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.rougel != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.rougel)}`}>
+                                      {(result.rougel * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.bertscore_precision != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.bertscore_precision)}`}>
+                                      {(result.bertscore_precision * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.bertscore_recall != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.bertscore_recall)}`}>
+                                      {(result.bertscore_recall * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.bertscore_f1 != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.bertscore_f1)}`}>
+                                      {(result.bertscore_f1 * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center text-slate-600">
+                                  {result.latency_ms}ms
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Performans Analizi Tablosu */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 mb-3">Performans Analizi</h3>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-medium text-slate-700">Metrik</th>
+                            <th className="px-4 py-3 text-center font-medium text-slate-700">En İyi</th>
+                            <th className="px-4 py-3 text-center font-medium text-slate-700">En Kötü</th>
+                            <th className="px-4 py-3 text-center font-medium text-slate-700">Ortalama</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {savedResultsAggregate.avg_rouge1 != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-purple-700">ROUGE-1</td>
+                              <td className="px-4 py-3 text-center text-emerald-600 font-bold">
+                                {(Math.max(...savedResults.filter(r => r.rouge1 != null).map(r => r.rouge1!)) * 100).toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center text-red-600 font-bold">
+                                {(Math.min(...savedResults.filter(r => r.rouge1 != null).map(r => r.rouge1!)) * 100).toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center font-bold">
+                                {(savedResultsAggregate.avg_rouge1 * 100).toFixed(1)}%
+                              </td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_bertscore_f1 != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-blue-700">BERTScore F1</td>
+                              <td className="px-4 py-3 text-center text-emerald-600 font-bold">
+                                {(Math.max(...savedResults.filter(r => r.bertscore_f1 != null).map(r => r.bertscore_f1!)) * 100).toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center text-red-600 font-bold">
+                                {(Math.min(...savedResults.filter(r => r.bertscore_f1 != null).map(r => r.bertscore_f1!)) * 100).toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center font-bold">
+                                {(savedResultsAggregate.avg_bertscore_f1 * 100).toFixed(1)}%
+                              </td>
+                            </tr>
+                          )}
+                          <tr className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-medium text-slate-700">Gecikme</td>
+                            <td className="px-4 py-3 text-center text-emerald-600 font-bold">
+                              {Math.min(...savedResults.map(r => r.latency_ms))}ms
+                            </td>
+                            <td className="px-4 py-3 text-center text-red-600 font-bold">
+                              {Math.max(...savedResults.map(r => r.latency_ms))}ms
+                            </td>
+                            <td className="px-4 py-3 text-center font-bold">
+                              {(savedResults.reduce((sum, r) => sum + r.latency_ms, 0) / savedResults.length).toFixed(0)}ms
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Ground Truth ve Üretilen Cevaplar Tablosu */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-slate-900">Ground Truth ve Üretilen Cevaplar</h3>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const headers = ["#", "Soru", "Ground Truth", "Üretilen Cevap"];
+                          const rows = statisticsModalResults.map((r, idx) => [
+                            idx + 1,
+                            `"${r.question.replace(/"/g, '""')}"`,
+                            `"${r.ground_truth.replace(/"/g, '""')}"`,
+                            `"${r.generated_answer.replace(/"/g, '""')}"`
+                          ]);
+                          const csv = [headers.join("\t"), ...rows.map(row => row.join("\t"))].join("\n");
+                          navigator.clipboard.writeText(csv).then(() => {
+                            toast.success("Tablo kopyalandı! Excel'e yapıştırabilirsiniz.");
+                          }).catch(() => {
+                            toast.error("Kopyalama başarısız");
+                          });
+                        }}
+                        className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
+                        disabled={isLoadingStatisticsResults || statisticsModalResults.length === 0}
+                      >
+                        <Download className="w-3 h-3 mr-1" /> Kopyala (Excel)
+                      </Button>
+                    </div>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      {isLoadingStatisticsResults ? (
+                        <div className="p-8 text-center text-slate-500">
+                          <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+                          <p className="text-sm">Sonuçlar yükleniyor...</p>
+                        </div>
+                      ) : statisticsModalResults.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500">
+                          <p className="text-sm">Kayıtlı sonuç bulunamadı</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="max-h-[500px] overflow-y-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-50 sticky top-0">
+                                <tr>
+                                  <th className="px-3 py-2 text-left font-medium text-slate-700 w-12">#</th>
+                                  <th className="px-3 py-2 text-left font-medium text-slate-700 w-48">Soru</th>
+                                  <th className="px-3 py-2 text-left font-medium text-slate-700 w-64">Ground Truth</th>
+                                  <th className="px-3 py-2 text-left font-medium text-slate-700 w-64">Üretilen Cevap</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {statisticsModalResults.map((result, idx) => (
+                                  <tr key={result.id} className="hover:bg-slate-50">
+                                    <td className="px-3 py-2 text-slate-600 font-medium">{idx + 1}</td>
+                                    <td className="px-3 py-2 text-slate-900">
+                                      <div className="max-h-20 overflow-y-auto whitespace-pre-wrap">
+                                        {result.question}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700">
+                                      <div className="max-h-32 overflow-y-auto whitespace-pre-wrap bg-purple-50 p-2 rounded border border-purple-100">
+                                        {result.ground_truth}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700">
+                                      <div className="max-h-32 overflow-y-auto whitespace-pre-wrap bg-blue-50 p-2 rounded border border-blue-100">
+                                        {result.generated_answer}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsStatisticsModalOpen(false)}>
                   Kapat
                 </Button>
               </DialogFooter>

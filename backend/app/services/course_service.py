@@ -85,10 +85,10 @@ def create_course(
     db: Session, course_data: CourseCreate, teacher: User
 ) -> Course:
     """Create a new course."""
-    if teacher.role != UserRole.TEACHER:
+    if teacher.role not in (UserRole.TEACHER, UserRole.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can create courses",
+            detail="Only teachers and admins can create courses",
         )
 
     db_course = Course(

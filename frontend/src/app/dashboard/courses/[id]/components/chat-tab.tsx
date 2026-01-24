@@ -44,6 +44,21 @@ export function ChatTab({ courseId }: ChatTabProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
+  const dedupeMessagesByIdKeepLast = (items: Message[]) => {
+    const seen = new Set<number>();
+    const result: Message[] = [];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const msg = items[i];
+      if (msg.id != null) {
+        if (seen.has(msg.id)) continue;
+        seen.add(msg.id);
+      }
+      result.push(msg);
+    }
+    result.reverse();
+    return result;
+  };
+
   // Load chat history from server (DB)
   useEffect(() => {
     let cancelled = false;
@@ -62,9 +77,14 @@ export function ChatTab({ courseId }: ChatTabProps) {
           responseTime: m.response_time_ms ?? undefined,
         }));
 
-        setMessages(serverMessages);
+        const uniqueServerMessages = dedupeMessagesByIdKeepLast(serverMessages);
+        setMessages(uniqueServerMessages);
         setHasMoreMessages(response.has_more);
-        setOldestMessageId(serverMessages.length > 0 ? serverMessages[0].id ?? null : null);
+        setOldestMessageId(
+          uniqueServerMessages.length > 0
+            ? uniqueServerMessages[0].id ?? null
+            : null
+        );
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Sohbet geçmişi yüklenemedi");
       }
@@ -179,7 +199,10 @@ export function ChatTab({ courseId }: ChatTabProps) {
         responseTime: m.response_time_ms ?? undefined,
       }));
 
-      setMessages((prev) => [...olderMessages, ...prev]);
+      setMessages((prev) => {
+        const merged = [...olderMessages, ...prev];
+        return dedupeMessagesByIdKeepLast(merged);
+      });
       setHasMoreMessages(response.has_more);
       setOldestMessageId(olderMessages.length > 0 ? olderMessages[0].id ?? null : oldestMessageId);
 
@@ -273,7 +296,11 @@ export function ChatTab({ courseId }: ChatTabProps) {
             const globalIdx = idx;
             return (
               <div
-                key={message.id ?? globalIdx}
+                key={
+                  message.id != null
+                    ? `msg-${message.id}`
+                    : `tmp-${message.timestamp ?? globalIdx}-${message.role}`
+                }
                 className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {message.role === "assistant" && (

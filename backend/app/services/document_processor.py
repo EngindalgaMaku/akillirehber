@@ -316,7 +316,7 @@ class DocumentProcessor:
             )
         
         # Check file size limits (10MB default)
-        max_size = 10 * 1024 * 1024  # 10MB
+        max_size = 100 * 1024 * 1024  # 10MB
         if len(content) > max_size:
             raise DocumentProcessingError(
                 f"PDF file too large: {len(content)} bytes (max: {max_size})",

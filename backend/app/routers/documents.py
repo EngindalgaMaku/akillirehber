@@ -2,12 +2,12 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.db_models import User
+from app.models.db_models import User, UserRole
 from app.models.schemas import (
     DocumentResponse,
     DocumentListResponse,
@@ -27,15 +27,19 @@ from app.services.document_service import (
     get_document_chunks,
     get_document_with_chunk_count,
     get_documents_by_course,
+    get_documents_by_user,
     save_chunks_to_db,
     upload_document,
+    upload_user_document,
     process_document_chunking,
     retry_document_processing,
     get_document_processing_status,
     delete_document_chunks as del_chunks,
 )
+from app.services.weaviate_service import get_weaviate_service
 from app.services.chunker import ChunkerService
 from app.services.diagnostic_service import DiagnosticService
+from app.services.embedding_provider import EmbeddingProviderError
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -43,6 +47,34 @@ chunker_service = ChunkerService()
 
 DOC_NOT_FOUND = "Document not found"
 OVERLAP_ERROR = "Overlap must be less than chunk_size"
+
+
+def _verify_document_access(db: Session, document, current_user: User) -> None:
+    if document.course_id is not None:
+        verify_course_access(db, document.course_id, current_user)
+        return
+
+    if current_user.role == UserRole.ADMIN or document.user_id == current_user.id:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You don't have access to this document",
+    )
+
+
+def _verify_document_ownership(db: Session, document, current_user: User) -> None:
+    if document.course_id is not None:
+        verify_course_ownership(db, document.course_id, current_user)
+        return
+
+    if current_user.role == UserRole.ADMIN or document.user_id == current_user.id:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You can only access your own documents",
+    )
 
 
 class ChunkingConfigUpdate(BaseModel):
@@ -132,8 +164,7 @@ async def get_document(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify user has access to the course
-    verify_course_access(db, document.course_id, current_user)
+    _verify_document_access(db, document, current_user)
 
     return DocumentResponse(**get_document_with_chunk_count(db, document))
 
@@ -171,8 +202,7 @@ async def list_document_chunks(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify user has access to the course
-    verify_course_access(db, document.course_id, current_user)
+    _verify_document_access(db, document, current_user)
 
     chunks = get_document_chunks(db, document_id)
     chunk_responses = [ChunkDBResponse.model_validate(chunk) for chunk in chunks]
@@ -200,8 +230,7 @@ async def delete_document_chunks(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify teacher owns the course
-    verify_course_ownership(db, document.course_id, current_user)
+    _verify_document_ownership(db, document, current_user)
 
     # Delete all chunks
     del_chunks(db, document_id)
@@ -233,8 +262,7 @@ async def process_document(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify teacher owns the course
-    verify_course_ownership(db, document.course_id, current_user)
+    _verify_document_ownership(db, document, current_user)
 
     if not document.content:
         raise HTTPException(
@@ -249,17 +277,29 @@ async def process_document(
             detail=OVERLAP_ERROR,
         )
 
-    # Chunk the document
-    chunks = chunker_service.chunk_text(
-        document.content,
-        request.strategy,
-        chunk_size=request.chunk_size,
-        overlap=request.overlap,
-        similarity_threshold=request.similarity_threshold,
-        embedding_model=request.embedding_model,
-        min_chunk_size=request.min_chunk_size,
-        max_chunk_size=request.max_chunk_size,
-    )
+    try:
+        chunks = chunker_service.chunk_text(
+            document.content,
+            request.strategy,
+            chunk_size=request.chunk_size,
+            overlap=request.overlap,
+            similarity_threshold=request.similarity_threshold,
+            embedding_model=request.embedding_model,
+            min_chunk_size=request.min_chunk_size,
+            max_chunk_size=request.max_chunk_size,
+        )
+    except EmbeddingProviderError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+    except ValueError as e:
+        if "No embedding data received" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e),
+            )
+        raise
 
     # Convert to dict format for saving
     chunks_data = [
@@ -309,8 +349,7 @@ async def get_document_status(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify user has access to the course
-    verify_course_access(db, document.course_id, current_user)
+    _verify_document_access(db, document, current_user)
 
     status_response = get_document_processing_status(db, document_id)
     if not status_response:
@@ -346,8 +385,7 @@ async def retry_document_process(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify teacher owns the course
-    verify_course_ownership(db, document.course_id, current_user)
+    _verify_document_ownership(db, document, current_user)
 
     # Validate parameters
     if request.overlap >= request.chunk_size:
@@ -382,8 +420,7 @@ async def get_document_diagnostics(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify user has access to the course
-    verify_course_access(db, document.course_id, current_user)
+    _verify_document_access(db, document, current_user)
 
     # Get diagnostic information from diagnostic service
     diagnostic_service = DiagnosticService(db)
@@ -422,8 +459,7 @@ async def chunk_document_with_status(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify teacher owns the course
-    verify_course_ownership(db, document.course_id, current_user)
+    _verify_document_ownership(db, document, current_user)
 
     if not document.content:
         raise HTTPException(
@@ -475,8 +511,7 @@ async def update_chunking_config(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify teacher owns the course
-    verify_course_ownership(db, document.course_id, current_user)
+    _verify_document_ownership(db, document, current_user)
 
     # Validate configuration
     if config.overlap and config.chunk_size and config.overlap >= config.chunk_size:
@@ -530,8 +565,7 @@ async def get_chunk_quality_metrics(
             detail=DOC_NOT_FOUND,
         )
 
-    # Verify user has access to the course
-    verify_course_access(db, document.course_id, current_user)
+    _verify_document_access(db, document, current_user)
 
     # Get chunk quality metrics from diagnostic service
     diagnostic_service = DiagnosticService(db)
@@ -586,7 +620,7 @@ async def validate_processing_pipeline(
     db: Session = Depends(get_db),
 ):
     """
-    Validate the entire processing pipeline health.
+    Validate entire processing pipeline health.
 
     Only teachers can run pipeline validation.
     """
@@ -595,3 +629,63 @@ async def validate_processing_pipeline(
     
     validation_results = diagnostic_service.validate_processing_pipeline()
     return validation_results
+
+
+@router.get("/users/documents", response_model=DocumentListResponse)
+async def list_user_documents(
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    List all documents for the current user (across all courses).
+
+    Only teachers can view their own documents.
+    """
+    documents = get_documents_by_user(db, current_user.id)
+    
+    doc_responses = [
+        DocumentResponse(**get_document_with_chunk_count(db, doc))
+        for doc in documents
+    ]
+    
+    return DocumentListResponse(documents=doc_responses, total=len(doc_responses))
+
+
+@router.post("/users/documents", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+async def upload_user_document_endpoint(
+    file: UploadFile = File(...),
+    course_id: Optional[int] = Form(None),
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload a document for the user (not tied to a specific course).
+
+    Only teachers can upload documents.
+    
+    Supported formats: PDF, Markdown (.md), Word (.docx), Text (.txt)
+    """
+    document = await upload_user_document(db, file, current_user, course_id)
+    return DocumentResponse(**get_document_with_chunk_count(db, document))
+
+
+@router.delete("/courses/{course_id}/weaviate-collection", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_course_weaviate_collection(
+    course_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Reset Weaviate collection for a course.
+    
+    This will delete all vectors from Weaviate for this course.
+    Use this when changing embedding models to avoid vector dimension mismatches.
+    
+    Only teachers can reset collections for their own courses.
+    """
+    verify_course_ownership(db, course_id, current_user)
+    
+    weaviate_service = get_weaviate_service()
+    deleted_count = weaviate_service.delete_course_collection(course_id)
+    
+    return None

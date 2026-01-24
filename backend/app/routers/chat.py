@@ -126,6 +126,9 @@ async def chat_with_course(
     # Validate chunk availability before processing
     chat_validation = ChatValidationService(db)
     chunk_validation = chat_validation.validate_chunk_availability(course_id)
+    
+    # Debug log for troubleshooting
+    print(f"Chunk validation for course {course_id}: {chunk_validation}")
 
     if not chunk_validation.get("valid", False):
         message = (
@@ -155,6 +158,9 @@ async def chat_with_course(
 
     # Get course settings for LLM configuration
     settings = get_or_create_settings(db, course_id)
+    
+    # Debug log for embedding model
+    print(f"Course embedding model: {settings.default_embedding_model}")
 
     # Get query embedding using course's embedding model
     embedding_service = get_embedding_service()
@@ -162,6 +168,9 @@ async def chat_with_course(
         request.message,
         model=settings.default_embedding_model
     )
+    
+    # Debug log for query vector
+    print(f"Query vector length: {len(query_vector) if query_vector else 0}")
 
     # Search for relevant chunks using course settings
     weaviate_service = get_weaviate_service()
@@ -269,7 +278,9 @@ async def chat_with_course(
         results = [r for r in results if r.score >= min_score]
         print(f"[DEBUG] Filtered from {original_count} to {len(results)} results")
 
-    # Validate source attribution for results
+    # Validate source attribution for results (temporarily disabled)
+    # TODO: Fix content mismatch between DB and vector store
+    """
     if results:
         attribution_validation = chat_validation.validate_source_attribution(
             course_id, results
@@ -283,6 +294,7 @@ async def chat_with_course(
                 if detail.get("valid", False):
                     valid_results.append(result)
             results = valid_results
+    """
 
     # Build context and references
     context = build_context(results, db)

@@ -29,6 +29,39 @@ class ChatValidationService:
         Returns:
             Dictionary with validation results
         """
+        # Debug: Check Weaviate collection directly
+        collection_name = self.weaviate_service._get_collection_name(course_id)
+        client = self.weaviate_service._get_client()
+        
+        print(f"=== Weaviate Debug for Course {course_id} ===")
+        print(f"Collection name: {collection_name}")
+        
+        if client.collections.exists(collection_name):
+            print("Collection exists: YES")
+            
+            # Get total count in collection
+            collection = client.collections.get(collection_name)
+            total_count = collection.aggregate.over_all(total_count=True)
+            print(f"Total vectors in collection: {total_count.total_count}")
+            
+            # Try to get a sample vector
+            try:
+                sample = collection.query.fetch_objects(limit=1)
+                if sample.objects:
+                    obj = sample.objects[0]
+                    print(f"Sample vector found - ID: {obj.uuid}")
+                    print(f"Sample vector properties: {list(obj.properties.keys())}")
+                    if 'document_id' in obj.properties:
+                        print(f"Sample document_id: {obj.properties['document_id']}")
+                else:
+                    print("No objects found in collection")
+            except Exception as e:
+                print(f"Error fetching sample: {e}")
+        else:
+            print("Collection exists: NO")
+        
+        print("=== End Weaviate Debug ===")
+        
         # Check if course exists
         course = self.db.query(Course).filter(Course.id == course_id).first()
         if not course:
@@ -446,6 +479,13 @@ class ChatValidationService:
         vector_count = self.weaviate_service.get_document_vector_count(
             document.course_id, document.id
         )
+        
+        # Debug log for troubleshooting
+        print(f"Document {document.id} validation:")
+        print(f"  - Course ID: {document.course_id}")
+        print(f"  - Chunks in DB: {len(chunks)}")
+        print(f"  - Vectors in Weaviate: {vector_count}")
+        print(f"  - Collection exists: {self.weaviate_service._get_client().collections.exists(self.weaviate_service._get_collection_name(document.course_id))}")
 
         return {
             "document_id": document.id,

@@ -86,6 +86,10 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
+# Allow Next.js frontend source 'lib' folder (otherwise blocked by the generic 'lib/' ignore rule)
+!frontend/src/lib/
+!frontend/src/lib/**
+
 # Next.js
 .next/
 out/

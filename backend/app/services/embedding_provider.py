@@ -107,6 +107,7 @@ class OpenRouterProvider(EmbeddingProvider):
         "openai/text-embedding-3-small": 0.02,
         "openai/text-embedding-3-large": 0.13,
         "openai/text-embedding-ada-002": 0.10,
+        "qwen/qwen3-embedding-8b": 0.03,
     }
     
     def __init__(self, api_key: Optional[str] = None):
@@ -159,6 +160,12 @@ class OpenRouterProvider(EmbeddingProvider):
                 model=model,
                 input=non_empty_texts
             )
+            if not getattr(response, "data", None):
+                raise EmbeddingProviderError(
+                    "No embedding data received",
+                    provider=self.name,
+                    details={"model": model, "text_count": len(non_empty_texts)},
+                )
             return [item.embedding for item in response.data]
         except Exception as e:
             raise EmbeddingProviderError(
@@ -234,6 +241,8 @@ class OpenAIProvider(EmbeddingProvider):
         self._ensure_client()
         
         model = model or self.DEFAULT_MODEL
+        if model and "/" in model:
+            model = model.split("/", 1)[1]
         
         # Filter empty texts
         non_empty_texts = [t for t in texts if t and t.strip()]
@@ -245,6 +254,12 @@ class OpenAIProvider(EmbeddingProvider):
                 model=model,
                 input=non_empty_texts
             )
+            if not getattr(response, "data", None):
+                raise EmbeddingProviderError(
+                    "No embedding data received",
+                    provider=self.name,
+                    details={"model": model, "text_count": len(non_empty_texts)},
+                )
             return [item.embedding for item in response.data]
         except Exception as e:
             raise EmbeddingProviderError(
@@ -369,8 +384,9 @@ class EmbeddingProviderManager:
                 continue
             
             try:
+                normalized_model = self._normalize_model_for_provider(provider, model)
                 embeddings = self._get_embeddings_with_retry(
-                    provider, non_empty_texts, model
+                    provider, non_empty_texts, normalized_model
                 )
                 
                 # Mark provider as healthy
@@ -397,6 +413,24 @@ class EmbeddingProviderManager:
             provider="manager",
             details={"providers_tried": [p.name for p in self._providers]}
         )
+
+    def _normalize_model_for_provider(
+        self, provider: EmbeddingProvider, model: Optional[str]
+    ) -> Optional[str]:
+        if not model:
+            return model
+
+        if isinstance(provider, OpenAIProvider):
+            if "/" in model:
+                return model.split("/", 1)[1]
+            return model
+
+        if isinstance(provider, OpenRouterProvider):
+            if "/" not in model:
+                return f"openai/{model}"
+            return model
+
+        return model
     
     def _get_embeddings_with_retry(
         self,

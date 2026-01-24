@@ -19,6 +19,7 @@ from app.routers import (
     document,
     documents,
     embeddings,
+    giskard,
     llm_models,
     ragas,
     semantic_similarity,
@@ -71,6 +72,7 @@ app.include_router(embeddings.router)
 app.include_router(chat.router)
 app.include_router(ragas.router)
 app.include_router(semantic_similarity.router)
+app.include_router(giskard.router)
 app.include_router(system.router)
 app.include_router(system_settings.router)
 app.include_router(llm_models.router)

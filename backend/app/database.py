@@ -34,6 +34,6 @@ def get_db():
 def init_db():
     """Initialize database tables."""
     # Import all models to register them with Base
-    from app.models import db_models  # noqa: F401
+    from app.models import db_models, giskard_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

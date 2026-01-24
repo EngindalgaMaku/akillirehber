@@ -4,11 +4,19 @@ import { useEffect, useState, useCallback } from "react";
 import { api, Document } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Upload, FileText, Trash2, Loader2 } from "lucide-react";
+import { Upload, FileText, Trash2, Loader2, ChevronLeft, ChevronRight, X, CheckCircle2, AlertCircle } from "lucide-react";
 
 interface DocumentsTabProps {
   courseId: number;
   isOwner: boolean;
+}
+
+const ITEMS_PER_PAGE = 10;
+
+interface UploadProgress {
+  fileName: string;
+  status: "uploading" | "success" | "error";
+  error?: string;
 }
 
 export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
@@ -16,11 +24,15 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
 
   const loadDocuments = useCallback(async () => {
     try {
-      const data = await api.getCourseDocuments(courseId);
-      setDocuments(data);
+      // Load user documents instead of course-specific documents
+      const data = await api.getUserDocuments();
+      setDocuments(data.filter((d) => d.course_id === courseId));
+      setCurrentPage(1); // Reset to first page when loading documents
     } catch {
       toast.error("Dokümanlar yüklenirken hata oluştu");
     } finally {
@@ -33,20 +45,78 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
   }, [loadDocuments]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
     setIsUploading(true);
-    try {
-      const doc = await api.uploadDocument(courseId, file);
-      setDocuments([doc, ...documents]);
-      toast.success("Doküman yüklendi");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Yükleme hatası");
-    } finally {
-      setIsUploading(false);
-      e.target.value = "";
+    
+    // Initialize upload progress for all files
+    const initialProgress: UploadProgress[] = Array.from(files).map((file) => ({
+      fileName: file.name,
+      status: "uploading",
+    }));
+    setUploadProgress(initialProgress);
+
+    const newDocuments: Document[] = [];
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Upload files sequentially
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const doc = await api.uploadUserDocument(file, courseId);
+        newDocuments.push(doc);
+        successCount++;
+        
+        // Update progress for this file
+        setUploadProgress((prev) =>
+          prev.map((p) =>
+            p.fileName === file.name
+              ? { ...p, status: "success" }
+              : p
+          )
+        );
+      } catch (error) {
+        errorCount++;
+        const errorMessage = error instanceof Error ? error.message : "Yükleme hatası";
+        
+        // Update progress for this file with error
+        setUploadProgress((prev) =>
+          prev.map((p) =>
+            p.fileName === file.name
+              ? { ...p, status: "error", error: errorMessage }
+              : p
+          )
+        );
+      }
     }
+
+    // Update documents list with successfully uploaded documents
+    if (newDocuments.length > 0) {
+      setDocuments([...newDocuments, ...documents]);
+    }
+
+    // Show summary toast
+    if (successCount > 0 && errorCount === 0) {
+      toast.success(`${successCount} doküman başarıyla yüklendi`);
+    } else if (successCount > 0 && errorCount > 0) {
+      toast.warning(`${successCount} doküman yüklendi, ${errorCount} doküman yüklenemedi`);
+    } else if (errorCount > 0) {
+      toast.error(`${errorCount} doküman yüklenemedi`);
+    }
+
+    setIsUploading(false);
+    e.target.value = "";
+    
+    // Reload documents after a short delay to ensure all uploads are processed
+    setTimeout(() => {
+      loadDocuments();
+    }, 1000);
+  };
+
+  const clearUploadProgress = () => {
+    setUploadProgress([]);
   };
 
   const handleDelete = async (docId: number) => {
@@ -107,6 +177,14 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
     );
   }
 
+  // Pagination calculations
+  const totalPages = Math.ceil(documents.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const currentDocuments = documents.slice(startIndex, endIndex);
+  const showingFrom = documents.length > 0 ? startIndex + 1 : 0;
+  const showingTo = Math.min(endIndex, documents.length);
+
   return (
     <div className="bg-white rounded-lg border border-slate-200">
       <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
@@ -117,6 +195,7 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
               type="file"
               className="hidden"
               accept=".pdf,.md,.docx,.txt"
+              multiple
               onChange={handleFileUpload}
               disabled={isUploading}
             />
@@ -127,12 +206,66 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
                 ) : (
                   <Upload className="w-4 h-4 mr-2" />
                 )}
-                Yükle
+                Toplu Yükle
               </span>
             </Button>
           </label>
         )}
       </div>
+
+      {/* Upload Progress */}
+      {uploadProgress.length > 0 && (
+        <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-slate-700">
+              Yükleme Durumu ({uploadProgress.length} dosya)
+            </h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearUploadProgress}
+              className="text-slate-500 hover:text-slate-700"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+          <div className="space-y-2">
+            {uploadProgress.map((progress, index) => (
+              <div
+                key={index}
+                className="flex items-center gap-3 p-2 bg-white rounded border border-slate-200"
+              >
+                {progress.status === "uploading" && (
+                  <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                )}
+                {progress.status === "success" && (
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                )}
+                {progress.status === "error" && (
+                  <AlertCircle className="w-4 h-4 text-red-500" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-900 truncate">
+                    {progress.fileName}
+                  </p>
+                  {progress.error && (
+                    <p className="text-xs text-red-600 truncate">{progress.error}</p>
+                  )}
+                </div>
+                {progress.status === "uploading" && (
+                  <span className="text-xs text-slate-500">Yükleniyor...</span>
+                )}
+                {progress.status === "success" && (
+                  <span className="text-xs text-green-600">Başarılı</span>
+                )}
+                {progress.status === "error" && (
+                  <span className="text-xs text-red-600">Hata</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {documents.length === 0 ? (
         <div className="p-12 text-center">
@@ -145,44 +278,102 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
           )}
         </div>
       ) : (
-        <div className="divide-y divide-slate-200">
-          {documents.map((doc) => (
-            <div
-              key={doc.id}
-              className="px-6 py-4 flex items-center justify-between hover:bg-slate-50"
-            >
-              <div className="flex items-center gap-3">
-                <FileText className="w-5 h-5 text-slate-400" />
-                <div>
-                  <p className="font-medium text-slate-900">{doc.original_filename}</p>
-                  <p className="text-xs text-slate-500">
-                    {(doc.file_size / 1024).toFixed(1)} KB •{" "}
-                    {doc.char_count ? `${doc.char_count.toLocaleString()} karakter • ` : ""}
-                    {new Date(doc.created_at).toLocaleDateString("tr-TR")}
-                  </p>
+        <>
+          <div className="divide-y divide-slate-200">
+            {currentDocuments.map((doc) => (
+              <div
+                key={doc.id}
+                className="px-6 py-4 flex items-center justify-between hover:bg-slate-50"
+              >
+                <div className="flex items-center gap-3">
+                  <FileText className="w-5 h-5 text-slate-400" />
+                  <div>
+                    <p className="font-medium text-slate-900">{doc.original_filename}</p>
+                    <p className="text-xs text-slate-500">
+                      {(doc.file_size / 1024).toFixed(1)} KB •{" "}
+                      {doc.char_count ? `${doc.char_count.toLocaleString()} karakter • ` : ""}
+                      {new Date(doc.created_at).toLocaleDateString("tr-TR")}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {getStatusBadge(doc)}
+                  {isOwner && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(doc.id)}
+                      disabled={deletingId === doc.id}
+                      className="text-slate-400 hover:text-red-600"
+                    >
+                      {deletingId === doc.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                    </Button>
+                  )}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                {getStatusBadge(doc)}
-                {isOwner && (
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-slate-600">
+                  Gösteriliyor {showingFrom}-{showingTo} / {documents.length} doküman
+                </p>
+                <div className="flex items-center gap-2">
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
-                    onClick={() => handleDelete(doc.id)}
-                    disabled={deletingId === doc.id}
-                    className="text-slate-400 hover:text-red-600"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
                   >
-                    {deletingId === doc.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="w-4 h-4" />
-                    )}
+                    <ChevronLeft className="w-4 h-4 mr-1" />
+                    Önceki
                   </Button>
-                )}
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={currentPage === pageNum ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setCurrentPage(pageNum)}
+                          className="w-8 h-8 p-0"
+                        >
+                          {pageNum}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Sonraki
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                </div>
               </div>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );

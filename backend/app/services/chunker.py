@@ -7,19 +7,16 @@ import time
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import nltk
 
 from app.models.chunking import Chunk, ChunkingStrategy
 from app.services.chunker_exceptions import (
     SemanticChunkerError,
-    LanguageDetectionError,
-    SentenceTokenizationError,
-    CacheError,
-    ConfigurationError,
     ErrorCode,
 )
+from app.services.embedding_provider import EmbeddingProviderError
 
 # Constants
 PUNKT_TAB_PATH = 'tokenizers/punkt_tab'
@@ -437,7 +434,7 @@ class SemanticChunker(BaseChunker):
 
     def __init__(
         self,
-        use_provider_manager: bool = False,
+        use_provider_manager: bool = True,
         enable_cache: bool = True,
         enable_qa_detection: bool = True,
         enable_adaptive_threshold: bool = True
@@ -518,7 +515,6 @@ class SemanticChunker(BaseChunker):
                 EmbeddingProviderConfig,
                 EmbeddingProviderManager,
                 OpenRouterProvider,
-                OpenAIProvider,
             )
             from app.services.embedding_cache import EmbeddingCache
             
@@ -530,11 +526,6 @@ class SemanticChunker(BaseChunker):
             if openrouter.is_available():
                 providers.append(openrouter)
             
-            # OpenAI as fallback
-            openai = OpenAIProvider()
-            if openai.is_available():
-                providers.append(openai)
-            
             if not providers:
                 raise ValueError(
                     "No embedding providers available. "
@@ -542,7 +533,7 @@ class SemanticChunker(BaseChunker):
                 )
             
             config = EmbeddingProviderConfig(
-                batch_size=32,
+                batch_size=8,
                 max_retries=3,
                 retry_delay=1.0
             )
@@ -591,7 +582,7 @@ class SemanticChunker(BaseChunker):
             
             # Get embeddings for missing texts
             missing_texts = [non_empty_texts[i] for i in missing_indices]
-            new_embeddings = self._provider_manager.get_embeddings(
+            new_embeddings = self._provider_manager.get_embeddings_batch(
                 missing_texts, model
             )
             
@@ -610,7 +601,7 @@ class SemanticChunker(BaseChunker):
             return result
         else:
             # No cache, use provider manager directly
-            return self._provider_manager.get_embeddings(non_empty_texts, model)
+            return self._provider_manager.get_embeddings_batch(non_empty_texts, model)
     
     def _get_embeddings_legacy(
         self, texts: List[str], model: str
@@ -621,11 +612,38 @@ class SemanticChunker(BaseChunker):
         if not non_empty_texts:
             return []
         
-        response = self._client.embeddings.create(
-            model=model,
-            input=non_empty_texts
-        )
-        return [item.embedding for item in response.data]
+        try:
+            response = self._client.embeddings.create(
+                model=model,
+                input=non_empty_texts
+            )
+            if not getattr(response, "data", None):
+                raise EmbeddingProviderError(
+                    "No embedding data received",
+                    provider="openrouter",
+                    details={"model": model, "text_count": len(non_empty_texts)},
+                )
+            return [item.embedding for item in response.data]
+        except EmbeddingProviderError:
+            raise
+        except ValueError as e:
+            if "No embedding data received" in str(e):
+                raise EmbeddingProviderError(
+                    "No embedding data received",
+                    provider="openrouter",
+                    details={"model": model, "text_count": len(non_empty_texts)},
+                ) from e
+            raise EmbeddingProviderError(
+                f"Legacy embedding failed: {str(e)}",
+                provider="openrouter",
+                details={"model": model, "text_count": len(non_empty_texts)},
+            ) from e
+        except Exception as e:
+            raise EmbeddingProviderError(
+                f"Legacy embedding failed: {str(e)}",
+                provider="openrouter",
+                details={"model": model, "text_count": len(non_empty_texts)},
+            ) from e
 
     def _cosine_similarity(
         self, vec1: List[float], vec2: List[float]
@@ -1531,7 +1549,7 @@ class ChunkerService:
             ChunkingStrategy.FIXED_SIZE: FixedSizeChunker(),
             ChunkingStrategy.RECURSIVE: RecursiveChunker(),
             ChunkingStrategy.SENTENCE: SentenceChunker(),
-            ChunkingStrategy.SEMANTIC: SemanticChunker(),
+            ChunkingStrategy.SEMANTIC: SemanticChunker(use_provider_manager=True),
             ChunkingStrategy.LATE_CHUNKING: LateChunker(),
             ChunkingStrategy.AGENTIC: AgenticChunker(),
         }

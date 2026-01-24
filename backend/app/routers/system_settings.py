@@ -19,9 +19,8 @@ class SystemSettingsResponse(BaseModel):
     student_registration_key: Optional[str] = None
     hcaptcha_site_key: Optional[str] = None
     captcha_enabled: bool = True
-
-    class Config:
-        from_attributes = True
+    
+    model_config = {"from_attributes": True}
 
 
 class SystemSettingsUpdate(BaseModel):

@@ -111,7 +111,7 @@ class CourseListResponse(BaseModel):
 class DocumentBase(BaseModel):
     """Base document schema."""
 
-    course_id: int
+    course_id: Optional[int] = None
 
 
 class DocumentCreate(DocumentBase):
@@ -1133,12 +1133,19 @@ class SemanticSimilarityResultResponse(BaseModel):
     created_at: datetime
 
 
+class SemanticSimilarityGroupInfo(BaseModel):
+    """Schema for group information with creation date."""
+
+    name: str
+    created_at: Optional[str] = None
+
+
 class SemanticSimilarityResultListResponse(BaseModel):
     """Schema for semantic similarity result list response."""
 
     results: List[SemanticSimilarityResultResponse]
     total: int
-    groups: List[str]  # List of unique group names for filtering
+    groups: List[SemanticSimilarityGroupInfo]  # List of unique group names with creation dates
     # Aggregate statistics for all results (not just current page)
     aggregate: Optional[dict] = None  # Contains avg metrics for all results
 
@@ -1222,4 +1229,52 @@ class AdminPasswordResetResponse(BaseModel):
     message: str
     temporary_password: str
     expires_at: datetime
+
+
+# ==================== Batch Test Session Schemas ====================
+
+
+class BatchTestSessionResponse(BaseModel):
+    """Schema for batch test session response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    course_id: int
+    user_id: int
+    group_name: str
+    test_cases: str  # JSON string of test cases
+    total_tests: int
+    completed_tests: int
+    failed_tests: int
+    current_index: int
+    status: str  # in_progress, completed, cancelled, failed
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    embedding_model_used: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    updated_at: datetime
+
+
+class BatchTestSessionListResponse(BaseModel):
+    """Schema for batch test session list response."""
+
+    sessions: List[BatchTestSessionResponse]
+    total: int
+
+
+class BatchTestSessionCreate(BaseModel):
+    """Schema for creating a batch test session."""
+
+    course_id: int
+    test_cases: List[SemanticSimilarityTestCase]
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class BatchTestSessionResumeRequest(BaseModel):
+    """Schema for resuming a batch test session."""
+
+    session_id: int
 

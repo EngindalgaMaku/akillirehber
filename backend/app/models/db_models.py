@@ -45,7 +45,10 @@ class User(Base):
 
     # Relationships
     courses = relationship("Course", back_populates="teacher", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+    batch_test_sessions = relationship("BatchTestSession", back_populates="user", cascade="all, delete-orphan")
+    giskard_quick_test_results = relationship("GiskardQuickTestResult", back_populates="creator", cascade="all, delete-orphan")
 
     @property
     def is_admin(self) -> bool:
@@ -74,6 +77,10 @@ class Course(Base):
     documents = relationship("Document", back_populates="course", cascade="all, delete-orphan")
     settings = relationship("CourseSettings", back_populates="course", uselist=False, cascade="all, delete-orphan")
     semantic_similarity_results = relationship("SemanticSimilarityResult", back_populates="course", cascade="all, delete-orphan")
+    batch_test_sessions = relationship("BatchTestSession", back_populates="course", cascade="all, delete-orphan")
+    giskard_test_sets = relationship("GiskardTestSet", back_populates="course", cascade="all, delete-orphan")
+    giskard_runs = relationship("GiskardRun", back_populates="course", cascade="all, delete-orphan")
+    giskard_quick_test_results = relationship("GiskardQuickTestResult", back_populates="course", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Course(id={self.id}, name={self.name})>"
@@ -176,7 +183,8 @@ class Document(Base):
     char_count = Column(Integer, nullable=True)
     content = Column(Text, nullable=True)  # Extracted text content
     is_processed = Column(Boolean, default=False)
-    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)  # Made nullable for user-specific docs
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Required for user-specific docs
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -192,6 +200,7 @@ class Document(Base):
 
     # Relationships
     course = relationship("Course", back_populates="documents")
+    user = relationship("User", back_populates="documents")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
 
     def __repr__(self):
@@ -615,6 +624,7 @@ class SemanticSimilarityResult(Base):
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     group_name = Column(String(255), nullable=True, index=True)
+    batch_session_id = Column(Integer, ForeignKey("batch_test_sessions.id"), nullable=True)
     
     # Test inputs
     question = Column(Text, nullable=False)
@@ -657,9 +667,53 @@ class SemanticSimilarityResult(Base):
     # Relationships
     course = relationship("Course", back_populates="semantic_similarity_results")
     creator = relationship("User", backref="semantic_similarity_results")
+    batch_session = relationship("BatchTestSession", back_populates="results", foreign_keys=[batch_session_id])
 
     def __repr__(self):
         return f"<SemanticSimilarityResult(id={self.id}, course_id={self.course_id}, similarity_score={self.similarity_score})>"
+
+
+class BatchTestSession(Base):
+    """Batch test session for tracking progress and enabling resume functionality."""
+
+    __tablename__ = "batch_test_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Session identification
+    group_name = Column(String(255), nullable=False, index=True)  # Auto-generated group name
+
+    # Test cases (stored as JSON)
+    test_cases = Column(Text, nullable=False)  # JSON array of test cases
+
+    # Progress tracking
+    total_tests = Column(Integer, nullable=False, default=0)
+    completed_tests = Column(Integer, nullable=False, default=0)
+    failed_tests = Column(Integer, nullable=False, default=0)
+    current_index = Column(Integer, nullable=False, default=0)  # Index of next test to process
+
+    # Status
+    status = Column(String(50), nullable=False, default="in_progress")  # in_progress, completed, cancelled, failed
+
+    # Configuration used for this session
+    llm_provider = Column(String(50), nullable=True)
+    llm_model = Column(String(255), nullable=True)
+    embedding_model_used = Column(String(255), nullable=True)
+
+    # Timing
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    course = relationship("Course", back_populates="batch_test_sessions")
+    user = relationship("User", back_populates="batch_test_sessions")
+    results = relationship("SemanticSimilarityResult", back_populates="batch_session", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<BatchTestSession(id={self.id}, group_name={self.group_name}, status={self.status})>"
 
 
 

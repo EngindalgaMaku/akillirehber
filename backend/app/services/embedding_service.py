@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from typing import List, Optional
 
 from openai import OpenAI, APIError, APIConnectionError, RateLimitError, AuthenticationError
@@ -11,6 +12,12 @@ try:
     COHERE_AVAILABLE = True
 except ImportError:
     COHERE_AVAILABLE = False
+
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +31,16 @@ class EmbeddingService:
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    JINA_AI_BASE_URL = "https://api.jina.ai/v1"
     ALIBABA_MODEL_PREFIX = "alibaba/"
     OPENAI_MODEL_PREFIX = "openai/"
     COHERE_MODEL_PREFIX = "cohere/"
+    JINA_AI_MODEL_PREFIX = "jina/"
     DEFAULT_MODEL = "openai/text-embedding-3-small"
     BATCH_SIZE = 100  # Max texts per API call for OpenRouter
     ALIBABA_BATCH_SIZE = 10  # Max texts per API call for Alibaba
     COHERE_BATCH_SIZE = 96  # Max texts per API call for Cohere
+    JINA_AI_BATCH_SIZE = 100  # Max texts per API call for Jina AI
 
     def __init__(self, api_key: str = None):
         """Initialize embedding service.
@@ -41,6 +51,7 @@ class EmbeddingService:
         self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self._dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY")
         self._cohere_api_key = os.environ.get("COHERE_API_KEY")
+        self._jina_ai_api_key = os.environ.get("JINA_AI_API_KEY")
         self._client = None
         self._alibaba_client = None
         self._cohere_client = None
@@ -110,6 +121,32 @@ class EmbeddingService:
             self._cohere_client = cohere.Client(api_key=self._cohere_api_key)
         return self._cohere_client
 
+    def _get_jina_ai_client(self):
+        """Get or create Jina AI client.
+        
+        Returns:
+            Jina AI client (requests session)
+            
+        Raises:
+            ValueError: If JINA_AI_API_KEY is not set or requests package not installed
+        """
+        if not REQUESTS_AVAILABLE:
+            raise ValueError(
+                "requests package is not installed. "
+                "Please install it with: pip install requests"
+            )
+        
+        if not self._jina_ai_api_key:
+            raise ValueError(
+                "JINA_AI_API_KEY environment variable is required "
+                "for Jina AI embedding models. Please configure the API key "
+                "or use an OpenRouter model instead."
+            )
+        
+        # Jina AI uses simple HTTP requests, so we return the API key
+        # and use requests directly in the embedding methods
+        return self._jina_ai_api_key
+
     def _get_provider_for_model(self, model: str) -> str:
         """Determine which provider to use based on model name.
         
@@ -117,12 +154,14 @@ class EmbeddingService:
             model: Model identifier (e.g., "alibaba/text-embedding-v4")
             
         Returns:
-            Provider name: "alibaba", "cohere", or "openrouter"
+            Provider name: "alibaba", "cohere", "jina", or "openrouter"
         """
         if model.startswith(self.ALIBABA_MODEL_PREFIX):
             return "alibaba"
         elif model.startswith(self.COHERE_MODEL_PREFIX):
             return "cohere"
+        elif model.startswith(self.JINA_AI_MODEL_PREFIX):
+            return "jina"
         return "openrouter"
 
     def _get_client_for_model(self, model: str) -> OpenAI:
@@ -139,6 +178,8 @@ class EmbeddingService:
             return self._get_alibaba_client()
         elif provider == "cohere":
             return self._get_cohere_client()
+        elif provider == "jina":
+            return self._get_jina_ai_client()
         return self._get_client()
 
     def get_embedding(
@@ -187,17 +228,71 @@ class EmbeddingService:
                 embedding = response.embeddings[0]
                 dimension = len(embedding)
                 
-                logger.info(
-                    f"Generated embedding using {provider}",
-                    extra={
-                        "model": model,
-                        "provider": provider,
-                        "text_length": len(text),
-                        "dimension": dimension
-                    }
-                )
+                logger.info(f"Cohere embedding generated successfully")
+                logger.info(f"Model: {cohere_model}, Dimension: {dimension}")
                 
                 return embedding
+            
+            # Jina AI uses HTTP requests
+            elif provider == "jina":
+                api_key = self._get_jina_ai_client()
+                jina_model = model.replace(self.JINA_AI_MODEL_PREFIX, "")
+                
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                data = {
+                    "model": jina_model,
+                    "input": text.strip()
+                }
+                
+                import time
+                max_retries = 3
+                retry_delay = 2  # seconds
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.post(
+                            f"{self.JINA_AI_BASE_URL}/embeddings",
+                            headers=headers,
+                            json=data,
+                            timeout=30
+                        )
+                        
+                        if response.status_code == 429:
+                            if attempt < max_retries - 1:
+                                logger.warning(
+                                    f"Jina AI rate limit hit, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})"
+                                )
+                                time.sleep(retry_delay)
+                                retry_delay *= 2  # Exponential backoff
+                                continue
+                            else:
+                                raise ValueError("Jina AI rate limit exceeded. Please try again later.")
+                        
+                        response.raise_for_status()
+                        result = response.json()
+                        
+                        if "data" not in result or not result["data"]:
+                            raise ValueError("Invalid response from Jina AI API")
+                        
+                        embedding = result["data"][0]["embedding"]
+                        dimension = len(embedding)
+                        
+                        logger.info(f"Jina AI embedding generated successfully")
+                        logger.info(f"Model: {jina_model}, Dimension: {dimension}")
+                        
+                        return embedding
+                        
+                    except requests.exceptions.RequestException as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Jina AI request failed, retrying... (attempt {attempt + 1}/{max_retries}): {e}")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        raise
             
             # OpenAI-compatible providers (OpenRouter, Alibaba)
             client = self._get_client_for_model(model)
@@ -247,6 +342,7 @@ class EmbeddingService:
             api_key_name = {
                 "alibaba": "DASHSCOPE_API_KEY",
                 "cohere": "COHERE_API_KEY",
+                "jina": "JINA_AI_API_KEY",
                 "openrouter": "OPENROUTER_API_KEY"
             }.get(provider, "OPENROUTER_API_KEY")
             
@@ -351,6 +447,7 @@ class EmbeddingService:
         batch_size_map = {
             "alibaba": self.ALIBABA_BATCH_SIZE,
             "cohere": self.COHERE_BATCH_SIZE,
+            "jina": self.JINA_AI_BATCH_SIZE,
             "openrouter": self.BATCH_SIZE
         }
         batch_size = batch_size_map.get(provider, self.BATCH_SIZE)
@@ -413,6 +510,131 @@ class EmbeddingService:
                                 "batch_start": batch_start,
                                 "batch_size": len(batch_texts),
                                 "error_type": type(e).__name__
+                            }
+                        )
+                        raise
+                
+                # Reconstruct result with empty vectors for empty texts
+                result = []
+                for i in range(len(texts)):
+                    if i in all_embeddings:
+                        result.append(all_embeddings[i])
+                    else:
+                        result.append([])
+                
+                dimension = len(result[0]) if result and result[0] else 0
+                logger.info(
+                    f"Completed batch embedding generation with {provider}",
+                    extra={
+                        "model": model,
+                        "provider": provider,
+                        "total_texts": len(texts),
+                        "successful_embeddings": len(all_embeddings),
+                        "dimension": dimension
+                    }
+                )
+                        
+                return result
+            
+            # Jina AI uses HTTP requests
+            elif provider == "jina":
+                api_key = self._get_jina_ai_client()
+                jina_model = model.replace(self.JINA_AI_MODEL_PREFIX, "")
+                
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Process in batches
+                all_embeddings = {}
+                total_batches = (len(non_empty) + batch_size - 1) // batch_size
+                
+                logger.info(
+                    f"Starting batch embedding generation with {provider}",
+                    extra={
+                        "model": model,
+                        "provider": provider,
+                        "total_texts": len(texts),
+                        "non_empty_texts": len(non_empty),
+                        "batch_size": batch_size,
+                        "total_batches": total_batches
+                    }
+                )
+                
+                for batch_num, batch_start in enumerate(range(0, len(non_empty), batch_size), 1):
+                    batch = non_empty[batch_start:batch_start + batch_size]
+                    batch_texts = [t for _, t in batch]
+                    batch_indices = [i for i, _ in batch]
+                    
+                    try:
+                        data = {
+                            "model": jina_model,
+                            "input": batch_texts
+                        }
+                        
+                        # Add retry logic for batch processing
+                        batch_max_retries = 3
+                        batch_retry_delay = 2
+                        
+                        for batch_attempt in range(batch_max_retries):
+                            try:
+                                response = requests.post(
+                                    f"{self.JINA_AI_BASE_URL}/embeddings",
+                                    headers=headers,
+                                    json=data,
+                                    timeout=30
+                                )
+                                
+                                if response.status_code == 429:
+                                    if batch_attempt < batch_max_retries - 1:
+                                        logger.warning(
+                                            f"Jina AI batch rate limit hit, retrying in {batch_retry_delay}s... (batch {batch_num}, attempt {batch_attempt + 1}/{batch_max_retries})"
+                                        )
+                                        time.sleep(batch_retry_delay)
+                                        batch_retry_delay *= 2
+                                        continue
+                                    else:
+                                        raise ValueError("Jina AI rate limit exceeded during batch processing. Please try again later.")
+                                
+                                response.raise_for_status()
+                                result = response.json()
+                                
+                                if "data" not in result or not result["data"]:
+                                    raise ValueError("Invalid response from Jina AI API")
+                                
+                                for j, embedding_data in enumerate(result["data"]):
+                                    original_idx = batch_indices[j]
+                                    all_embeddings[original_idx] = embedding_data["embedding"]
+                                
+                                break  # Success, exit retry loop
+                                
+                            except requests.exceptions.RequestException as e:
+                                if batch_attempt < batch_max_retries - 1:
+                                    logger.warning(f"Jina AI batch request failed, retrying... (batch {batch_num}, attempt {batch_attempt + 1}/{batch_max_retries}): {e}")
+                                    time.sleep(batch_retry_delay)
+                                    batch_retry_delay *= 2
+                                    continue
+                                raise
+                        
+                        logger.debug(
+                            f"Completed batch {batch_num}/{total_batches} for {provider}",
+                            extra={
+                                "model": model,
+                                "provider": provider,
+                                "batch_num": batch_num,
+                                "batch_size": len(batch_texts)
+                            }
+                        )
+                        
+                    except Exception as e:
+                        logger.error(
+                            f"Error in batch {batch_num} for {provider}: {e}",
+                            extra={
+                                "model": model,
+                                "provider": provider,
+                                "batch_num": batch_num,
+                                "error": str(e)
                             }
                         )
                         raise
@@ -538,6 +760,7 @@ class EmbeddingService:
             api_key_name = {
                 "alibaba": "DASHSCOPE_API_KEY",
                 "cohere": "COHERE_API_KEY",
+                "jina": "JINA_AI_API_KEY",
                 "openrouter": "OPENROUTER_API_KEY"
             }.get(provider, "OPENROUTER_API_KEY")
             
@@ -636,6 +859,7 @@ class EmbeddingService:
             "alibaba/text-embedding-v4": 1024,
             "cohere/embed-multilingual-v3.0": 1024,
             "cohere/embed-multilingual-light-v3.0": 384,
+            "qwen/qwen3-embedding-8b": 1024,
         }
         
         return dimensions.get(model, 1536)

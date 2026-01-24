@@ -1,7 +1,7 @@
 """Authentication service for user management and JWT tokens."""
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -22,14 +22,21 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
+def _bcrypt_secret(secret: str) -> bytes:
+    data = (secret or "").encode("utf-8")
+    if len(data) <= 72:
+        return data
+    return data[:72]
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hashed password."""
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(_bcrypt_secret(plain_password), hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    return pwd_context.hash(password)
+    return pwd_context.hash(_bcrypt_secret(password))
 
 
 # Alias for consistency
@@ -41,9 +48,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     settings = get_settings()
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
+        expire = datetime.now(UTC) + timedelta(
             minutes=settings.access_token_expire_minutes
         )
     to_encode.update({"exp": expire})
@@ -61,7 +68,7 @@ def create_refresh_token(db: Session, user_id: int) -> str:
     token = secrets.token_urlsafe(64)
     
     # Calculate expiration
-    expires_at = datetime.utcnow() + timedelta(
+    expires_at = datetime.now(UTC) + timedelta(
         days=settings.refresh_token_expire_days
     )
     
@@ -82,7 +89,7 @@ def verify_refresh_token(db: Session, token: str) -> Optional[RefreshToken]:
     db_token = db.query(RefreshToken).filter(
         RefreshToken.token == token,
         RefreshToken.revoked == False,
-        RefreshToken.expires_at > datetime.utcnow()
+        RefreshToken.expires_at > datetime.now(UTC)
     ).first()
     
     return db_token
@@ -247,11 +254,11 @@ async def get_current_user(
 
 
 async def get_current_teacher(current_user: User = Depends(get_current_user)) -> User:
-    """Get the current user and verify they are a teacher."""
+    """Get the current user and verify they are a teacher or admin."""
     if current_user.role not in (UserRole.TEACHER, UserRole.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can perform this action",
+            detail="Only teachers and admins can perform this action",
         )
     return current_user
 

@@ -28,7 +28,6 @@ import {
   FileText,
   GraduationCap,
   Sparkles,
-  Power,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -132,7 +131,7 @@ export default function CoursesPage() {
             : "Kayıtlı olduğunuz dersleri görüntüleyin ve içeriklere erişin"
         }
       >
-        {user.role === "teacher" && (
+        {(user.role === "teacher" || user.role === "admin") && (
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
               <Button
@@ -313,16 +312,16 @@ export default function CoursesPage() {
             <BookOpen className="w-10 h-10 text-slate-400" />
           </div>
           <h3 className="text-xl font-semibold text-slate-700 mb-2">
-            {user.role === "teacher"
+            {(user.role === "teacher" || user.role === "admin")
               ? "Henüz ders oluşturmadınız"
               : "Henüz kayıtlı ders yok"}
           </h3>
           <p className="text-slate-500 mb-6 max-w-md mx-auto">
-            {user.role === "teacher"
+            {(user.role === "teacher" || user.role === "admin")
               ? "İlk dersinizi oluşturarak öğrencilerinizle içerik paylaşmaya başlayın."
               : "Öğretmeniniz ders oluşturduğunda burada görünecektir."}
           </p>
-          {user.role === "teacher" && (
+          {(user.role === "teacher" || user.role === "admin") && (
             <Button
               onClick={() => setIsCreateOpen(true)}
               size="lg"
@@ -410,7 +409,7 @@ export default function CoursesPage() {
                           {formatDate(course.created_at)}
                         </span>
                       </div>
-                      {user.role === "teacher" ? (
+                      {(user.role === "teacher" || user.role === "admin") ? (
                         <div
                           className="flex items-center gap-2"
                           onClick={(e) => e.preventDefault()}
@@ -467,8 +466,8 @@ export default function CoursesPage() {
             );
           })}
 
-          {/* Add New Course Card (for teachers) */}
-          {user.role === "teacher" && (
+          {/* Add New Course Card (for teachers and admins) */}
+          {(user.role === "teacher" || user.role === "admin") && (
             <button
               onClick={() => setIsCreateOpen(true)}
               className="group block w-full text-left"

@@ -315,6 +315,7 @@ class ProcessingStatusManager:
             ],
             ProcessingStatusEnum.EXTRACTING: [
                 ProcessingStatusEnum.CHUNKING,
+                ProcessingStatusEnum.COMPLETED,
                 ProcessingStatusEnum.ERROR
             ],
             ProcessingStatusEnum.CHUNKING: [

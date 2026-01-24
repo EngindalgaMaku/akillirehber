@@ -60,7 +60,21 @@ async def embed_document(
         # Get embeddings
         embedding_service = get_embedding_service()
         texts = [chunk.content for chunk in chunks]
-        embeddings = embedding_service.get_embeddings(texts, model=request.model)
+        
+        print(f"=== Embedding Debug for Document {document_id} ===")
+        print(f"Model: {request.model}")
+        print(f"Text count: {len(texts)}")
+        print(f"First text preview: {texts[0][:100] if texts else 'No texts'}...")
+        
+        try:
+            embeddings = embedding_service.get_embeddings(texts, model=request.model)
+            print(f"Embeddings generated: {len(embeddings)}")
+            print(f"First embedding length: {len(embeddings[0]) if embeddings else 0}")
+        except Exception as e:
+            print(f"Embedding generation failed: {e}")
+            raise
+        
+        print("=== End Embedding Debug ===")
 
         # Prepare chunks with embeddings
         chunks_with_embeddings = []
@@ -76,11 +90,23 @@ async def embed_document(
 
         # Store in Weaviate
         weaviate_service = get_weaviate_service()
+        
+        # Force delete collection if it exists (to handle dimension mismatch)
+        collection_name = weaviate_service._get_collection_name(document.course_id)
+        client = weaviate_service._get_client()
+        
+        if client.collections.exists(collection_name):
+            print(f"Deleting existing collection {collection_name} to handle dimension mismatch")
+            weaviate_service.delete_by_course(document.course_id)
+            print(f"Collection {collection_name} deleted successfully")
+        
+        # Now store the embeddings
         weaviate_service.store_chunks(
             course_id=document.course_id,
             document_id=document_id,
             chunks=chunks_with_embeddings
         )
+        print(f"Successfully stored {len(chunks_with_embeddings)} embeddings in Weaviate")
 
         # Update document status
         document.embedding_status = EmbeddingStatus.COMPLETED
