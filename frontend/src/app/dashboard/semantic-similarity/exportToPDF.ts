@@ -78,6 +78,12 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
             <div class="stat-value">${(aggregate.avg_bertscore_f1 * 100).toFixed(1)}%</div>
           </div>
         ` : ''}
+        ${aggregate.avg_original_bertscore_f1 != null ? `
+          <div class="stat-card">
+            <div class="stat-label">Ort. Orijinal BERTScore F1</div>
+            <div class="stat-value">${(aggregate.avg_original_bertscore_f1 * 100).toFixed(1)}%</div>
+          </div>
+        ` : ''}
       </div>
 
       <h2>📋 Detaylı Sonuçlar</h2>
@@ -90,6 +96,7 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
             <th style="width: 70px;">ROUGE-2</th>
             <th style="width: 70px;">ROUGE-L</th>
             <th style="width: 80px;">BERTScore</th>
+            <th style="width: 110px;">Orijinal BERTScore</th>
             <th style="width: 60px;">Süre</th>
           </tr>
         </thead>
@@ -106,6 +113,7 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
               <td class="${r.rouge2 != null ? getMetricClass(r.rouge2) : ''}">${r.rouge2 != null ? (r.rouge2 * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.rougel != null ? getMetricClass(r.rougel) : ''}">${r.rougel != null ? (r.rougel * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.bertscore_f1 != null ? getMetricClass(r.bertscore_f1) : ''}">${r.bertscore_f1 != null ? (r.bertscore_f1 * 100).toFixed(1) + '%' : '-'}</td>
+              <td class="${r.original_bertscore_f1 != null ? getMetricClass(r.original_bertscore_f1) : ''}">${r.original_bertscore_f1 != null ? (r.original_bertscore_f1 * 100).toFixed(1) + '%' : '-'}</td>
               <td>${r.latency_ms}ms</td>
             </tr>
           `).join('')}
@@ -117,6 +125,7 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
         <ul style="margin: 10px 0; padding-left: 20px;">
           <li><strong>ROUGE-1/2/L:</strong> N-gram overlap metrikleri (0-100%). Üretilen cevabın referans cevapla kelime bazında ne kadar örtüştüğünü ölçer.</li>
           <li><strong>BERTScore:</strong> Anlamsal benzerlik metrikleri (0-100%). Embedding tabanlı semantik benzerlik.</li>
+          <li><strong>Orijinal BERTScore:</strong> BERTScore (0-100%). <code>bert-score</code> kütüphanesi ile (token-level) hesaplanan orijinal metrik.</li>
         </ul>
         <p style="margin-top: 20px;">Bu rapor Akıllı Rehber RAG Sistemi tarafından otomatik olarak oluşturulmuştur.</p>
       </div>

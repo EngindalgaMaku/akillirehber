@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { RoleBadge } from "@/components/ui/role-badge";
-import { Brain, BookOpen, Home, LogOut, Settings, User, Loader2, Scissors, ChevronLeft, ChevronRight, FlaskConical, Target, Users, Shield, Database } from "lucide-react";
+import { Brain, BookOpen, Home, LogOut, Settings, User, Loader2, Scissors, ChevronLeft, ChevronRight, FlaskConical, Target, Users, Shield, Database, BarChart3 } from "lucide-react";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -63,6 +63,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/dashboard/semantic-similarity", icon: Target, label: "Rouge/BertScore" },
     { href: "/dashboard/giskard", icon: Shield, label: "Giskard" },
     { href: "/dashboard/wandb-runs", icon: Database, label: "W&B Runs" },
+    { href: "/dashboard/mteb-benchmark", icon: BarChart3, label: "MTEB Benchmark" },
   ];
 
   const bottomNavItems = [

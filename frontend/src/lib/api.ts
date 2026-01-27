@@ -702,7 +702,7 @@ class ApiClient {
   }
 
   // Evaluation Runs
-  async startEvaluation(data: { test_set_id: number; course_id: number; name?: string; config?: EvaluationConfig; evaluation_model?: string; question_ids?: number[] }): Promise<EvaluationRun> {
+  async startEvaluation(data: { test_set_id: number; course_id: number; name?: string; config?: EvaluationConfig; evaluation_provider?: string; evaluation_model?: string; question_ids?: number[] }): Promise<EvaluationRun> {
     return this.request<EvaluationRun>("/api/ragas/evaluate", {
       method: "POST",
       body: JSON.stringify(data),
@@ -721,7 +721,7 @@ class ApiClient {
     return this.request<EvaluationRunDetail>(`/api/ragas/runs/${runId}`);
   }
 
-  async getRunStatus(runId: number): Promise<{ id: number; status: string; total_questions: number; processed_questions: number; error_message?: string }> {
+  async getRunStatus(runId: number): Promise<{ id: number; status: string; total_questions: number; processed_questions: number; error_message?: string; wandb_run_url?: string; wandb_run_id?: string }> {
     return this.request(`/api/ragas/runs/${runId}/status`);
   }
 
@@ -767,11 +767,176 @@ class ApiClient {
     return this.request<RagasProvidersResponse>("/api/ragas/providers");
   }
 
+  async wandbExportRagasRun(data: {
+    course_id: number;
+    run_id: number;
+  }): Promise<{ success: boolean; run_name: string; run_url?: string; exported_count: number }> {
+    return this.request<{ success: boolean; run_name: string; run_url?: string; exported_count: number }>(
+      "/api/ragas/wandb-export",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  }
+
+  async getRagasWandbRuns(
+    courseId: number,
+    page: number = 1,
+    limit: number = 10,
+    search?: string,
+    stateFilter?: string,
+    tagFilter?: string
+  ): Promise<{
+    runs: Array<{
+      id: string;
+      name: string;
+      state: string;
+      created_at: string | null;
+      config: Record<string, unknown>;
+      missing_fields: string[];
+    }>;
+    pagination: {
+      currentPage: number;
+      totalPages: number;
+      totalItems: number;
+      itemsPerPage: number;
+    };
+  }> {
+    const params = new URLSearchParams({
+      course_id: courseId.toString(),
+      page: page.toString(),
+      limit: limit.toString(),
+    });
+    if (search) params.append("search", search);
+    if (stateFilter && stateFilter !== "all") params.append("state", stateFilter);
+    if (tagFilter) params.append("tag", tagFilter);
+
+    return this.request(
+      `/api/ragas/wandb-runs?${params.toString()}`
+    );
+  }
+
+  async updateRagasWandbRun(data: {
+    run_id: string;
+    course_id: number;
+    evaluation_run_id: number;
+    tags?: string[];
+  }): Promise<{ success: boolean; updated_fields?: string[]; message?: string; run_name?: string }> {
+    return this.request<{ success: boolean; updated_fields?: string[]; message?: string; run_name?: string }>(
+      "/api/ragas/wandb-runs/update",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  }
+
   async quickTest(data: QuickTestRequest): Promise<QuickTestResponse> {
     return this.request<QuickTestResponse>("/api/ragas/quick-test", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async ragasBatchTest(data: {
+    course_id: number;
+    test_cases: Array<{
+      question: string;
+      ground_truth: string;
+      alternative_ground_truths?: string[];
+    }>;
+    llm_provider?: string;
+    llm_model?: string;
+  }): Promise<{
+    results: Array<{
+      question: string;
+      ground_truth: string;
+      generated_answer: string;
+      faithfulness?: number;
+      answer_relevancy?: number;
+      context_precision?: number;
+      context_recall?: number;
+      answer_correctness?: number;
+      latency_ms: number;
+    }>;
+    aggregate: {
+      avg_faithfulness?: number;
+      avg_answer_relevancy?: number;
+      avg_context_precision?: number;
+      avg_context_recall?: number;
+      avg_answer_correctness?: number;
+      test_count: number;
+    };
+  }> {
+    // RAGAS'ta batch test yok, her soruyu tek tek çalıştırmamız gerekiyor
+    const results: Array<{
+      question: string;
+      ground_truth: string;
+      generated_answer: string;
+      faithfulness?: number;
+      answer_relevancy?: number;
+      context_precision?: number;
+      context_recall?: number;
+      answer_correctness?: number;
+      latency_ms: number;
+    }> = [];
+
+    for (const testCase of data.test_cases) {
+      try {
+        const result = await this.quickTest({
+          course_id: data.course_id,
+          question: testCase.question,
+          ground_truth: testCase.ground_truth,
+          alternative_ground_truths: testCase.alternative_ground_truths,
+          llm_provider: data.llm_provider,
+          llm_model: data.llm_model,
+        });
+
+        results.push({
+          question: result.question,
+          ground_truth: result.ground_truth,
+          generated_answer: result.generated_answer,
+          faithfulness: result.faithfulness,
+          answer_relevancy: result.answer_relevancy,
+          context_precision: result.context_precision,
+          context_recall: result.context_recall,
+          answer_correctness: result.answer_correctness,
+          latency_ms: result.latency_ms,
+        });
+      } catch (error) {
+        // Hata durumunda da sonucu ekle
+        results.push({
+          question: testCase.question,
+          ground_truth: testCase.ground_truth,
+          generated_answer: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          latency_ms: 0,
+        });
+      }
+    }
+
+    // Aggregate hesapla
+    const validResults = results.filter(r => r.faithfulness !== undefined);
+    const aggregate = {
+      avg_faithfulness: validResults.length > 0 
+        ? validResults.reduce((sum, r) => sum + (r.faithfulness || 0), 0) / validResults.length 
+        : undefined,
+      avg_answer_relevancy: validResults.length > 0
+        ? validResults.reduce((sum, r) => sum + (r.answer_relevancy || 0), 0) / validResults.length
+        : undefined,
+      avg_context_precision: validResults.length > 0
+        ? validResults.reduce((sum, r) => sum + (r.context_precision || 0), 0) / validResults.length
+        : undefined,
+      avg_context_recall: validResults.length > 0
+        ? validResults.reduce((sum, r) => sum + (r.context_recall || 0), 0) / validResults.length
+        : undefined,
+      avg_answer_correctness: validResults.length > 0
+        ? validResults.reduce((sum, r) => sum + (r.answer_correctness || 0), 0) / validResults.length
+        : undefined,
+      test_count: results.length,
+    };
+
+    return { results, aggregate };
   }
 
   // ==================== Admin User Management Endpoints ====================
@@ -1106,7 +1271,7 @@ class ApiClient {
       name: string;
       state: string;
       created_at: string | null;
-      config: Record<string, any>;
+      config: Record<string, unknown>;
       missing_fields: string[];
     }>;
     pagination: {
@@ -1132,7 +1297,7 @@ class ApiClient {
         name: string;
         state: string;
         created_at: string | null;
-        config: Record<string, any>;
+        config: Record<string, unknown>;
         missing_fields: string[];
       }>;
       pagination: {
@@ -1171,8 +1336,13 @@ class ApiClient {
       alternative_ground_truths?: string[];
       generated_answer?: string;
     }>;
+    embedding_provider?: string;
+    embedding_model?: string;
     llm_provider?: string;
     llm_model?: string;
+    reranker_used?: boolean;
+    reranker_provider?: string;
+    reranker_model?: string;
   }): Promise<BatchTestSession> {
     return this.request<BatchTestSession>("/api/semantic-similarity/batch-test-sessions", {
       method: "POST",
@@ -1192,6 +1362,7 @@ class ApiClient {
 
   async resumeBatchTestSession(sessionId: number): Promise<void> {
     // This is a streaming endpoint, handled separately
+    void sessionId;
     return Promise.resolve();
   }
 
@@ -1203,6 +1374,67 @@ class ApiClient {
 
   async deleteBatchTestSession(sessionId: number): Promise<void> {
     return this.request(`/api/semantic-similarity/batch-test-sessions/${sessionId}/delete`, {
+      method: "DELETE",
+    });
+  }
+
+  // ==================== Test Dataset Endpoints ====================
+
+  async saveTestDataset(data: {
+    course_id: number;
+    name: string;
+    description?: string;
+    test_cases: Array<{
+      question: string;
+      ground_truth: string;
+      alternative_ground_truths?: string[];
+      generated_answer?: string;
+    }>;
+  }): Promise<{
+    id: number;
+    name: string;
+    description?: string;
+    total_test_cases: number;
+    created_at: string;
+  }> {
+    return this.request("/api/semantic-similarity/test-datasets", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getTestDatasets(courseId: number): Promise<{
+    datasets: Array<{
+      id: number;
+      name: string;
+      description?: string;
+      total_test_cases: number;
+      created_at: string;
+      updated_at: string;
+    }>;
+  }> {
+    return this.request(`/api/semantic-similarity/test-datasets?course_id=${courseId}`);
+  }
+
+  async getTestDataset(datasetId: number): Promise<{
+    id: number;
+    name: string;
+    description?: string;
+    test_cases: Array<{
+      question: string;
+      ground_truth: string;
+      alternative_ground_truths?: string[];
+      generated_answer?: string;
+    }>;
+    total_test_cases: number;
+    created_at: string;
+    updated_at: string;
+  }> {
+    return this.request(`/api/semantic-similarity/test-datasets/${datasetId}`);
+  }
+
+  async deleteTestDataset(datasetId: number): Promise<{ message: string }> {
+    return this.request(`/api/semantic-similarity/test-datasets/${datasetId}`, {
       method: "DELETE",
     });
   }
@@ -1346,6 +1578,8 @@ export interface EvaluationRun {
   started_at?: string;
   completed_at?: string;
   error_message?: string;
+  wandb_run_url?: string;
+  wandb_run_id?: string;
   created_at: string;
   // Average metrics from summary
   avg_faithfulness?: number;
@@ -1707,6 +1941,10 @@ export interface SemanticSimilarityQuickTestResponse {
   bertscore_precision?: number;
   bertscore_recall?: number;
   bertscore_f1?: number;
+
+  original_bertscore_precision?: number;
+  original_bertscore_recall?: number;
+  original_bertscore_f1?: number;
 }
 
 export interface SemanticSimilarityBatchTestRequest {
@@ -1737,6 +1975,10 @@ export interface SemanticSimilarityBatchTestResponse {
     bertscore_precision?: number;
     bertscore_recall?: number;
     bertscore_f1?: number;
+
+    original_bertscore_precision?: number;
+    original_bertscore_recall?: number;
+    original_bertscore_f1?: number;
   }>;
   aggregate: {
     avg_similarity: number;
@@ -1750,6 +1992,10 @@ export interface SemanticSimilarityBatchTestResponse {
     avg_bertscore_precision?: number;
     avg_bertscore_recall?: number;
     avg_bertscore_f1?: number;
+
+    avg_original_bertscore_precision?: number;
+    avg_original_bertscore_recall?: number;
+    avg_original_bertscore_f1?: number;
   };
   embedding_model_used: string;
   llm_model_used?: string;
@@ -1779,6 +2025,10 @@ export interface SemanticSimilarityResult {
   bertscore_precision?: number;
   bertscore_recall?: number;
   bertscore_f1?: number;
+
+  original_bertscore_precision?: number;
+  original_bertscore_recall?: number;
+  original_bertscore_f1?: number;
   // Retrieval metrics
   hit_at_1?: number;
   mrr?: number;
@@ -1803,6 +2053,10 @@ export interface SemanticSimilarityResultListResponse {
     avg_bertscore_precision?: number;
     avg_bertscore_recall?: number;
     avg_bertscore_f1?: number;
+
+    avg_original_bertscore_precision?: number;
+    avg_original_bertscore_recall?: number;
+    avg_original_bertscore_f1?: number;
     test_count: number;
   };
 }
@@ -1823,6 +2077,9 @@ export interface BatchTestSession {
   llm_provider?: string;
   llm_model?: string;
   embedding_model_used?: string;
+  reranker_used?: boolean;
+  reranker_provider?: string;
+  reranker_model?: string;
   started_at: string;
   completed_at?: string | null;
   updated_at: string;

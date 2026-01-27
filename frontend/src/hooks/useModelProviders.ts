@@ -11,13 +11,14 @@ export function useModelProviders() {
     llm: {},
     embedding: []
   });
+
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadProviders = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    
+
     try {
       const [llmProviders] = await Promise.all([
         api.getLLMProviders()
@@ -26,14 +27,22 @@ export function useModelProviders() {
       // Embedding models - hardcoded list (same as course settings)
       const embeddingModels = [
         "openai/text-embedding-3-small",
-        "openai/text-embedding-3-large", 
+        "openai/text-embedding-3-large",
         "openai/text-embedding-ada-002",
         "alibaba/text-embedding-v4",
         "cohere/embed-multilingual-v3.0",
         "cohere/embed-multilingual-light-v3.0",
         "jina/jina-embeddings-v2",
         "jina/jina-embeddings-v3",
-        "qwen/qwen3-embedding-8b"
+        "qwen/qwen3-embedding-8b",
+        "ollama/bge-m3",
+        "ollama/bge-small-en-v1.5",
+        "ollama/nomic-embed-text-v1.5",
+        "ollama/nomic-embed-text-v1",
+        "voyage/voyage-4-large",
+        "voyage/voyage-3-large",
+        "voyage/voyage-3-lite",
+        "voyage/voyage-2"
       ];
 
       setProviders({

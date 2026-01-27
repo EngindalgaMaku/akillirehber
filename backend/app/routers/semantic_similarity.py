@@ -5,18 +5,18 @@ import os
 import time
 import json
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.models.db_models import (
-    User, SemanticSimilarityResult, BatchTestSession
+    User, SemanticSimilarityResult, BatchTestSession, TestDataset
 )
 from app.models.schemas import (
     SemanticSimilarityQuickTestRequest,
@@ -31,6 +31,7 @@ from app.models.schemas import (
     BatchTestSessionListResponse,
     BatchTestSessionCreate,
     SemanticSimilarityTestCase,
+    TestDatasetCreate,
 )
 from app.services.auth_service import get_current_user, get_current_teacher
 from app.services.course_service import (
@@ -64,6 +65,10 @@ class WandbRunUpdateRequest(BaseModel):
     group_name: str
     course_id: int
     tags: Optional[List[str]] = None
+    llm_model_used: Optional[str] = None
+    embedding_model_used: Optional[str] = None
+    llm_provider: Optional[str] = None
+    total_tests: Optional[int] = None
 
 
 # ==================== Quick Test Endpoint ====================
@@ -163,6 +168,11 @@ async def quick_test(
             bertscore_precision=metrics.get('bertscore_precision'),
             bertscore_recall=metrics.get('bertscore_recall'),
             bertscore_f1=metrics.get('bertscore_f1'),
+            original_bertscore_precision=metrics.get(
+                'original_bertscore_precision'
+            ),
+            original_bertscore_recall=metrics.get('original_bertscore_recall'),
+            original_bertscore_f1=metrics.get('original_bertscore_f1'),
             hit_at_1=metrics.get('hit_at_1'),
             mrr=metrics.get('mrr'),
             embedding_model_used=embedding_model,
@@ -197,6 +207,17 @@ async def batch_test(
 
     # Get course settings
     course_settings = get_or_create_settings(db, data.course_id)
+
+    default_system_prompt = (
+        "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
+        "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
+        "Türkçe ver."
+    )
+    system_prompt_used = (
+        course_settings.system_prompt
+        if course_settings.system_prompt
+        else default_system_prompt
+    )
 
     start_time = time.time()
 
@@ -271,11 +292,23 @@ async def batch_test(
                     "bertscore_precision": metrics.get('bertscore_precision'),
                     "bertscore_recall": metrics.get('bertscore_recall'),
                     "bertscore_f1": metrics.get('bertscore_f1'),
+                    "original_bertscore_precision": metrics.get(
+                        'original_bertscore_precision'
+                    ),
+                    "original_bertscore_recall": metrics.get(
+                        'original_bertscore_recall'
+                    ),
+                    "original_bertscore_f1": metrics.get(
+                        'original_bertscore_f1'
+                    ),
+                    "hit_at_1": metrics.get('hit_at_1'),
+                    "mrr": metrics.get('mrr'),
                     "latency_ms": 0,  # Individual latency not tracked in batch
                     "error_message": None,
                     "retrieved_contexts": (
                         retrieved_contexts if retrieved_contexts else None
                     ),
+                    "system_prompt_used": system_prompt_used,
                 })
 
             except Exception as e:
@@ -291,6 +324,7 @@ async def batch_test(
                     "latency_ms": 0,
                     "error_message": str(e),
                     "retrieved_contexts": None,
+                    "system_prompt_used": system_prompt_used,
                 })
 
         total_latency_ms = int((time.time() - start_time) * 1000)
@@ -340,7 +374,7 @@ async def batch_test_stream(
     async def generate():
         try:
             service = SemanticSimilarityService(db)
-            embedding_model = course_settings.default_embedding_model
+            embedding_model = data.embedding_model or course_settings.default_embedding_model
             llm_model_used = None
             
             # Get system prompt to include in results
@@ -359,7 +393,7 @@ async def batch_test_stream(
             completed_count = 0
             failed_count = 0
             MAX_RETRIES = 2  # Retry failed questions up to 2 times
-            MAX_WORKERS = 5  # Process up to 5 questions in parallel
+            MAX_WORKERS = 1 if (embedding_model or "").startswith("ollama/") else 5  # Ollama is sensitive to concurrency
 
             # Process test cases in parallel using ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -451,7 +485,8 @@ def _process_test_case(
                         course_id=course_id,
                         question=test_case.question,
                         llm_provider=llm_provider,
-                        llm_model=llm_model
+                        llm_model=llm_model,
+                        embedding_model=embedding_model,
                     )
                 )
             
@@ -497,6 +532,15 @@ def _process_test_case(
                     "bertscore_recall":
                         metrics.get('bertscore_recall'),
                     "bertscore_f1": metrics.get('bertscore_f1'),
+                    "original_bertscore_precision": metrics.get(
+                        'original_bertscore_precision'
+                    ),
+                    "original_bertscore_recall": metrics.get(
+                        'original_bertscore_recall'
+                    ),
+                    "original_bertscore_f1": metrics.get(
+                        'original_bertscore_f1'
+                    ),
                     "hit_at_1": metrics.get('hit_at_1'),
                     "mrr": metrics.get('mrr'),
                     "latency_ms": case_latency_ms,
@@ -545,6 +589,9 @@ def _process_test_case(
                         "bertscore_precision": None,
                         "bertscore_recall": None,
                         "bertscore_f1": None,
+                        "original_bertscore_precision": None,
+                        "original_bertscore_recall": None,
+                        "original_bertscore_f1": None,
                         "hit_at_1": None,
                         "mrr": None,
                         "latency_ms": 0,
@@ -596,6 +643,9 @@ async def save_result(
         bertscore_precision=data.bertscore_precision,
         bertscore_recall=data.bertscore_recall,
         bertscore_f1=data.bertscore_f1,
+        original_bertscore_precision=data.original_bertscore_precision,
+        original_bertscore_recall=data.original_bertscore_recall,
+        original_bertscore_f1=data.original_bertscore_f1,
         hit_at_1=data.hit_at_1,
         mrr=data.mrr,
         retrieved_contexts=data.retrieved_contexts,
@@ -626,6 +676,11 @@ async def save_result(
         bertscore_precision=result.bertscore_precision,
         bertscore_recall=result.bertscore_recall,
         bertscore_f1=result.bertscore_f1,
+        original_bertscore_precision=result.original_bertscore_precision,
+        original_bertscore_recall=result.original_bertscore_recall,
+        original_bertscore_f1=result.original_bertscore_f1,
+        hit_at_1=result.hit_at_1,
+        mrr=result.mrr,
         retrieved_contexts=result.retrieved_contexts,
         system_prompt_used=result.system_prompt_used,
         embedding_model_used=result.embedding_model_used,
@@ -744,6 +799,19 @@ async def list_results(
             if r.bertscore_f1 is not None
         ]
 
+        orig_bert_p_results = [
+            r.original_bertscore_precision for r in all_results
+            if r.original_bertscore_precision is not None
+        ]
+        orig_bert_r_results = [
+            r.original_bertscore_recall for r in all_results
+            if r.original_bertscore_recall is not None
+        ]
+        orig_bert_f1_results = [
+            r.original_bertscore_f1 for r in all_results
+            if r.original_bertscore_f1 is not None
+        ]
+
         # Retrieval metrics
         hit_at_1_results = [
             r.hit_at_1 for r in all_results if r.hit_at_1 is not None
@@ -776,6 +844,18 @@ async def list_results(
                 sum(bert_f1_results) / len(bert_f1_results)
                 if bert_f1_results else None
             ),
+            "avg_original_bertscore_precision": (
+                sum(orig_bert_p_results) / len(orig_bert_p_results)
+                if orig_bert_p_results else None
+            ),
+            "avg_original_bertscore_recall": (
+                sum(orig_bert_r_results) / len(orig_bert_r_results)
+                if orig_bert_r_results else None
+            ),
+            "avg_original_bertscore_f1": (
+                sum(orig_bert_f1_results) / len(orig_bert_f1_results)
+                if orig_bert_f1_results else None
+            ),
             "avg_hit_at_1": (
                 sum(hit_at_1_results) / len(hit_at_1_results)
                 if hit_at_1_results else None
@@ -805,6 +885,9 @@ async def list_results(
             bertscore_precision=r.bertscore_precision,
             bertscore_recall=r.bertscore_recall,
             bertscore_f1=r.bertscore_f1,
+            original_bertscore_precision=r.original_bertscore_precision,
+            original_bertscore_recall=r.original_bertscore_recall,
+            original_bertscore_f1=r.original_bertscore_f1,
             hit_at_1=r.hit_at_1,
             mrr=r.mrr,
             retrieved_contexts=r.retrieved_contexts,
@@ -873,9 +956,9 @@ async def wandb_export_group(
     rouge2_vals = [r.rouge2 for r in results if r.rouge2 is not None]
     rougel_vals = [r.rougel for r in results if r.rougel is not None]
     bert_f1_vals = [
-        r.bertscore_f1
+        r.original_bertscore_f1
         for r in results
-        if r.bertscore_f1 is not None
+        if r.original_bertscore_f1 is not None
     ]
     hit_at_1_vals = [r.hit_at_1 for r in results if r.hit_at_1 is not None]
     mrr_vals = [r.mrr for r in results if r.mrr is not None]
@@ -900,10 +983,10 @@ async def wandb_export_group(
             "group_name": data.group_name,
             "embedding_model_used": results[0].embedding_model_used,
             "llm_model_used": results[0].llm_model_used,
-            "search_alpha": (
-                _extract_alpha_from_group_name(data.group_name)
-                or course_settings.search_alpha
-            ),
+            "reranker_used": results[0].reranker_used,
+            "reranker_provider": results[0].reranker_provider,
+            "reranker_model": results[0].reranker_model,
+            "search_alpha": course_settings.search_alpha,
             "search_top_k": course_settings.search_top_k,
             "min_relevance_score": course_settings.min_relevance_score,
             "test_count": len(results),
@@ -941,9 +1024,9 @@ async def wandb_export_group(
             r.rouge1,
             r.rouge2,
             r.rougel,
-            r.bertscore_precision,
-            r.bertscore_recall,
-            r.bertscore_f1,
+            r.original_bertscore_precision,
+            r.original_bertscore_recall,
+            r.original_bertscore_f1,
             r.hit_at_1,
             r.mrr,
             r.latency_ms,
@@ -979,14 +1062,14 @@ async def wandb_export_group(
 async def list_wandb_runs(
     course_id: int,
     page: int = 1,
-    limit: int = 10,
+    limit: int = 25,  # Increased default limit
     search: Optional[str] = None,
     state: Optional[str] = None,
     tag: Optional[str] = None,
     current_user: User = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
-    """List W&B runs for the project and flag missing config fields."""
+    """List W&B runs for the project with server-side pagination and filtering."""
     verify_course_access(db, course_id, current_user)
 
     wb_project = os.getenv("WANDB_PROJECT")
@@ -998,74 +1081,101 @@ async def list_wandb_runs(
             detail="W&B is not configured. Set WANDB_PROJECT and WANDB_API_KEY.",
         )
 
-    api = wandb.Api()
-    runs_path = f"{wb_entity}/{wb_project}" if wb_entity else wb_project
-    runs = list(api.runs(runs_path))
-
-    result = []
-    for run in runs:
-        cfg = run.config or {}
-        # Filter by course_id if it exists in the config
-        if cfg.get("course_id") and cfg.get("course_id") != course_id:
-            continue
-            
-        # Apply search filter
-        if search:
-            search_lower = search.lower()
-            if (search_lower not in run.name.lower() and 
-                search_lower not in run.id.lower() and
-                (cfg.get("group_name") and search_lower not in cfg.get("group_name").lower())):
-                continue
+    try:
+        api = wandb.Api()
+        runs_path = f"{wb_entity}/{wb_project}" if wb_entity else wb_project
         
-        # Apply state filter
-        if state and state != "all" and run.state != state:
-            continue
+        # Apply filters at the API level for better performance
+        filters = {}
+        if state and state != "all":
+            filters["state"] = state
             
-        # Apply tag filter
-        if tag:
+        # Get runs with filters - this is much more efficient
+        runs = api.runs(
+            path=runs_path,
+            filters=filters,
+            per_page=limit * 5  # Get more items for filtering, but still limited
+        )
+        
+        # Convert to list and apply remaining filters
+        all_filtered_runs = []
+        
+        for run in runs:
+            cfg = run.config or {}
+            
+            # Filter by course_id if it exists in the config
+            if cfg.get("course_id") and cfg.get("course_id") != course_id:
+                continue
+                
+            # Apply search filter
+            if search:
+                search_lower = search.lower()
+                if (search_lower not in run.name.lower() and 
+                    search_lower not in run.id.lower() and
+                    (cfg.get("group_name") and search_lower not in cfg.get("group_name").lower())):
+                    continue
+            
+            # Apply tag filter
+            if tag:
+                tags = getattr(run, 'tags', [])
+                tag_lower = tag.lower()
+                if not any(tag_lower in t.lower() for t in tags):
+                    continue
+            
+            missing = []
+            if not cfg.get("llm_model_used"):
+                missing.append("llm_model_used")
+            if not cfg.get("embedding_model_used"):
+                # Only add to updated if we're actually setting it
+                cfg["embedding_model_used"] = "openai/text-embedding-3-small"
+                missing.append("embedding_model_used")
+            if not cfg.get("llm_provider"):
+                cfg["llm_provider"] = "zai"
+                missing.append("llm_provider")
+            if not cfg.get("total_tests"):
+                cfg["total_tests"] = 50
+                missing.append("total_tests")
+
+            # Get tags from W&B run object (not from config)
             tags = getattr(run, 'tags', [])
-            tag_lower = tag.lower()
-            if not any(tag_lower in t.lower() for t in tags):
-                continue
             
-        missing = []
-        if not cfg.get("llm_model_used"):
-            missing.append("llm_model_used")
-        if not cfg.get("embedding_model_used"):
-            missing.append("embedding_model_used")
-        
-        # Get tags from W&B run object (not from config)
-        tags = getattr(run, 'tags', [])
-        
-        result.append({
-            "id": run.id,
-            "name": run.name,
-            "state": run.state,
-            "created_at": run.created_at,
-            "config": {**cfg, "tags": tags},
-            "missing_fields": missing,
-        })
+            all_filtered_runs.append({
+                "id": run.id,
+                "name": run.name,
+                "state": run.state,
+                "created_at": run.created_at,
+                "config": {**cfg, "tags": tags},
+                "missing_fields": missing,
+            })
 
-    # Apply pagination
-    total_items = len(result)
-    total_pages = (total_items + limit - 1) // limit  # Ceiling division
-    
-    # Sort by created_at descending (newest first)
-    result.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-    
-    start_idx = (page - 1) * limit
-    end_idx = start_idx + limit
-    paginated_result = result[start_idx:end_idx]
-
-    return {
-        "runs": paginated_result,
-        "pagination": {
-            "currentPage": page,
-            "totalPages": total_pages,
-            "totalItems": total_items,
-            "itemsPerPage": limit,
+        # Sort by created_at descending (newest first)
+        all_filtered_runs.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        
+        # Apply pagination
+        total_items = len(all_filtered_runs)
+        total_pages = (total_items + limit - 1) // limit
+        
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        paginated_result = all_filtered_runs[start_idx:end_idx]
+        
+        # Return paginated result
+        return {
+            "runs": paginated_result,
+            "pagination": {
+                "currentPage": page,
+                "totalPages": total_pages,
+                "totalItems": total_items,
+                "itemsPerPage": limit,
+            }
         }
-    }
+        
+    except Exception as e:
+        logger.error(f"Error fetching W&B runs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch W&B runs: {str(e)}"
+        )
 
 
 @router.post("/wandb-runs/update")
@@ -1157,18 +1267,37 @@ async def update_wandb_run(
         cfg["tags"] = data.tags
         updated.append("tags")
     
-    if not cfg.get("llm_model_used") and sample_result.llm_model_used:
+    # Update model fields if provided in the request
+    if data.llm_model_used is not None:
+        cfg["llm_model_used"] = data.llm_model_used
+        updated.append("llm_model_used")
+    elif not cfg.get("llm_model_used") and sample_result.llm_model_used:
+        # Only use DB sample if field is missing and not provided in request
         cfg["llm_model_used"] = sample_result.llm_model_used
         updated.append("llm_model_used")
-    if not cfg.get("embedding_model_used") and sample_result.embedding_model_used:
+        
+    if data.embedding_model_used is not None:
+        cfg["embedding_model_used"] = data.embedding_model_used
+        updated.append("embedding_model_used")
+    elif not cfg.get("embedding_model_used") and sample_result.embedding_model_used:
         cfg["embedding_model_used"] = sample_result.embedding_model_used
         updated.append("embedding_model_used")
+    
+    # Update other fields if provided
+    if data.llm_provider is not None:
+        cfg["llm_provider"] = data.llm_provider
+        updated.append("llm_provider")
+        
+    if data.total_tests is not None:
+        cfg["total_tests"] = data.total_tests
+        updated.append("total_tests")
 
     if not updated:
         return {"success": False, "message": "No fields needed update."}
 
-    run.config = cfg
-    run.update()
+    # Update run config using wandb.Api proper methods
+    run.config.update(cfg)
+    run.save()
 
     return {
         "success": True,
@@ -1213,6 +1342,9 @@ async def get_result(
         bertscore_precision=result.bertscore_precision,
         bertscore_recall=result.bertscore_recall,
         bertscore_f1=result.bertscore_f1,
+        original_bertscore_precision=result.original_bertscore_precision,
+        original_bertscore_recall=result.original_bertscore_recall,
+        original_bertscore_f1=result.original_bertscore_f1,
         retrieved_contexts=result.retrieved_contexts,
         system_prompt_used=result.system_prompt_used,
         embedding_model_used=result.embedding_model_used,
@@ -1324,7 +1456,6 @@ async def delete_group(
 
 # ==================== Batch Test Session Endpoints ====================
 
-
 @router.post(
     "/batch-test-sessions",
     response_model=BatchTestSessionResponse,
@@ -1336,6 +1467,9 @@ async def create_batch_test_session(
     db: Session = Depends(get_db),
 ):
     """Create a new batch test session with auto-generated group name."""
+    # Debug log to see what data is received
+    logger.info(f"Received batch test session data: {data.model_dump()}")
+    
     # Verify course access
     verify_course_access(db, data.course_id, current_user)
 
@@ -1393,7 +1527,10 @@ async def create_batch_test_session(
         status="in_progress",
         llm_provider=data.llm_provider,
         llm_model=data.llm_model,
-        embedding_model_used=course_settings.default_embedding_model,
+        embedding_model_used=(data.embedding_model or course_settings.default_embedding_model),
+        reranker_used=data.reranker_used,
+        reranker_provider=data.reranker_provider,
+        reranker_model=data.reranker_model,
     )
     db.add(session)
     db.commit()
@@ -1420,6 +1557,9 @@ async def create_batch_test_session(
         llm_provider=session.llm_provider,
         llm_model=session.llm_model,
         embedding_model_used=session.embedding_model_used,
+        reranker_used=session.reranker_used,
+        reranker_provider=session.reranker_provider,
+        reranker_model=session.reranker_model,
         started_at=session.started_at,
         completed_at=session.completed_at,
         updated_at=session.updated_at,
@@ -1585,12 +1725,11 @@ async def resume_batch_test_session(
             wb_run = None
             wb_table = None
             wb_enabled = False
-            wb_project = os.getenv("WANDB_PROJECT")
+            wb_project = os.getenv("WANDB_PROJECT") or "akilli-rehber"
             wb_mode = os.getenv("WANDB_MODE")
             wb_has_key = bool(os.getenv("WANDB_API_KEY"))
             if (
                 wandb is not None
-                and wb_project
                 and (wb_has_key or wb_mode == "offline")
             ):
                 wb_enabled = True
@@ -1607,6 +1746,9 @@ async def resume_batch_test_session(
                         "llm_model": session.llm_model,
                         "llm_model_used": session.llm_model,
                         "embedding_model_used": session.embedding_model_used,
+                        "reranker_used": session.reranker_used,
+                        "reranker_provider": session.reranker_provider,
+                        "reranker_model": session.reranker_model,
                         "search_alpha": course_settings.search_alpha,
                         "search_top_k": course_settings.search_top_k,
                         "min_relevance_score": (
@@ -1629,6 +1771,9 @@ async def resume_batch_test_session(
                         "bertscore_precision",
                         "bertscore_recall",
                         "bertscore_f1",
+                        "original_bertscore_precision",
+                        "original_bertscore_recall",
+                        "original_bertscore_f1",
                         "hit_at_1",
                         "mrr",
                         "latency_ms",
@@ -1701,7 +1846,7 @@ async def resume_batch_test_session(
                         # Generate answer if not provided
                         generated_answer = test_case.generated_answer
                         retrieved_contexts = []
-
+                        
                         if not generated_answer:
                             (
                                 generated_answer,
@@ -1784,6 +1929,15 @@ async def resume_batch_test_session(
                             ),
                             bertscore_recall=metrics.get('bertscore_recall'),
                             bertscore_f1=metrics.get('bertscore_f1'),
+                            original_bertscore_precision=metrics.get(
+                                'original_bertscore_precision'
+                            ),
+                            original_bertscore_recall=metrics.get(
+                                'original_bertscore_recall'
+                            ),
+                            original_bertscore_f1=metrics.get(
+                                'original_bertscore_f1'
+                            ),
                             hit_at_1=metrics.get('hit_at_1'),
                             mrr=metrics.get('mrr'),
                             retrieved_contexts=retrieved_contexts,
@@ -1837,6 +1991,15 @@ async def resume_batch_test_session(
                                     'bertscore_recall'
                                 ),
                                 "bertscore_f1": metrics.get('bertscore_f1'),
+                                "original_bertscore_precision": metrics.get(
+                                    'original_bertscore_precision'
+                                ),
+                                "original_bertscore_recall": metrics.get(
+                                    'original_bertscore_recall'
+                                ),
+                                "original_bertscore_f1": metrics.get(
+                                    'original_bertscore_f1'
+                                ),
                                 "hit_at_1": metrics.get('hit_at_1'),
                                 "mrr": metrics.get('mrr'),
                                 "latency_ms": case_latency_ms,
@@ -1866,6 +2029,17 @@ async def resume_batch_test_session(
                                     "bertscore_f1": metrics.get(
                                         "bertscore_f1"
                                     ),
+                                    "original_bertscore_precision": (
+                                        metrics.get(
+                                            "original_bertscore_precision"
+                                        )
+                                    ),
+                                    "original_bertscore_recall": metrics.get(
+                                        "original_bertscore_recall"
+                                    ),
+                                    "original_bertscore_f1": metrics.get(
+                                        "original_bertscore_f1"
+                                    ),
                                     "hit_at_1": metrics.get("hit_at_1"),
                                     "mrr": metrics.get("mrr"),
                                     "latency_ms": case_latency_ms,
@@ -1889,6 +2063,11 @@ async def resume_batch_test_session(
                                     metrics.get("bertscore_precision"),
                                     metrics.get("bertscore_recall"),
                                     metrics.get("bertscore_f1"),
+                                    metrics.get(
+                                        "original_bertscore_precision"
+                                    ),
+                                    metrics.get("original_bertscore_recall"),
+                                    metrics.get("original_bertscore_f1"),
                                     metrics.get("hit_at_1"),
                                     metrics.get("mrr"),
                                     case_latency_ms,
@@ -2200,3 +2379,139 @@ async def delete_batch_test_session(
     )
 
     return None
+
+
+# ==================== Test Dataset Management ====================
+
+@router.post("/test-datasets")
+async def save_test_dataset(
+    data: TestDatasetCreate,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Save a test dataset for batch testing."""
+    # Verify course access
+    verify_course_access(db, data.course_id, current_user)
+    
+    # Create dataset
+    dataset = TestDataset(
+        course_id=data.course_id,
+        user_id=current_user.id,
+        name=data.name,
+        description=data.description,
+        test_cases=json.dumps(data.test_cases),
+        total_test_cases=len(data.test_cases)
+    )
+    
+    db.add(dataset)
+    db.commit()
+    db.refresh(dataset)
+    
+    logger.info(
+        "Test dataset saved - id: %s, name: %s, course_id: %s, test_cases: %d",
+        dataset.id, dataset.name, data.course_id, len(data.test_cases)
+    )
+    
+    return {
+        "id": dataset.id,
+        "name": dataset.name,
+        "description": dataset.description,
+        "total_test_cases": dataset.total_test_cases,
+        "created_at": dataset.created_at.isoformat()
+    }
+
+
+@router.get("/test-datasets")
+async def get_test_datasets(
+    course_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Get all test datasets for a course."""
+    from app.models.db_models import TestDataset
+    
+    # Verify course access
+    verify_course_access(db, course_id, current_user)
+    
+    datasets = db.query(TestDataset).filter(
+        TestDataset.course_id == course_id
+    ).order_by(TestDataset.created_at.desc()).all()
+    
+    return {
+        "datasets": [
+            {
+                "id": dataset.id,
+                "name": dataset.name,
+                "description": dataset.description,
+                "total_test_cases": dataset.total_test_cases,
+                "created_at": dataset.created_at.isoformat(),
+                "updated_at": dataset.updated_at.isoformat()
+            }
+            for dataset in datasets
+        ]
+    }
+
+
+@router.get("/test-datasets/{dataset_id}")
+async def get_test_dataset(
+    dataset_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Get a specific test dataset."""
+    from app.models.db_models import TestDataset
+    
+    dataset = db.query(TestDataset).filter(
+        TestDataset.id == dataset_id
+    ).first()
+    
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    # Verify course access
+    verify_course_access(db, dataset.course_id, current_user)
+    
+    try:
+        test_cases = json.loads(dataset.test_cases)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid test cases data")
+    
+    return {
+        "id": dataset.id,
+        "name": dataset.name,
+        "description": dataset.description,
+        "test_cases": test_cases,
+        "total_test_cases": dataset.total_test_cases,
+        "created_at": dataset.created_at.isoformat(),
+        "updated_at": dataset.updated_at.isoformat()
+    }
+
+
+@router.delete("/test-datasets/{dataset_id}")
+async def delete_test_dataset(
+    dataset_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Delete a test dataset."""
+    from app.models.db_models import TestDataset
+    
+    dataset = db.query(TestDataset).filter(
+        TestDataset.id == dataset_id
+    ).first()
+    
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    # Verify course access
+    verify_course_access(db, dataset.course_id, current_user)
+    
+    db.delete(dataset)
+    db.commit()
+    
+    logger.info(
+        "Test dataset deleted - id: %s, name: %s",
+        dataset.id, dataset.name
+    )
+    
+    return {"message": "Dataset deleted successfully"}

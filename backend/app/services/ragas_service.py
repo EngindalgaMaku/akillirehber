@@ -1,6 +1,7 @@
 """RAGAS Evaluation Service for running RAG evaluations."""
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -19,6 +20,14 @@ from app.services.weaviate_service import WeaviateService
 from app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    import wandb  # type: ignore
+
+    WANDB_AVAILABLE = True
+except Exception:
+    WANDB_AVAILABLE = False
 
 
 class RagasEvaluationService:
@@ -49,30 +58,136 @@ class RagasEvaluationService:
         run.status = "running"
         run.started_at = datetime.now(timezone.utc)
         self.db.commit()
+
+        # Get course settings for RAG config BEFORE W&B init
+        course_settings = get_or_create_settings(self.db, run.course_id)
+
+        # Get questions (filtered by question_ids if provided in config)
+        question_query = self.db.query(TestQuestion).filter(
+            TestQuestion.test_set_id == run.test_set_id
+        )
+        
+        # Filter by question_ids if provided
+        if run.config and run.config.get("question_ids"):
+            question_ids = run.config["question_ids"]
+            logger.info("[SELECTIVE EVAL DEBUG] Filtering by question_ids: %s", question_ids)
+            question_query = question_query.filter(TestQuestion.id.in_(question_ids))
+        else:
+            logger.info("[SELECTIVE EVAL DEBUG] No question_ids filter - evaluating all questions")
+        
+        questions = question_query.all()
+        logger.info("[SELECTIVE EVAL DEBUG] Found %d questions to evaluate", len(questions))
+        logger.info("[SELECTIVE EVAL DEBUG] Question IDs: %s", [q.id for q in questions])
+
+        # Get course for collection name
+        course = self.db.query(Course).filter(Course.id == run.course_id).first()
+
+        wb_enabled = False
+        wb_run = None
+        wb_table = None
+
+        try:
+            wb_project = os.getenv("WANDB_PROJECT", "akilli-rehber")
+            wb_mode = os.getenv("WANDB_MODE")
+            wb_has_key = bool(os.getenv("WANDB_API_KEY"))
+            if WANDB_AVAILABLE and (wb_has_key or wb_mode == "offline"):
+                wb_entity = os.getenv("WANDB_ENTITY")
+                run_name = f"ragas-run-{run.course_id}-{run.test_set_id}-{run.id}"
+                wb_run = wandb.init(
+                    project=wb_project,
+                    entity=wb_entity,
+                    name=run_name,
+                    config={
+                        "course_id": run.course_id,
+                        "run_id": run.id,
+                        "run_name": run.name,
+                        "evaluation_provider": (
+                            run.config.get("evaluation_provider") if run.config else None
+                        ),
+                        "evaluation_model": (
+                            run.config.get("evaluation_model") if run.config else None
+                        ),
+                        "llm_provider": course_settings.llm_provider,
+                        "llm_model": course_settings.llm_model,
+                        "embedding_model": course_settings.default_embedding_model,
+                        "system_prompt": course_settings.system_prompt,
+                        "search_alpha": course_settings.search_alpha,
+                        "search_top_k": course_settings.search_top_k,
+                        "min_relevance_score": getattr(
+                            course_settings, "min_relevance_score", None
+                        ),
+                        "reranker_enabled": getattr(
+                            course_settings, "enable_reranker", False
+                        ),
+                        "reranker_provider": getattr(
+                            course_settings, "reranker_provider", None
+                        ),
+                        "reranker_model": getattr(
+                            course_settings, "reranker_model", None
+                        ),
+                        "total_questions": len(questions),
+                    },
+                    tags=["ragas", "evaluation"],
+                )
+                wb_enabled = True
+
+                try:
+                    # Make sure charts use processed_questions as the step.
+                    wandb.define_metric("progress/processed_questions")
+                    for m in [
+                        "metrics/faithfulness",
+                        "metrics/answer_relevancy",
+                        "metrics/context_precision",
+                        "metrics/context_recall",
+                        "metrics/answer_correctness",
+                        "latency_ms",
+                        "error",
+                    ]:
+                        wandb.define_metric(
+                            m,
+                            step_metric="progress/processed_questions",
+                        )
+                except Exception:
+                    # metric definition is best-effort
+                    pass
+
+                wb_url = getattr(wb_run, "url", None)
+                if wb_url:
+                    cfg = dict(run.config or {})
+                    cfg["wandb_run_url"] = wb_url
+                    cfg["wandb_run_id"] = getattr(wb_run, "id", None)
+                    run.config = cfg
+                    self.db.commit()
+
+                wb_table = wandb.Table(
+                    columns=[
+                        "result_id",
+                        "question_id",
+                        "question",
+                        "ground_truth",
+                        "generated_answer",
+                        "retrieved_contexts",
+                        "system_prompt_used",
+                        "llm_provider",
+                        "llm_model",
+                        "embedding_model",
+                        "evaluation_model",
+                        "faithfulness",
+                        "answer_relevancy",
+                        "context_precision",
+                        "context_recall",
+                        "answer_correctness",
+                        "latency_ms",
+                        "error_message",
+                    ]
+                )
+        except Exception as e:
+            logger.warning("W&B init failed: %s", e)
+            wb_enabled = False
+            wb_run = None
+            wb_table = None
         
         try:
-            # Get questions (filtered by question_ids if provided in config)
-            question_query = self.db.query(TestQuestion).filter(
-                TestQuestion.test_set_id == run.test_set_id
-            )
-            
-            # Filter by question_ids if provided
-            if run.config and run.config.get("question_ids"):
-                question_ids = run.config["question_ids"]
-                logger.info(f"[SELECTIVE EVAL DEBUG] Filtering by question_ids: {question_ids}")
-                question_query = question_query.filter(TestQuestion.id.in_(question_ids))
-            else:
-                logger.info(f"[SELECTIVE EVAL DEBUG] No question_ids filter - evaluating all questions")
-            
-            questions = question_query.all()
-            logger.info(f"[SELECTIVE EVAL DEBUG] Found {len(questions)} questions to evaluate")
-            logger.info(f"[SELECTIVE EVAL DEBUG] Question IDs: {[q.id for q in questions]}")
-            
-            # Get course settings for RAG config
-            course_settings = get_or_create_settings(self.db, run.course_id)
-            
-            # Get course for collection name
-            course = self.db.query(Course).filter(Course.id == run.course_id).first()
             
             # Process each question
             successful = 0
@@ -92,6 +207,60 @@ class RagasEvaluationService:
                     result = self._evaluate_question(
                         run, question, course, course_settings, run.config
                     )
+
+                    if wb_enabled and wb_run is not None:
+                        try:
+                            if wb_table is not None:
+                                wb_table.add_data(
+                                    result.id,
+                                    question.id,
+                                    question.question,
+                                    question.ground_truth,
+                                    result.generated_answer,
+                                    result.retrieved_contexts,
+                                    course_settings.system_prompt,
+                                    result.llm_provider,
+                                    result.llm_model,
+                                    result.embedding_model,
+                                    result.evaluation_model,
+                                    result.faithfulness,
+                                    result.answer_relevancy,
+                                    result.context_precision,
+                                    result.context_recall,
+                                    result.answer_correctness,
+                                    result.latency_ms,
+                                    result.error_message,
+                                )
+                            wb_run.log(
+                                {
+                                    "progress/processed_questions": i + 1,
+                                    "progress/total_questions": len(questions),
+                                    "metrics/faithfulness": result.faithfulness,
+                                    "metrics/answer_relevancy": result.answer_relevancy,
+                                    "metrics/context_precision": result.context_precision,
+                                    "metrics/context_recall": result.context_recall,
+                                    "metrics/answer_correctness": result.answer_correctness,
+                                    "latency_ms": result.latency_ms,
+                                    "error": 1 if result.error_message else 0,
+                                    "generated_answer": result.generated_answer,
+                                    "retrieved_contexts": result.retrieved_contexts,
+                                    "system_prompt_used": course_settings.system_prompt,
+                                    "llm_provider": result.llm_provider,
+                                    "llm_model": result.llm_model,
+                                    "embedding_model": result.embedding_model,
+                                    "evaluation_model": result.evaluation_model,
+                                },
+                                step=i + 1,
+                            )
+                            
+                            # W&B'ye hemen gönder (buffer'ı flush et) - Semantic similarity gibi!
+                            try:
+                                if hasattr(wb_run, '_flush'):
+                                    wb_run._flush()
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            logger.warning("W&B log failed: %s", e)
                     
                     if result.error_message:
                         failed += 1
@@ -119,6 +288,19 @@ class RagasEvaluationService:
                     logger.error(f"Error evaluating question {question.id}: {e}")
                     failed += 1
                     
+                    # Best-effort: still persist latency and config fields
+                    alpha = (
+                        course_settings.search_alpha
+                        if course_settings.search_alpha is not None
+                        else (run.config.get("search_alpha", 0.5) if run.config else 0.5)
+                    )
+                    top_k = (
+                        course_settings.search_top_k
+                        if course_settings.search_top_k is not None
+                        else (run.config.get("top_k", 5) if run.config else 5)
+                    )
+                    evaluation_model = run.config.get("evaluation_model") if run.config else None
+
                     # Create error result
                     error_result = EvaluationResult(
                         run_id=run.id,
@@ -126,11 +308,53 @@ class RagasEvaluationService:
                         question_text=question.question,
                         ground_truth_text=question.ground_truth,
                         error_message=str(e),
+                        latency_ms=0,
+                        llm_provider=course_settings.llm_provider,
+                        llm_model=course_settings.llm_model,
+                        embedding_model=course_settings.default_embedding_model,
+                        evaluation_model=evaluation_model,
+                        search_alpha=alpha,
+                        search_top_k=top_k,
                     )
                     self.db.add(error_result)
                     
                     run.processed_questions = i + 1
                     self.db.commit()
+
+                    if wb_enabled and wb_run is not None:
+                        try:
+                            if wb_table is not None:
+                                wb_table.add_data(
+                                    None,
+                                    question.id,
+                                    question.question,
+                                    question.ground_truth,
+                                    None,
+                                    None,
+                                    course_settings.system_prompt,
+                                    course_settings.llm_provider,
+                                    course_settings.llm_model,
+                                    course_settings.default_embedding_model,
+                                    evaluation_model,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    0,
+                                    str(e),
+                                )
+                            wb_run.log(
+                                {
+                                    "progress/processed_questions": i + 1,
+                                    "progress/total_questions": len(questions),
+                                    "error": 1,
+                                    "error_message": str(e),
+                                },
+                                step=i + 1,
+                            )
+                        except Exception as e:
+                            logger.warning("W&B log failed: %s", e)
             
             # Create summary
             total = successful + failed
@@ -152,6 +376,21 @@ class RagasEvaluationService:
             run.status = "completed"
             run.completed_at = datetime.now(timezone.utc)
             self.db.commit()
+
+            if wb_enabled and wb_run is not None:
+                try:
+                    wb_run.log(
+                        {
+                            "aggregate/successful_questions": successful,
+                            "aggregate/failed_questions": failed,
+                            "aggregate/total_questions": total,
+                        }
+                    )
+                    if wb_table is not None:
+                        wb_run.log({"results": wb_table})
+                    wb_run.finish()
+                except Exception as e:
+                    logger.warning("W&B finish failed: %s", e)
             
             logger.info(f"Evaluation run {run_id} completed: {successful}/{total} successful")
             
@@ -161,6 +400,13 @@ class RagasEvaluationService:
             run.error_message = str(e)
             run.completed_at = datetime.now(timezone.utc)
             self.db.commit()
+
+            if wb_enabled and wb_run is not None:
+                try:
+                    wb_run.log({"fatal_error": str(e)})
+                    wb_run.finish(exit_code=1)
+                except Exception:
+                    pass
     
     def _evaluate_question(
         self,
@@ -180,6 +426,20 @@ class RagasEvaluationService:
         
         # Get evaluation model from config if provided
         evaluation_model = config.get("evaluation_model") if config else None
+        
+        # DEBUG: Log evaluation model source
+        print(
+            f"[RAGAS DEBUG] evaluate_with_ragas - input_data.evaluation_model: {evaluation_model}",
+            flush=True
+        )
+        
+        # If no evaluation model specified, use course LLM model as fallback
+        if not evaluation_model:
+            evaluation_model = f"{course_settings.llm_provider}/{course_settings.llm_model}"
+            print(
+                f"[RAGAS DEBUG] No evaluation_model in config, using course LLM: {evaluation_model}",
+                flush=True
+            )
         
         # Get embedding for the question
         from app.services.embedding_service import EmbeddingService
@@ -318,9 +578,15 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             "retrieved_contexts": retrieved_contexts,
         }
         
-        # Add evaluation_model if provided
+        # Add evaluation_model if provided - RAGAS service zaten modeli kullanıyor, mapping gereksiz!
         if evaluation_model:
             payload["evaluation_model"] = evaluation_model
+            
+            # DEBUG: Log the model being sent
+            print(
+                f"[RAGAS DEBUG] Sending evaluation_model to RAGAS service: {evaluation_model}",
+                flush=True
+            )
         
         # Add reranker metadata if provided
         if reranker_provider:

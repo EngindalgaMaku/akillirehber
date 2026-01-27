@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { api, EvaluationRunDetail } from "@/lib/api";
@@ -37,6 +37,9 @@ export default function RunResultsPage() {
   const [isFixing, setIsFixing] = useState(false);
   const [expandedResults, setExpandedResults] = useState<Set<number>>(new Set());
 
+  const sseAbortRef = useRef<AbortController | null>(null);
+  const sseRunningRef = useRef(false);
+
   const loadRun = useCallback(async () => {
     try {
       const data = await api.getEvaluationRun(Number(id));
@@ -53,9 +56,124 @@ export default function RunResultsPage() {
     loadRun();
   }, [loadRun]);
 
+  // Live SSE stream for running evaluations (preferred)
+  useEffect(() => {
+    if (!run) return;
+    if (run.status !== "running" && run.status !== "pending") return;
+    if (sseRunningRef.current) return;
+
+    const token = localStorage.getItem("akilli_rehber_token");
+    if (!token) return;
+
+    sseRunningRef.current = true;
+    const abort = new AbortController();
+    sseAbortRef.current = abort;
+
+    const start = async () => {
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const res = await fetch(`${baseUrl}/api/ragas/runs/${run.id}/stream`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "text/event-stream",
+          },
+          signal: abort.signal,
+        });
+
+        if (!res.ok) {
+          throw new Error(`Stream failed (${res.status})`);
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) {
+          throw new Error("No stream reader available");
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6);
+
+            try {
+              const data = JSON.parse(payload);
+              if (data.event === "status") {
+                setRun((prev) => {
+                  if (!prev) return prev;
+                  return {
+                    ...prev,
+                    status: data.status ?? prev.status,
+                    total_questions: data.total_questions ?? prev.total_questions,
+                    processed_questions:
+                      data.processed_questions ?? prev.processed_questions,
+                    error_message: data.error_message ?? prev.error_message,
+                    wandb_run_url: data.wandb_run_url ?? prev.wandb_run_url,
+                    wandb_run_id: data.wandb_run_id ?? prev.wandb_run_id,
+                  } as EvaluationRunDetail;
+                });
+              } else if (data.event === "result") {
+                const result = data.result;
+                if (!result?.id) continue;
+
+                setRun((prev) => {
+                  if (!prev) return prev;
+                  const exists = prev.results.some((r) => r.id === result.id);
+                  if (exists) return prev;
+
+                  const nextResults = [...prev.results, result].sort(
+                    (a, b) => a.id - b.id
+                  );
+                  return { ...prev, results: nextResults } as EvaluationRunDetail;
+                });
+              } else if (data.event === "complete") {
+                setRun((prev) => {
+                  if (!prev) return prev;
+                  return {
+                    ...prev,
+                    status: data.status ?? prev.status,
+                  } as EvaluationRunDetail;
+                });
+                break;
+              } else if (data.event === "error") {
+                break;
+              }
+            } catch {
+              // ignore malformed chunk
+            }
+          }
+        }
+      } catch {
+        // SSE is best-effort; polling will keep UI updated.
+      } finally {
+        sseRunningRef.current = false;
+        sseAbortRef.current = null;
+      }
+    };
+
+    start();
+
+    return () => {
+      abort.abort();
+      sseRunningRef.current = false;
+      sseAbortRef.current = null;
+    };
+  }, [run]);
+
   // Auto-refresh for running evaluations
   useEffect(() => {
-    if (!run || run.status !== "running") return;
+    if (!run) return;
+    if (run.status !== "running" && run.status !== "pending") return;
 
     const interval = setInterval(() => {
       loadRun();
@@ -442,6 +560,18 @@ export default function RunResultsPage() {
         description={`${run.total_questions} soru değerlendirildi`}
       >
         <div className="flex items-center gap-2">
+          {run.wandb_run_url && (
+            <a
+              href={run.wandb_run_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex"
+            >
+              <Button variant="outline" size="sm">
+                W&B
+              </Button>
+            </a>
+          )}
           {/* Fix Summary Button - show if there might be issues or mismatch */}
           {run.summary && (
             run.summary.failed_questions !== 0 ||

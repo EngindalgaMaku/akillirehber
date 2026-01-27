@@ -9,6 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -64,6 +71,10 @@ export default function TestSetEditorPage() {
   const [courseSettings, setCourseSettings] = useState<any>(null);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
 
+  const [testDatasets, setTestDatasets] = useState<any[]>([]);
+  const [selectedDataset, setSelectedDataset] = useState<string>("");
+  const [isDatasetsLoading, setIsDatasetsLoading] = useState(false);
+
   const toggleQuestionSelection = (questionId: number) => {
     const newSelected = new Set(selectedQuestions);
     if (newSelected.has(questionId)) {
@@ -99,8 +110,13 @@ export default function TestSetEditorPage() {
     setIsLoadingRun(true);
     try {
       const runs = await api.getEvaluationRuns(testSet.course_id, testSet.id);
-      // Her test setinin sadece 1 run'ı olabilir
-      setEvaluationRun(runs.length > 0 ? runs[0] : null);
+      const latestRun = [...runs].sort((a, b) => {
+        const at = a.created_at ? Date.parse(a.created_at) : 0;
+        const bt = b.created_at ? Date.parse(b.created_at) : 0;
+        if (bt !== at) return bt - at;
+        return (b.id ?? 0) - (a.id ?? 0);
+      })[0];
+      setEvaluationRun(latestRun ?? null);
     } catch {
       console.error("Değerlendirme yüklenirken hata oluştu");
     } finally {
@@ -121,6 +137,19 @@ export default function TestSetEditorPage() {
     }
   }, [testSet]);
 
+  const loadTestDatasets = useCallback(async () => {
+    if (!testSet) return;
+    setIsDatasetsLoading(true);
+    try {
+      const data = await api.getTestDatasets(testSet.course_id);
+      setTestDatasets(data.datasets);
+    } catch {
+      console.error("Test veri setleri yüklenirken hata oluştu");
+    } finally {
+      setIsDatasetsLoading(false);
+    }
+  }, [testSet]);
+
   useEffect(() => {
     loadTestSet();
   }, [loadTestSet]);
@@ -129,8 +158,22 @@ export default function TestSetEditorPage() {
     if (testSet) {
       loadEvaluationRun();
       loadCourseSettings();
+      loadTestDatasets();
     }
-  }, [testSet, loadEvaluationRun, loadCourseSettings]);
+  }, [testSet, loadEvaluationRun, loadCourseSettings, loadTestDatasets]);
+
+  const handleLoadDataset = async (datasetId: string) => {
+    if (!datasetId) return;
+    try {
+      const dataset = await api.getTestDataset(parseInt(datasetId));
+      setImportJson(JSON.stringify(dataset.test_cases, null, 2));
+      setSelectedDataset(datasetId);
+      toast.success(`"${dataset.name}" veri seti yüklendi`);
+    } catch (error) {
+      console.error("Load dataset error:", error);
+      toast.error(error instanceof Error ? error.message : "Veri seti yüklenemedi");
+    }
+  };
 
   const handleAddQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -705,6 +748,33 @@ export default function TestSetEditorPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="flex-1 overflow-y-auto py-4">
+              <div className="mb-3">
+                <Label>Kayıtlı Veri Setleri (Opsiyonel)</Label>
+                <Select
+                  value={selectedDataset}
+                  onValueChange={handleLoadDataset}
+                  disabled={isDatasetsLoading || testDatasets.length === 0}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue
+                      placeholder={
+                        isDatasetsLoading
+                          ? "Yükleniyor..."
+                          : testDatasets.length === 0
+                            ? "Kayıtlı veri seti yok"
+                            : "Kayıtlı veri seti seçin..."
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {testDatasets.map((dataset) => (
+                      <SelectItem key={dataset.id} value={dataset.id.toString()}>
+                        {dataset.name} ({dataset.total_test_cases} soru)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <Textarea
                 value={importJson}
                 onChange={(e) => setImportJson(e.target.value)}

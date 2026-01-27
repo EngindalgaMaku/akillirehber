@@ -1,24 +1,28 @@
 """RAGAS Evaluation API endpoints."""
 
+import asyncio
+import json
 import logging
+import os
 from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-logger = logging.getLogger(__name__)
+from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.db_models import (
     User, TestSet, TestQuestion, EvaluationRun,
     EvaluationResult, RunSummary, QuickTestResult
 )
 from app.models.schemas import (
-    TestSetCreate, TestSetUpdate, TestSetResponse, TestSetDetailResponse,
+    TestSetCreate, TestSetUpdate, TestSetResponse,
+    TestSetDetailResponse,
     TestQuestionCreate, TestQuestionUpdate, TestQuestionResponse,
-    TestSetImport, TestSetExport,
     EvaluationRunCreate, EvaluationRunResponse, EvaluationRunDetailResponse,
     EvaluationResultResponse, RunSummaryResponse,
     RunComparisonRequest, RunComparisonResponse,
@@ -26,10 +30,55 @@ from app.models.schemas import (
     QuickTestResultCreate, QuickTestResultResponse, QuickTestResultListResponse,
 )
 from app.services.auth_service import get_current_user, get_current_teacher
-from app.services.course_service import verify_course_access
+from app.services.course_service import verify_course_access, get_or_create_settings
 from app.services.ragas_service import RagasEvaluationService
 
+try:
+    import wandb  # type: ignore
+except Exception:  # pragma: no cover
+    wandb = None
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/ragas", tags=["ragas"])
+
+
+def _run_evaluation_background(run_id: int) -> None:
+    db = SessionLocal()
+    try:
+        service = RagasEvaluationService(db)
+        service.run_evaluation(run_id)
+    except Exception:
+        logger.exception("RAGAS background evaluation failed (run_id=%s)", run_id)
+    finally:
+        db.close()
+
+
+def _run_evaluation_for_questions_background(run_id: int, question_ids: List[int]) -> None:
+    db = SessionLocal()
+    try:
+        service = RagasEvaluationService(db)
+        service.run_evaluation_for_questions(run_id, question_ids)
+    except Exception:
+        logger.exception(
+            "RAGAS background evaluation failed (run_id=%s, question_ids=%s)",
+            run_id,
+            question_ids,
+        )
+    finally:
+        db.close()
+
+
+class RagasWandbExportRequest(BaseModel):
+    course_id: int
+    run_id: int
+
+
+class RagasWandbRunUpdateRequest(BaseModel):
+    run_id: str
+    course_id: int
+    evaluation_run_id: int
+    tags: Optional[List[str]] = None
 
 
 # ==================== Test Set Endpoints ====================
@@ -252,7 +301,7 @@ async def duplicate_test_set(
 @router.post("/test-sets/{test_set_id}/import", response_model=TestSetDetailResponse)
 async def import_questions(
     test_set_id: int,
-    data: TestSetImport,
+    data: dict,
     current_user: User = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
@@ -262,15 +311,33 @@ async def import_questions(
         raise HTTPException(status_code=404, detail="Test set not found")
     
     verify_course_access(db, test_set.course_id, current_user)
-    
-    for q_data in data.questions:
+
+    questions = None
+    if isinstance(data, dict):
+        questions = data.get("test_cases")
+        if questions is None:
+            questions = data.get("questions")
+    if not isinstance(questions, list):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid payload: 'test_cases' must be a list",
+        )
+
+    for q_data in questions:
+        if not isinstance(q_data, dict):
+            continue
+        question_text = q_data.get("question")
+        ground_truth = q_data.get("ground_truth")
+        if not question_text or not ground_truth:
+            continue
+
         question = TestQuestion(
             test_set_id=test_set_id,
-            question=q_data.question,
-            ground_truth=q_data.ground_truth,
-            alternative_ground_truths=q_data.alternative_ground_truths,
-            expected_contexts=q_data.expected_contexts,
-            question_metadata=q_data.question_metadata,
+            question=question_text,
+            ground_truth=ground_truth,
+            alternative_ground_truths=q_data.get("alternative_ground_truths"),
+            expected_contexts=q_data.get("expected_contexts"),
+            question_metadata=q_data.get("question_metadata"),
         )
         db.add(question)
     
@@ -280,7 +347,7 @@ async def import_questions(
     return await get_test_set(test_set_id, current_user, db)
 
 
-@router.get("/test-sets/{test_set_id}/export", response_model=TestSetExport)
+@router.get("/test-sets/{test_set_id}/export")
 async def export_test_set(
     test_set_id: int,
     current_user: User = Depends(get_current_user),
@@ -297,17 +364,24 @@ async def export_test_set(
         TestQuestion.test_set_id == test_set_id
     ).all()
     
-    return TestSetExport(
-        name=test_set.name,
-        description=test_set.description,
-        questions=[{
+    test_cases = [
+        {
             "question": q.question,
             "ground_truth": q.ground_truth,
             "alternative_ground_truths": q.alternative_ground_truths,
             "expected_contexts": q.expected_contexts,
             "question_metadata": q.question_metadata,
-        } for q in questions],
-    )
+        }
+        for q in questions
+    ]
+
+    return {
+        "name": test_set.name,
+        "description": test_set.description,
+        "test_cases": test_cases,
+        # Backward-compatible alias
+        "questions": test_cases,
+    }
 
 
 # ==================== Question Endpoints ====================
@@ -410,7 +484,6 @@ async def delete_question(
     return None
 
 
-
 # ==================== Evaluation Endpoints ====================
 
 @router.post("/evaluate", response_model=EvaluationRunResponse)
@@ -422,7 +495,7 @@ async def start_evaluation(
 ):
     """Start a new evaluation run or add to existing run."""
     # DEBUG: Log incoming request
-    logger.info(f"[SELECTIVE EVAL DEBUG] Received evaluation request:")
+    logger.info("[SELECTIVE EVAL DEBUG] Received evaluation request:")
     logger.info(f"[SELECTIVE EVAL DEBUG] - test_set_id: {data.test_set_id}")
     logger.info(f"[SELECTIVE EVAL DEBUG] - course_id: {data.course_id}")
     logger.info(f"[SELECTIVE EVAL DEBUG] - question_ids: {data.question_ids}")
@@ -492,11 +565,10 @@ async def start_evaluation(
             logger.info(f"[SELECTIVE EVAL DEBUG] Updated run {existing_run.id} status to: {existing_run.status}")
             
             # Start background evaluation for questions only
-            ragas_service = RagasEvaluationService(db)
             background_tasks.add_task(
-                ragas_service.run_evaluation_for_questions, 
-                existing_run.id, 
-                new_question_ids
+                _run_evaluation_for_questions_background,
+                existing_run.id,
+                new_question_ids,
             )
             
             return EvaluationRunResponse(
@@ -530,6 +602,8 @@ async def start_evaluation(
     
     # Build config with evaluation_model and question_ids if provided
     run_config = data.config.model_dump() if data.config else {}
+    if data.evaluation_provider:
+        run_config["evaluation_provider"] = data.evaluation_provider
     if data.evaluation_model:
         run_config["evaluation_model"] = data.evaluation_model
     if data.question_ids:
@@ -554,8 +628,7 @@ async def start_evaluation(
     logger.info(f"[SELECTIVE EVAL DEBUG] Created run {run.id} with config: {run.config}")
     
     # Start background evaluation
-    ragas_service = RagasEvaluationService(db)
-    background_tasks.add_task(ragas_service.run_evaluation, run.id)
+    background_tasks.add_task(_run_evaluation_background, run.id)
     
     return EvaluationRunResponse(
         id=run.id,
@@ -716,7 +789,135 @@ async def get_run_status(
         "total_questions": run.total_questions,
         "processed_questions": run.processed_questions,
         "error_message": run.error_message,
+        "wandb_run_url": (run.config or {}).get("wandb_run_url"),
+        "wandb_run_id": (run.config or {}).get("wandb_run_id"),
     }
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_run_progress(
+    run_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream evaluation progress and results (Server-Sent Events).
+
+    This endpoint is designed for UI live updates during an active run.
+    It polls DB for new EvaluationResult rows and pushes them as SSE events.
+    """
+
+    run = db.query(EvaluationRun).filter(EvaluationRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    verify_course_access(db, run.course_id, current_user)
+
+    async def generate():
+        last_result_id: int = 0
+        last_status: Optional[str] = None
+        last_processed: Optional[int] = None
+
+        while True:
+            db.expire_all()
+            current_run = (
+                db.query(EvaluationRun)
+                .filter(EvaluationRun.id == run_id)
+                .first()
+            )
+            if not current_run:
+                payload = {"event": "error", "error": "Run not found"}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                return
+
+            # Send status/progress changes
+            if (
+                current_run.status != last_status
+                or current_run.processed_questions != last_processed
+            ):
+                last_status = current_run.status
+                last_processed = current_run.processed_questions
+                payload = {
+                    "event": "status",
+                    "run_id": current_run.id,
+                    "status": current_run.status,
+                    "total_questions": current_run.total_questions,
+                    "processed_questions": current_run.processed_questions,
+                    "error_message": current_run.error_message,
+                    "wandb_run_url": (current_run.config or {}).get(
+                        "wandb_run_url"
+                    ),
+                    "wandb_run_id": (current_run.config or {}).get(
+                        "wandb_run_id"
+                    ),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            # Send new results
+            new_results = (
+                db.query(EvaluationResult)
+                .filter(
+                    EvaluationResult.run_id == run_id,
+                    EvaluationResult.id > last_result_id,
+                )
+                .order_by(EvaluationResult.id.asc())
+                .all()
+            )
+
+            for r in new_results:
+                last_result_id = max(last_result_id, r.id)
+                payload = {
+                    "event": "result",
+                    "result": {
+                        "id": r.id,
+                        "run_id": r.run_id,
+                        "question_id": r.question_id,
+                        "question_text": r.question_text,
+                        "ground_truth_text": r.ground_truth_text,
+                        "generated_answer": r.generated_answer,
+                        "retrieved_contexts": r.retrieved_contexts,
+                        "faithfulness": r.faithfulness,
+                        "answer_relevancy": r.answer_relevancy,
+                        "context_precision": r.context_precision,
+                        "context_recall": r.context_recall,
+                        "answer_correctness": r.answer_correctness,
+                        "latency_ms": r.latency_ms,
+                        "llm_provider": r.llm_provider,
+                        "llm_model": r.llm_model,
+                        "embedding_model": r.embedding_model,
+                        "evaluation_model": r.evaluation_model,
+                        "search_alpha": r.search_alpha,
+                        "search_top_k": r.search_top_k,
+                        "error_message": r.error_message,
+                        "created_at": (
+                            r.created_at.isoformat()
+                            if r.created_at
+                            else None
+                        ),
+                    },
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            # Stop once run finished and there are no new results to send.
+            if current_run.status in ["completed", "failed", "cancelled"]:
+                if not new_results:
+                    payload = {
+                        "event": "complete",
+                        "run_id": current_run.id,
+                        "status": current_run.status,
+                    }
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    return
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -787,6 +988,353 @@ async def compare_runs(
             ))
     
     return RunComparisonResponse(runs=runs, summaries=summaries)
+
+
+@router.post("/wandb-export")
+async def wandb_export_run(
+    data: RagasWandbExportRequest,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Export an evaluation run to Weights & Biases."""
+    verify_course_access(db, data.course_id, current_user)
+
+    wb_project = os.getenv("WANDB_PROJECT")
+    wb_mode = os.getenv("WANDB_MODE")
+    wb_has_key = bool(os.getenv("WANDB_API_KEY"))
+    if wandb is None or not wb_project or (not wb_has_key and wb_mode != "offline"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "W&B is not configured. Set WANDB_PROJECT and WANDB_API_KEY "
+                "(or WANDB_MODE=offline)."
+            ),
+        )
+
+    run = db.query(EvaluationRun).filter(EvaluationRun.id == data.run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.course_id != data.course_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    results = (
+        db.query(EvaluationResult)
+        .filter(EvaluationResult.run_id == run.id)
+        .order_by(EvaluationResult.id.asc())
+        .all()
+    )
+    if not results:
+        raise HTTPException(status_code=404, detail="No results found for run")
+
+    summary = db.query(RunSummary).filter(RunSummary.run_id == run.id).first()
+    test_set = db.query(TestSet).filter(TestSet.id == run.test_set_id).first()
+    course_settings = get_or_create_settings(db, data.course_id)
+
+    sample = next(
+        (
+            r
+            for r in results
+            if r.llm_model or r.embedding_model or r.evaluation_model
+        ),
+        results[0],
+    )
+
+    wb_entity = os.getenv("WANDB_ENTITY")
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    run_name = (
+        f"ragas-{data.course_id}-{run.test_set_id}-{run.id}-{timestamp}"
+    )
+
+    wb_run = wandb.init(
+        project=wb_project,
+        entity=wb_entity,
+        name=run_name,
+        config={
+            "course_id": data.course_id,
+            "evaluation_run_id": run.id,
+            "test_set_id": run.test_set_id,
+            "test_set_name": test_set.name if test_set else None,
+            "run_name": run.name,
+            # Generation (RAG) models
+            "generation_llm_provider": sample.llm_provider,
+            "generation_llm_model": sample.llm_model,
+            "embedding_model": sample.embedding_model,
+            # Evaluation (RAGAS) models
+            "evaluation_llm_provider": (run.config or {}).get("evaluation_provider"),
+            "evaluation_llm_model": sample.evaluation_model,
+            "search_alpha": sample.search_alpha or course_settings.search_alpha,
+            "search_top_k": sample.search_top_k or course_settings.search_top_k,
+            "min_relevance_score": course_settings.min_relevance_score,
+            "total_questions": run.total_questions,
+        },
+        tags=["RAGAS", "ragas", "evaluation"],
+    )
+
+    table = wandb.Table(
+        columns=[
+            "id",
+            "question_id",
+            "question",
+            "ground_truth",
+            "generated_answer",
+            "contexts_count",
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
+            "context_recall",
+            "answer_correctness",
+            "latency_ms",
+            "error_message",
+            "created_at",
+        ]
+    )
+
+    for r in results:
+        table.add_data(
+            r.id,
+            r.question_id,
+            r.question_text,
+            r.ground_truth_text,
+            r.generated_answer,
+            len(r.retrieved_contexts) if r.retrieved_contexts else 0,
+            r.faithfulness,
+            r.answer_relevancy,
+            r.context_precision,
+            r.context_recall,
+            r.answer_correctness,
+            r.latency_ms,
+            r.error_message,
+            r.created_at.isoformat() if r.created_at else None,
+        )
+
+    payload = {
+        "results": table,
+        "test_count": len(results),
+    }
+    if summary:
+        payload.update(
+            {
+                "aggregate/avg_faithfulness": summary.avg_faithfulness,
+                "aggregate/avg_answer_relevancy": summary.avg_answer_relevancy,
+                "aggregate/avg_context_precision": summary.avg_context_precision,
+                "aggregate/avg_context_recall": summary.avg_context_recall,
+                "aggregate/avg_answer_correctness": summary.avg_answer_correctness,
+                "aggregate/avg_latency_ms": summary.avg_latency_ms,
+                "aggregate/successful_questions": summary.successful_questions,
+                "aggregate/failed_questions": summary.failed_questions,
+            }
+        )
+    wandb.log(payload)
+
+    run_url = getattr(wb_run, "url", None)
+    wb_run.finish()
+    return {
+        "success": True,
+        "run_name": run_name,
+        "run_url": run_url,
+        "exported_count": len(results),
+    }
+
+
+@router.get("/wandb-runs")
+async def list_wandb_runs(
+    course_id: int,
+    page: int = 1,
+    limit: int = 25,
+    search: Optional[str] = None,
+    state: Optional[str] = None,
+    tag: Optional[str] = None,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """List W&B runs for the project with server-side pagination and filtering."""
+    verify_course_access(db, course_id, current_user)
+
+    wb_project = os.getenv("WANDB_PROJECT")
+    wb_entity = os.getenv("WANDB_ENTITY")
+    wb_has_key = bool(os.getenv("WANDB_API_KEY"))
+    if wandb is None or not wb_project or not wb_has_key:
+        raise HTTPException(
+            status_code=400,
+            detail="W&B is not configured. Set WANDB_PROJECT and WANDB_API_KEY.",
+        )
+
+    try:
+        api = wandb.Api()
+        runs_path = f"{wb_entity}/{wb_project}" if wb_entity else wb_project
+
+        filters = {}
+        if state and state != "all":
+            filters["state"] = state
+
+        runs = api.runs(
+            path=runs_path,
+            filters=filters,
+            per_page=limit * 5,
+        )
+
+        all_filtered_runs = []
+        for r in runs:
+            cfg = r.config or {}
+
+            if cfg.get("course_id") and cfg.get("course_id") != course_id:
+                continue
+
+            if search:
+                search_lower = search.lower()
+                if (
+                    search_lower not in r.name.lower()
+                    and search_lower not in r.id.lower()
+                    and (
+                        cfg.get("evaluation_run_id")
+                        and search_lower
+                        not in str(cfg.get("evaluation_run_id")).lower()
+                    )
+                ):
+                    continue
+
+            if tag:
+                tags = getattr(r, "tags", [])
+                tag_lower = tag.lower()
+                if not any(tag_lower in t.lower() for t in tags):
+                    continue
+
+            missing = []
+            if not cfg.get("evaluation_run_id"):
+                missing.append("evaluation_run_id")
+            if not cfg.get("test_set_id"):
+                missing.append("test_set_id")
+            if not cfg.get("evaluation_model"):
+                missing.append("evaluation_model")
+
+            tags = getattr(r, "tags", [])
+            all_filtered_runs.append(
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "state": r.state,
+                    "created_at": r.created_at,
+                    "config": {**cfg, "tags": tags},
+                    "missing_fields": missing,
+                }
+            )
+
+        all_filtered_runs.sort(
+            key=lambda x: x.get("created_at") or "",
+            reverse=True,
+        )
+
+        total_items = len(all_filtered_runs)
+        total_pages = (total_items + limit - 1) // limit
+
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        paginated_result = all_filtered_runs[start_idx:end_idx]
+
+        return {
+            "runs": paginated_result,
+            "pagination": {
+                "currentPage": page,
+                "totalPages": total_pages,
+                "totalItems": total_items,
+                "itemsPerPage": limit,
+            },
+        }
+
+    except Exception as e:
+        logger.error("Error fetching W&B runs: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch W&B runs: {str(e)}",
+        )
+
+
+@router.post("/wandb-runs/update")
+async def update_wandb_run(
+    data: RagasWandbRunUpdateRequest,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Update a W&B run's missing config fields using DB values for an evaluation run."""
+    verify_course_access(db, data.course_id, current_user)
+
+    wb_project = os.getenv("WANDB_PROJECT")
+    wb_entity = os.getenv("WANDB_ENTITY")
+    wb_has_key = bool(os.getenv("WANDB_API_KEY"))
+    if wandb is None or not wb_project or not wb_has_key:
+        raise HTTPException(
+            status_code=400,
+            detail="W&B is not configured. Set WANDB_PROJECT and WANDB_API_KEY.",
+        )
+
+    eval_run = (
+        db.query(EvaluationRun)
+        .filter(EvaluationRun.id == data.evaluation_run_id)
+        .first()
+    )
+    if not eval_run:
+        raise HTTPException(status_code=404, detail="Evaluation run not found")
+    if eval_run.course_id != data.course_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    sample = (
+        db.query(EvaluationResult)
+        .filter(EvaluationResult.run_id == eval_run.id)
+        .order_by(EvaluationResult.id.asc())
+        .first()
+    )
+
+    api = wandb.Api()
+    runs_path = f"{wb_entity}/{wb_project}" if wb_entity else wb_project
+    try:
+        wb_run = api.run(f"{runs_path}/{data.run_id}")
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="W&B run not found.") from e
+
+    cfg = wb_run.config or {}
+    updated = []
+
+    if data.tags is not None:
+        cfg["tags"] = data.tags
+        updated.append("tags")
+
+    if not cfg.get("course_id"):
+        cfg["course_id"] = data.course_id
+        updated.append("course_id")
+
+    if not cfg.get("evaluation_run_id"):
+        cfg["evaluation_run_id"] = eval_run.id
+        updated.append("evaluation_run_id")
+
+    if not cfg.get("test_set_id"):
+        cfg["test_set_id"] = eval_run.test_set_id
+        updated.append("test_set_id")
+
+    if sample:
+        if not cfg.get("evaluation_model") and sample.evaluation_model:
+            cfg["evaluation_model"] = sample.evaluation_model
+            updated.append("evaluation_model")
+        if not cfg.get("llm_provider") and sample.llm_provider:
+            cfg["llm_provider"] = sample.llm_provider
+            updated.append("llm_provider")
+        if not cfg.get("llm_model") and sample.llm_model:
+            cfg["llm_model"] = sample.llm_model
+            updated.append("llm_model")
+        if not cfg.get("embedding_model") and sample.embedding_model:
+            cfg["embedding_model"] = sample.embedding_model
+            updated.append("embedding_model")
+
+    if not updated:
+        return {"success": False, "message": "No fields needed update."}
+
+    wb_run.config.update(cfg)
+    wb_run.save()
+
+    return {
+        "success": True,
+        "updated_fields": updated,
+        "run_name": wb_run.name,
+    }
 
 
 # ==================== RAGAS Settings Proxy ====================
@@ -930,6 +1478,14 @@ async def quick_test(
                     "score": result.score
                 })
                 context_texts.append(content)
+
+        logger.info(
+            "[RAGAS QUICK TEST] Retrieved contexts: %s (search_results=%s, min_score=%s, top_k=%s)",
+            len(context_texts),
+            len(search_results) if search_results else 0,
+            getattr(course_settings, 'min_relevance_score', 0.0) or 0.0,
+            course_settings.search_top_k,
+        )
         
         # Build context for LLM
         context_text = "\n\n---\n\n".join(context_texts) if context_texts else ""
@@ -952,6 +1508,13 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ])
+
+        logger.info(
+            "[RAGAS QUICK TEST] Generated answer length: %s (provider=%s, model=%s)",
+            len(generated_answer) if generated_answer else 0,
+            llm_provider,
+            llm_model,
+        )
         
         # Prepare ground truths (combine primary + alternatives)
         ground_truths = [data.ground_truth]
@@ -972,6 +1535,12 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             context_texts,
             llm_model  # RAGAS değerlendirmesi için de aynı modeli kullan
         )
+
+        logger.info(
+            "[RAGAS QUICK TEST] Metrics keys: %s | error=%s",
+            list(metrics.keys()) if isinstance(metrics, dict) else type(metrics),
+            metrics.get("error") if isinstance(metrics, dict) else None,
+        )
         
         latency_ms = int((time.time() - start_time) * 1000)
         
@@ -989,6 +1558,9 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             system_prompt_used=system_prompt,
             llm_provider_used=llm_provider,
             llm_model_used=llm_model,
+            reranker_used=False,
+            reranker_provider=None,
+            reranker_model=None,
         )
         
     except Exception as e:
@@ -1076,53 +1648,60 @@ async def list_quick_test_results(
     db: Session = Depends(get_db),
 ):
     """List saved quick test results for a course with pagination."""
-    verify_course_access(db, course_id, current_user)
-    
-    query = db.query(QuickTestResult).filter(
-        QuickTestResult.course_id == course_id
-    )
-    
-    if group_name:
-        query = query.filter(QuickTestResult.group_name == group_name)
-    
-    # Get total count before pagination
-    total_count = query.count()
-    
-    # Apply pagination
-    results = query.order_by(QuickTestResult.created_at.desc()).offset(skip).limit(limit).all()
-    
-    # Get unique group names
-    groups_query = db.query(QuickTestResult.group_name).filter(
-        QuickTestResult.course_id == course_id,
-        QuickTestResult.group_name.isnot(None)
-    ).distinct().all()
-    groups = [g[0] for g in groups_query if g[0]]
-    
-    return QuickTestResultListResponse(
-        results=[QuickTestResultResponse(
-            id=r.id,
-            course_id=r.course_id,
-            group_name=r.group_name,
-            question=r.question,
-            ground_truth=r.ground_truth,
-            alternative_ground_truths=r.alternative_ground_truths,
-            system_prompt=r.system_prompt,
-            llm_provider=r.llm_provider,
-            llm_model=r.llm_model,
-            generated_answer=r.generated_answer,
-            retrieved_contexts=r.retrieved_contexts,
-            faithfulness=r.faithfulness,
-            answer_relevancy=r.answer_relevancy,
-            context_precision=r.context_precision,
-            context_recall=r.context_recall,
-            answer_correctness=r.answer_correctness,
-            latency_ms=r.latency_ms,
-            created_by=r.created_by,
-            created_at=r.created_at,
-        ) for r in results],
-        total=total_count,
-        groups=groups,
-    )
+    try:
+        verify_course_access(db, course_id, current_user)
+        
+        query = db.query(QuickTestResult).filter(
+            QuickTestResult.course_id == course_id
+        )
+        
+        if group_name:
+            query = query.filter(QuickTestResult.group_name == group_name)
+        
+        # Get total count before pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        results = query.order_by(QuickTestResult.created_at.desc()).offset(skip).limit(limit).all()
+        
+        # Get unique group names
+        groups_query = db.query(QuickTestResult.group_name).filter(
+            QuickTestResult.course_id == course_id,
+            QuickTestResult.group_name.isnot(None)
+        ).distinct().all()
+        groups = [g[0] for g in groups_query if g[0]]
+        
+        return QuickTestResultListResponse(
+            results=[QuickTestResultResponse(
+                id=r.id,
+                course_id=r.course_id,
+                group_name=r.group_name,
+                question=r.question,
+                ground_truth=r.ground_truth,
+                alternative_ground_truths=r.alternative_ground_truths,
+                system_prompt=r.system_prompt,
+                llm_provider=r.llm_provider,
+                llm_model=r.llm_model,
+                generated_answer=r.generated_answer,
+                retrieved_contexts=r.retrieved_contexts,
+                faithfulness=r.faithfulness,
+                answer_relevancy=r.answer_relevancy,
+                context_precision=r.context_precision,
+                context_recall=r.context_recall,
+                answer_correctness=r.answer_correctness,
+                latency_ms=r.latency_ms,
+                created_by=r.created_by,
+                created_at=r.created_at,
+                reranker_used=False,
+                reranker_provider=None,
+                reranker_model=None,
+            ) for r in results],
+            total=total_count,
+            groups=groups,
+        )
+    except Exception as e:
+        logger.error(f"Error listing quick test results: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get(
@@ -1164,6 +1743,9 @@ async def get_quick_test_result(
         latency_ms=result.latency_ms,
         created_by=result.created_by,
         created_at=result.created_at,
+        reranker_used=False,
+        reranker_provider=None,
+        reranker_model=None,
     )
 
 
@@ -1189,6 +1771,447 @@ async def delete_quick_test_result(
     db.delete(result)
     db.commit()
     return None
+
+
+# ==================== Batch Test Streaming Endpoint ====================
+
+class BatchTestStreamRequest(BaseModel):
+    course_id: int
+    test_cases: List[dict]
+    group_name: str
+    enable_wandb: bool = True
+
+
+@router.post("/quick-test-results/batch-stream")
+async def batch_test_stream(
+    data: BatchTestStreamRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream batch RAGAS test results with W&B logging."""
+    verify_course_access(db, data.course_id, current_user)
+    course_settings = get_or_create_settings(db, data.course_id)
+
+    async def generate():
+        try:
+            import time
+            from app.services.weaviate_service import WeaviateService
+            from app.services.embedding_service import EmbeddingService
+            from app.services.llm_service import LLMService
+            
+            # Services
+            ragas_service = RagasEvaluationService(db)
+            
+            # RAGAS Ayarlarından evaluation model'i al (W&B init'ten ÖNCE!)
+            evaluation_model_for_batch = None
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as http_client:
+                    ragas_settings_response = await http_client.get(f"{ragas_service.ragas_url}/settings")
+                    if ragas_settings_response.status_code == 200:
+                        ragas_settings_data = ragas_settings_response.json()
+                        evaluation_model_for_batch = ragas_settings_data.get("current_model")
+                        logger.info(f"[BATCH TEST] Using evaluation model from RAGAS settings: {evaluation_model_for_batch}")
+                    else:
+                        logger.warning("[BATCH TEST] Could not fetch RAGAS settings, will use default")
+            except Exception as e:
+                logger.warning(f"[BATCH TEST] Error fetching RAGAS settings: {e}")
+            
+            # W&B Setup
+            wb_run = None
+            wb_table = None
+            wb_enabled = False
+            
+            if data.enable_wandb:
+                wb_project = os.getenv("WANDB_PROJECT")
+                wb_mode = os.getenv("WANDB_MODE")
+                wb_has_key = bool(os.getenv("WANDB_API_KEY"))
+                
+                if wandb is not None and (wb_has_key or wb_mode == "offline"):
+                    wb_enabled = True
+                    wb_entity = os.getenv("WANDB_ENTITY")
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    
+                    system_prompt = course_settings.system_prompt or \
+                        "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+                    
+                    wb_run = wandb.init(
+                        project=wb_project,
+                        entity=wb_entity,
+                        name=f"ragas-batch-{data.course_id}-{data.group_name}-{timestamp}",
+                        config={
+                            "course_id": data.course_id,
+                            "group_name": data.group_name,
+                            # Generation LLM (cevap üretmek için - ders ayarlarından)
+                            "generation_llm_provider": course_settings.llm_provider,
+                            "generation_llm_model": course_settings.llm_model,
+                            "llm_model_used": course_settings.llm_model,  # Backward compatibility
+                            # Evaluation LLM (RAGAS metrikleri için - RAGAS ayarlarından)
+                            "evaluation_llm_model": evaluation_model_for_batch,
+                            "evaluation_model": evaluation_model_for_batch,  # Backward compatibility
+                            # Embedding & RAG settings
+                            "embedding_model": course_settings.default_embedding_model,
+                            "embedding_model_used": course_settings.default_embedding_model,
+                            "search_alpha": course_settings.search_alpha,
+                            "search_top_k": course_settings.search_top_k,
+                            "min_relevance_score": course_settings.min_relevance_score,
+                            # Reranker settings
+                            "reranker_used": course_settings.enable_reranker,
+                            "reranker_provider": course_settings.reranker_provider if course_settings.enable_reranker else None,
+                            "reranker_model": course_settings.reranker_model if course_settings.enable_reranker else None,
+                            # Test info
+                            "total_tests": len(data.test_cases),
+                            "system_prompt": system_prompt,
+                        },
+                        tags=["RAGAS", "batch", "ragas"],
+                    )
+                    
+                    # Metric'leri tanımla ki Charts'ta görünsün
+                    try:
+                        wandb.define_metric("test_index")
+                        wandb.define_metric("faithfulness", step_metric="test_index")
+                        wandb.define_metric("answer_relevancy", step_metric="test_index")
+                        wandb.define_metric("context_precision", step_metric="test_index")
+                        wandb.define_metric("context_recall", step_metric="test_index")
+                        wandb.define_metric("answer_correctness", step_metric="test_index")
+                        wandb.define_metric("latency_ms", step_metric="test_index")
+                        wandb.define_metric("contexts_count", step_metric="test_index")
+                    except Exception as e:
+                        logger.warning(f"W&B metric definition failed: {e}")
+                    
+                    wb_table = wandb.Table(
+                        columns=[
+                            "index",
+                            "question",
+                            "ground_truth",
+                            "generated_answer",
+                            "faithfulness",
+                            "answer_relevancy",
+                            "context_precision",
+                            "context_recall",
+                            "answer_correctness",
+                            "latency_ms",
+                            "contexts_count",
+                            "error_message",
+                        ]
+                    )
+            
+            # Metrics aggregation
+            sum_metrics = {
+                "faithfulness": 0.0,
+                "answer_relevancy": 0.0,
+                "context_precision": 0.0,
+                "context_recall": 0.0,
+                "answer_correctness": 0.0,
+            }
+            cnt_metrics = {
+                "faithfulness": 0,
+                "answer_relevancy": 0,
+                "context_precision": 0,
+                "context_recall": 0,
+                "answer_correctness": 0,
+            }
+            sum_latency = 0
+            cnt_latency = 0
+            
+            system_prompt = course_settings.system_prompt or \
+                "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+            
+            llm_provider = course_settings.llm_provider
+            llm_model = course_settings.llm_model
+            
+            # Get course
+            from app.models.db_models import Course
+            course = db.query(Course).filter(Course.id == data.course_id).first()
+            if not course:
+                raise HTTPException(status_code=404, detail="Course not found")
+            
+            # Services
+            embedding_service = EmbeddingService()
+            weaviate_service = WeaviateService()
+            llm_service = LLMService(
+                provider=llm_provider,
+                model=llm_model,
+                temperature=course_settings.llm_temperature,
+                max_tokens=course_settings.llm_max_tokens
+            )
+            ragas_service = RagasEvaluationService(db)
+            
+            # RAGAS Ayarlarından evaluation model'i al
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as http_client:
+                    ragas_settings_response = await http_client.get(f"{ragas_service.ragas_url}/settings")
+                    if ragas_settings_response.status_code == 200:
+                        ragas_settings_data = ragas_settings_response.json()
+                        evaluation_model_for_batch = ragas_settings_data.get("current_model")
+                        logger.info(f"[BATCH TEST] Using evaluation model from RAGAS settings: {evaluation_model_for_batch}")
+                    else:
+                        evaluation_model_for_batch = None
+                        logger.warning("[BATCH TEST] Could not fetch RAGAS settings, will use default")
+            except Exception as e:
+                evaluation_model_for_batch = None
+                logger.warning(f"[BATCH TEST] Error fetching RAGAS settings: {e}")
+            
+            # Process each test case
+            for idx, test_case in enumerate(data.test_cases):
+                try:
+                    start_time = time.time()
+                    
+                    question = test_case.get("question")
+                    ground_truth = test_case.get("ground_truth")
+                    alternative_ground_truths = test_case.get("alternative_ground_truths", [])
+                    
+                    # Get embedding
+                    query_vector = embedding_service.get_embedding(
+                        question,
+                        model=course_settings.default_embedding_model
+                    )
+                    
+                    # Search
+                    search_results = weaviate_service.hybrid_search(
+                        course_id=course.id,
+                        query=question,
+                        query_vector=query_vector,
+                        alpha=course_settings.search_alpha,
+                        limit=course_settings.search_top_k
+                    )
+                    
+                    # Filter by relevance
+                    min_score = getattr(course_settings, 'min_relevance_score', 0.0) or 0.0
+                    if min_score > 0 and search_results:
+                        search_results = [r for r in search_results if r.score >= min_score]
+                    
+                    # Extract contexts
+                    retrieved_contexts = []
+                    context_texts = []
+                    for result in search_results:
+                        content = result.content
+                        if content:
+                            retrieved_contexts.append({
+                                "text": content,
+                                "score": result.score
+                            })
+                            context_texts.append(content)
+                    
+                    # Generate answer
+                    context_text = "\n\n---\n\n".join(context_texts) if context_texts else ""
+                    user_prompt = f"""Bağlam:
+{context_text}
+
+Soru: {question}
+
+Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
+                    
+                    generated_answer = llm_service.generate_response([
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ])
+                    
+                    # Prepare ground truths
+                    ground_truths = [ground_truth]
+                    if alternative_ground_truths:
+                        ground_truths.extend(alternative_ground_truths)
+                    
+                    # Get RAGAS metrics - RAGAS ayarlarından gelen evaluation model'i kullan!
+                    metrics = ragas_service._get_ragas_metrics_sync(
+                        question,
+                        ground_truths,
+                        generated_answer,
+                        context_texts,
+                        evaluation_model_for_batch  # ✅ RAGAS settings'ten alınan model
+                    )
+                    
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    
+                    # Aggregate
+                    for key in sum_metrics.keys():
+                        if metrics.get(key) is not None:
+                            sum_metrics[key] += metrics[key]
+                            cnt_metrics[key] += 1
+                    sum_latency += latency_ms
+                    cnt_latency += 1
+                    
+                    # Save to DB
+                    contexts_for_db = [
+                        {"text": ctx["text"], "score": ctx["score"]}
+                        for ctx in retrieved_contexts
+                    ]
+                    
+                    result = QuickTestResult(
+                        course_id=data.course_id,
+                        group_name=data.group_name,
+                        question=question,
+                        ground_truth=ground_truth,
+                        alternative_ground_truths=alternative_ground_truths,
+                        system_prompt=system_prompt,
+                        llm_provider=llm_provider,
+                        llm_model=llm_model,
+                        generated_answer=generated_answer,
+                        retrieved_contexts=contexts_for_db,
+                        faithfulness=metrics.get("faithfulness"),
+                        answer_relevancy=metrics.get("answer_relevancy"),
+                        context_precision=metrics.get("context_precision"),
+                        context_recall=metrics.get("context_recall"),
+                        answer_correctness=metrics.get("answer_correctness"),
+                        latency_ms=latency_ms,
+                        created_by=current_user.id,
+                    )
+                    db.add(result)
+                    db.commit()
+                    
+                    # W&B logging - Her testten sonra anında gönder
+                    if wb_enabled and wb_run is not None:
+                        # Her metriği ayrı ayrı logla ki W&B grafikler oluştursun
+                        log_data = {
+                            "test_index": idx,
+                            "latency_ms": latency_ms,
+                            "contexts_count": len(context_texts),
+                        }
+                        
+                        # Metrikleri ekle (None olanlar hariç)
+                        if metrics.get("faithfulness") is not None:
+                            log_data["faithfulness"] = metrics.get("faithfulness")
+                        if metrics.get("answer_relevancy") is not None:
+                            log_data["answer_relevancy"] = metrics.get("answer_relevancy")
+                        if metrics.get("context_precision") is not None:
+                            log_data["context_precision"] = metrics.get("context_precision")
+                        if metrics.get("context_recall") is not None:
+                            log_data["context_recall"] = metrics.get("context_recall")
+                        if metrics.get("answer_correctness") is not None:
+                            log_data["answer_correctness"] = metrics.get("answer_correctness")
+                        
+                        wandb.log(log_data, step=idx)
+                        
+                        # W&B'ye hemen gönder (buffer'ı flush et)
+                        try:
+                            if hasattr(wb_run, '_flush'):
+                                wb_run._flush()
+                        except Exception:
+                            pass
+                        
+                        if wb_table is not None:
+                            wb_table.add_data(
+                                idx,
+                                question,
+                                ground_truth,
+                                generated_answer,
+                                metrics.get("faithfulness"),
+                                metrics.get("answer_relevancy"),
+                                metrics.get("context_precision"),
+                                metrics.get("context_recall"),
+                                metrics.get("answer_correctness"),
+                                latency_ms,
+                                len(context_texts),
+                                None,
+                            )
+                    
+                    # Send progress
+                    progress = {
+                        "event": "progress",
+                        "index": idx,
+                        "total": len(data.test_cases),
+                        "completed": idx + 1,
+                        "result": {
+                            "question": question,
+                            "ground_truth": ground_truth,
+                            "generated_answer": generated_answer,
+                            "faithfulness": metrics.get("faithfulness"),
+                            "answer_relevancy": metrics.get("answer_relevancy"),
+                            "context_precision": metrics.get("context_precision"),
+                            "context_recall": metrics.get("context_recall"),
+                            "answer_correctness": metrics.get("answer_correctness"),
+                            "latency_ms": latency_ms,
+                            "retrieved_contexts": retrieved_contexts,
+                        }
+                    }
+                    yield f"data: {json.dumps(progress, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0)
+                    
+                except Exception as e:
+                    logger.error(f"Test case {idx} error: {e}")
+                    
+                    # Send error
+                    error_result = {
+                        "event": "progress",
+                        "index": idx,
+                        "total": len(data.test_cases),
+                        "completed": idx + 1,
+                        "result": {
+                            "question": test_case.get("question", ""),
+                            "ground_truth": test_case.get("ground_truth", ""),
+                            "generated_answer": "",
+                            "error_message": str(e),
+                        }
+                    }
+                    
+                    if wb_enabled and wb_run is not None and wb_table is not None:
+                        wb_table.add_data(
+                            idx,
+                            test_case.get("question", ""),
+                            test_case.get("ground_truth", ""),
+                            "",
+                            None, None, None, None, None,
+                            0,
+                            0,
+                            str(e),
+                        )
+                    
+                    yield f"data: {json.dumps(error_result, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0)
+            
+            # W&B finalize
+            if wb_enabled and wb_run is not None:
+                avg_metrics = {
+                    f"aggregate/avg_{key}": (
+                        sum_metrics[key] / cnt_metrics[key]
+                        if cnt_metrics[key] > 0 else None
+                    )
+                    for key in sum_metrics.keys()
+                }
+                avg_metrics["aggregate/avg_latency_ms"] = (
+                    sum_latency / cnt_latency if cnt_latency > 0 else None
+                )
+                avg_metrics["total_tests"] = len(data.test_cases)
+                
+                wandb.log(avg_metrics)
+                if wb_table is not None:
+                    wandb.log({"results": wb_table})
+                
+                wb_run_url = getattr(wb_run, "url", None)
+                wb_run.finish()
+            else:
+                wb_run_url = None
+            
+            # Send completion
+            completion = {
+                "event": "complete",
+                "total": len(data.test_cases),
+                "completed": len(data.test_cases),
+                "wandb_url": wb_run_url,
+            }
+            yield f"data: {json.dumps(completion, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0)
+            
+        except Exception as e:
+            logger.error(f"Batch stream error: {e}")
+            error = {"event": "error", "error": str(e)}
+            if "wb_run" in locals() and wb_run is not None:
+                try:
+                    wb_run.finish(exit_code=1)
+                except Exception:
+                    pass
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0)
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/runs/{run_id}/fix-summary")

@@ -26,6 +26,7 @@ from app.routers import (
     system,
     system_settings,
 )
+from app.api.benchmark import router as benchmark_router
 
 settings = get_settings()
 
@@ -63,6 +64,7 @@ app.add_middleware(
 # Include routers
 app.include_router(admin.router)
 app.include_router(auth.router)
+app.include_router(benchmark_router)
 app.include_router(courses.router)
 app.include_router(course_settings.router)
 app.include_router(documents.router)

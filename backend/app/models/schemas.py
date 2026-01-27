@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -98,6 +98,7 @@ class CourseResponse(CourseBase):
     teacher_id: int
     is_active: bool = True
     created_at: datetime
+
     document_count: int = 0
 
 
@@ -203,7 +204,7 @@ class ChunkQualityMetrics(BaseModel):
     Feature: semantic-chunker-enhancement, Task 7.12
     Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5
     """
-    
+
     chunk_index: int
     semantic_coherence: float  # 0-1, intra-chunk sentence similarity
     sentence_count: int
@@ -215,11 +216,11 @@ class ChunkQualityMetrics(BaseModel):
 
 class QualityReportResponse(BaseModel):
     """Schema for quality report response.
-    
+
     Feature: semantic-chunker-enhancement, Task 7.12
     Validates: Requirements 7.5
     """
-    
+
     total_chunks: int
     avg_coherence: float
     min_coherence: float
@@ -234,11 +235,11 @@ class QualityReportResponse(BaseModel):
 
 class ChunkingResponseWithQuality(BaseModel):
     """Schema for chunking response with quality metrics.
-    
+
     Feature: semantic-chunker-enhancement, Task 7.12
     Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5
     """
-    
+
     chunks: List[ChunkResponse]
     total_chunks: int
     strategy_used: ChunkingStrategy
@@ -419,8 +420,20 @@ class CourseSettingsUpdate(BaseModel):
     @classmethod
     def validate_reranker_provider(cls, v: Optional[str]) -> Optional[str]:
         """Validate reranker provider is one of the supported values."""
-        if v is not None and v not in ['cohere', 'alibaba', 'weaviate']:
-            raise ValueError(f'Invalid reranker provider: {v}. Must be one of: cohere, alibaba, weaviate')
+        if v is not None and v not in ['cohere', 'alibaba', 'jina', 'weaviate', 'bge', 'zeroentropy', 'voyage']:
+            raise ValueError(f"Invalid reranker provider: {v}. Must be one of: cohere, alibaba, jina, weaviate, bge, zeroentropy, voyage")
+        return v
+
+    @field_validator('default_embedding_model')
+    @classmethod
+    def validate_embedding_model(cls, v: Optional[str]) -> Optional[str]:
+        """Validate embedding model format (supports existing prefixes)."""
+        if v is None:
+            return v
+        # Allow known prefixes and Voyage models
+        allowed_prefixes = ['openai/', 'alibaba/', 'cohere/', 'jina/', 'bge/', 'ollama/', 'voyage/']
+        if not any(v.startswith(p) for p in allowed_prefixes) and not v.startswith('voyage-'):
+            raise ValueError(f"Invalid embedding model: {v}. Must start with one of: {', '.join(allowed_prefixes)} or voyage-")
         return v
 
 
@@ -466,7 +479,7 @@ class LLMSettingsUpdate(BaseModel):
     provider: Optional[LLMProvider] = None
     model_name: Optional[str] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(default=None, ge=1, le=4000)
+    max_tokens: Optional[int] = Field(default=None, ge=100, le=4000)
     top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     system_prompt: Optional[str] = None
 
@@ -552,7 +565,6 @@ class DiagnosticReportResponse(BaseModel):
     report_type: str
     file_info: Optional[FileInfo] = None
     extraction_info: Optional[ExtractionInfo] = None
-    chunking_info: Optional[ChunkingInfo] = None
     error_log: List[ErrorEntry] = []
     performance_metrics: Optional[PerformanceMetrics] = None
     recommendations: List[str] = []
@@ -608,7 +620,6 @@ class SystemDiagnosticsResponse(BaseModel):
 
 
 # ==================== RAGAS Evaluation Schemas ====================
-
 
 class TestQuestionBase(BaseModel):
     """Base test question schema."""
@@ -680,23 +691,9 @@ class TestSetResponse(TestSetBase):
 
 
 class TestSetDetailResponse(TestSetResponse):
-    """Schema for detailed test set response with questions."""
+    """Schema for test set detail response with questions."""
 
     questions: List[TestQuestionResponse] = []
-
-
-class TestSetImport(BaseModel):
-    """Schema for importing test set questions."""
-
-    questions: List[TestQuestionCreate]
-
-
-class TestSetExport(BaseModel):
-    """Schema for exporting test set."""
-
-    name: str
-    description: Optional[str] = None
-    questions: List[TestQuestionBase]
 
 
 class EvaluationConfig(BaseModel):
@@ -716,6 +713,7 @@ class EvaluationRunCreate(BaseModel):
     course_id: int
     name: Optional[str] = None
     config: Optional[EvaluationConfig] = None
+    evaluation_provider: Optional[str] = None
     evaluation_model: Optional[str] = None
     question_ids: Optional[List[int]] = None  # If provided, only evaluate these questions
 
@@ -813,6 +811,8 @@ class RunComparisonResponse(BaseModel):
     summaries: List[RunSummaryResponse]
 
 
+# ==================== Quick Test Result Schemas ====================
+
 class QuickTestRequest(BaseModel):
     """Schema for quick test request."""
 
@@ -848,10 +848,13 @@ class QuickTestResponse(BaseModel):
     system_prompt_used: str
     llm_provider_used: str
     llm_model_used: str
+    # Reranker metadata
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
 
 
-# ==================== Quick Test Result Schemas ====================
-
+# ==================== Quick Test Result Types ====================
 
 class QuickTestResultCreate(BaseModel):
     """Schema for creating a quick test result."""
@@ -898,6 +901,10 @@ class QuickTestResultResponse(BaseModel):
     latency_ms: int
     created_by: int
     created_at: datetime
+    # Reranker metadata
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
 
 
 class QuickTestResultListResponse(BaseModel):
@@ -905,11 +912,10 @@ class QuickTestResultListResponse(BaseModel):
 
     results: List[QuickTestResultResponse]
     total: int
-    groups: List[str]  # List of unique group names
+    groups: List[str]
 
 
 # ==================== Custom LLM Model Schemas ====================
-
 
 class CustomLLMModelBase(BaseModel):
     """Base custom LLM model schema."""
@@ -952,7 +958,6 @@ class LLMModelsResponse(BaseModel):
 
 # ==================== Semantic Similarity Test Schemas ====================
 
-
 class SemanticSimilarityQuickTestRequest(BaseModel):
     """Schema for semantic similarity quick test request."""
 
@@ -960,9 +965,11 @@ class SemanticSimilarityQuickTestRequest(BaseModel):
     question: str
     ground_truth: str
     alternative_ground_truths: Optional[List[str]] = None
-    generated_answer: Optional[str] = None  # If omitted, will be generated
-    llm_provider: Optional[str] = None  # Override course LLM provider
-    llm_model: Optional[str] = None  # Override course LLM model
+    generated_answer: Optional[str] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
 
 
 class ScoreDetail(BaseModel):
@@ -991,6 +998,9 @@ class SemanticSimilarityQuickTestResponse(BaseModel):
     bertscore_precision: Optional[float] = None
     bertscore_recall: Optional[float] = None
     bertscore_f1: Optional[float] = None
+    original_bertscore_precision: Optional[float] = None
+    original_bertscore_recall: Optional[float] = None
+    original_bertscore_f1: Optional[float] = None
     # Retrieval metrics
     hit_at_1: Optional[float] = None  # 1 if best match is rank 1, else 0
     mrr: Optional[float] = None  # Mean Reciprocal Rank (1/rank)
@@ -1016,6 +1026,8 @@ class SemanticSimilarityBatchTestRequest(BaseModel):
 
     course_id: int
     test_cases: List[SemanticSimilarityTestCase]
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
     llm_provider: Optional[str] = None  # Override course LLM provider
     llm_model: Optional[str] = None  # Override course LLM model
 
@@ -1032,10 +1044,12 @@ class SemanticSimilarityBatchResult(BaseModel):
     rouge1: Optional[float] = None
     rouge2: Optional[float] = None
     rougel: Optional[float] = None
-    # BERTScore metrics
     bertscore_precision: Optional[float] = None
     bertscore_recall: Optional[float] = None
     bertscore_f1: Optional[float] = None
+    original_bertscore_precision: Optional[float] = None
+    original_bertscore_recall: Optional[float] = None
+    original_bertscore_f1: Optional[float] = None
     # Retrieval metrics
     hit_at_1: Optional[float] = None
     mrr: Optional[float] = None
@@ -1082,10 +1096,12 @@ class SemanticSimilarityResultCreate(BaseModel):
     rouge1: Optional[float] = None
     rouge2: Optional[float] = None
     rougel: Optional[float] = None
-    # BERTScore metrics
     bertscore_precision: Optional[float] = None
     bertscore_recall: Optional[float] = None
     bertscore_f1: Optional[float] = None
+    original_bertscore_precision: Optional[float] = None
+    original_bertscore_recall: Optional[float] = None
+    original_bertscore_f1: Optional[float] = None
     # Retrieval metrics
     hit_at_1: Optional[float] = None
     mrr: Optional[float] = None
@@ -1095,6 +1111,8 @@ class SemanticSimilarityResultCreate(BaseModel):
     llm_model_used: Optional[str] = None
     retrieved_contexts: Optional[List[str]] = None
     system_prompt_used: Optional[str] = None
+    created_by: int
+    created_at: datetime
 
 
 class SemanticSimilarityResultResponse(BaseModel):
@@ -1120,6 +1138,9 @@ class SemanticSimilarityResultResponse(BaseModel):
     bertscore_precision: Optional[float] = None
     bertscore_recall: Optional[float] = None
     bertscore_f1: Optional[float] = None
+    original_bertscore_precision: Optional[float] = None
+    original_bertscore_recall: Optional[float] = None
+    original_bertscore_f1: Optional[float] = None
     # Retrieval metrics
     hit_at_1: Optional[float] = None
     mrr: Optional[float] = None
@@ -1151,7 +1172,6 @@ class SemanticSimilarityResultListResponse(BaseModel):
 
 
 # ==================== Admin User Management Schemas ====================
-
 
 class AdminUserResponse(BaseModel):
     """Schema for admin user list response."""
@@ -1233,7 +1253,6 @@ class AdminPasswordResetResponse(BaseModel):
 
 # ==================== Batch Test Session Schemas ====================
 
-
 class BatchTestSessionResponse(BaseModel):
     """Schema for batch test session response."""
 
@@ -1252,6 +1271,10 @@ class BatchTestSessionResponse(BaseModel):
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     embedding_model_used: Optional[str] = None
+    # Reranker configuration
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
     started_at: datetime
     completed_at: Optional[datetime] = None
     updated_at: datetime
@@ -1269,8 +1292,14 @@ class BatchTestSessionCreate(BaseModel):
 
     course_id: int
     test_cases: List[SemanticSimilarityTestCase]
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    # Reranker configuration
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
 
 
 class BatchTestSessionResumeRequest(BaseModel):
@@ -1278,3 +1307,11 @@ class BatchTestSessionResumeRequest(BaseModel):
 
     session_id: int
 
+
+class TestDatasetCreate(BaseModel):
+    """Schema for creating a test dataset."""
+    
+    course_id: int
+    name: str
+    description: Optional[str] = None
+    test_cases: List[Dict[str, Any]]

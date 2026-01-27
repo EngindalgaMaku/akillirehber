@@ -55,6 +55,12 @@ const EMBEDDING_MODELS = [
   { value: "jina/jina-embeddings-v2", label: "Jina AI jina-embeddings-v2 (768 dim)" },
   { value: "jina/jina-embeddings-v3", label: "Jina AI jina-embeddings-v3 (1024 dim)" },
   { value: "qwen/qwen3-embedding-8b", label: "Qwen qwen3-embedding-8b (1024 dim)" },
+  { value: "ollama/bge-m3", label: "Ollama BGE-M3 (1024 dim)", description: "Local BGE-M3 via Ollama" },
+  { value: "ollama/nomic-embed-text", label: "Ollama Nomic Embed Text (768 dim)", description: "Local Nomic via Ollama" },
+  { value: "voyage/voyage-4-large", label: "Voyage voyage-4-large (1536 dim)", description: "VoyageAI large model" },
+  { value: "voyage/voyage-3-large", label: "Voyage voyage-3-large (1024 dim)", description: "VoyageAI large model" },
+  { value: "voyage/voyage-3-lite", label: "Voyage voyage-3-lite (512 dim)", description: "VoyageAI lite model" },
+  { value: "voyage/voyage-2", label: "Voyage voyage-2 (1024 dim)", description: "VoyageAI v2 model" },
 ];
 
 const RERANKER_MODELS = {
@@ -64,6 +70,21 @@ const RERANKER_MODELS = {
   ],
   alibaba: [
     { value: "gte-rerank-v2", label: "GTE Rerank v2", description: "Çok dilli destek" },
+  ],
+  jina: [
+    { value: "jina-reranker-v1-base-en", label: "Jina Reranker v1 Base EN", description: "İngilizce için" },
+    { value: "jina-reranker-v2-base-multilingual", label: "Jina Reranker v2 Base Multilingual", description: "Çok dilli" },
+  ],
+  bge: [
+    { value: "ollama-bge-reranker-v2-m3", label: "BGE Reranker v2-M3 (Ollama)", description: "Local BGE reranker" },
+  ],
+  zeroentropy: [
+    { value: "zerank-2", label: "ZeRank-2", description: "ZeroEntropy hosted reranker" },
+  ],
+  voyage: [
+    { value: "rerank-2", label: "Voyage Rerank-2", description: "VoyageAI reranker v2" },
+    { value: "rerank-2.5", label: "Voyage Rerank-2.5", description: "VoyageAI reranker v2.5" },
+    { value: "rerank-2.5-lite", label: "Voyage Rerank-2.5-Lite", description: "VoyageAI lite reranker" },
   ],
 };
 
@@ -586,6 +607,30 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
                         <div className="flex flex-col">
                           <span className="font-medium">Alibaba</span>
                           <span className="text-xs text-slate-500">Çince içerik için optimize edilmiş</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="jina">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Jina</span>
+                          <span className="text-xs text-slate-500">Açık kaynak çok dilli reranking</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="bge">
+                        <div className="flex flex-col">
+                          <span className="font-medium">BGE</span>
+                          <span className="text-xs text-slate-500">BAAI çok dilli reranking modeli</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="zeroentropy">
+                        <div className="flex flex-col">
+                          <span className="font-medium">ZeroEntropy</span>
+                          <span className="text-xs text-slate-500">Hosted reranking (zerank-2)</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="voyage">
+                        <div className="flex flex-col">
+                          <span className="font-medium">VoyageAI</span>
+                          <span className="text-xs text-slate-500">Yüksek performanslı reranking</span>
                         </div>
                       </SelectItem>
                     </SelectContent>

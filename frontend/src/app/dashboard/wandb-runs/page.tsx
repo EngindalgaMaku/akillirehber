@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { api, Course } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -64,7 +64,6 @@ export default function WandbRunsPage() {
   
   // W&B Runs State
   const [wandbRuns, setWandbRuns] = useState<WandbRun[]>([]);
-  const [filteredRuns, setFilteredRuns] = useState<WandbRun[]>([]);
   const [paginationInfo, setPaginationInfo] = useState<{
     currentPage: number;
     totalPages: number;
@@ -83,26 +82,25 @@ export default function WandbRunsPage() {
   
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
   
   // Edit Dialog State
   const [editingRun, setEditingRun] = useState<WandbRun | null>(null);
   const [editForm, setEditForm] = useState<Record<string, any>>({});
   const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    loadCourses();
-  }, []);
+  // Debounce for search
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    if (selectedCourseId) {
-      loadWandbRuns();
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
     }
-  }, [selectedCourseId, currentPage, itemsPerPage, searchQuery, stateFilter, tagFilter]);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, stateFilter, tagFilter, sortField, sortOrder]);
+    debounceRef.current = setTimeout(() => {
+      setCurrentPage(1); // Reset to first page when searching
+    }, 500); // 500ms debounce
+  };
 
   const loadCourses = async () => {
     try {
@@ -123,7 +121,7 @@ export default function WandbRunsPage() {
     }
   };
 
-  const loadWandbRuns = async () => {
+  const loadWandbRuns = useCallback(async () => {
     if (!selectedCourseId) return;
     setIsLoadingRuns(true);
     try {
@@ -143,7 +141,21 @@ export default function WandbRunsPage() {
     } finally {
       setIsLoadingRuns(false);
     }
-  };
+  }, [selectedCourseId, currentPage, itemsPerPage, searchQuery, stateFilter, tagFilter]);
+
+  useEffect(() => {
+    loadCourses();
+  }, []);
+
+  useEffect(() => {
+    if (selectedCourseId) {
+      loadWandbRuns();
+    }
+  }, [loadWandbRuns]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, stateFilter, tagFilter, sortField, sortOrder]);
 
   // Pagination calculations from backend
   const totalPages = paginationInfo?.totalPages || 1;
@@ -190,6 +202,10 @@ export default function WandbRunsPage() {
         group_name: editForm.group_name || editingRun.config.group_name,
         course_id: selectedCourseId,
         tags: editForm.tags,
+        llm_model_used: editForm.llm_model_used,
+        embedding_model_used: editForm.embedding_model_used,
+        llm_provider: editForm.llm_provider,
+        total_tests: editForm.total_tests,
       });
       
       if (res.success) {
@@ -435,7 +451,7 @@ export default function WandbRunsPage() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <Input
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => handleSearchChange(e.target.value)}
                     placeholder="Run adı, ID veya grup adı ara..."
                     className="pl-10"
                   />

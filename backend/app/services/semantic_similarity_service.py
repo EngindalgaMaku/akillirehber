@@ -6,6 +6,8 @@ cosine similarity, as well as ROUGE and BERTScore metrics.
 """
 
 from typing import List, Tuple, Dict, Any, Optional
+from functools import lru_cache
+import os
 import numpy as np
 from sqlalchemy.orm import Session
 import logging
@@ -205,16 +207,16 @@ class SemanticSimilarityService:
         """
         try:
             from rouge_score import rouge_scorer
-            
+
             # Initialize scorer without stemmer for Turkish
             scorer = rouge_scorer.RougeScorer(
                 ['rouge1', 'rouge2', 'rougeL'],
                 use_stemmer=False
             )
-            
+
             # Compute scores (reference first, then generated)
             scores = scorer.score(ground_truth, generated_answer)
-            
+
             return {
                 'rouge1': scores['rouge1'].fmeasure,
                 'rouge2': scores['rouge2'].fmeasure,
@@ -223,6 +225,61 @@ class SemanticSimilarityService:
         except Exception as e:
             logger.error(f"Error computing ROUGE scores: {e}")
             return None
+
+    def compute_original_bertscore(
+        self,
+        generated_answer: str,
+        ground_truth: str,
+        lang: str = "tr",
+    ) -> Dict[str, float]:
+        try:
+            from transformers.utils import logging as hf_logging
+            from bert_score import score as bert_score
+
+            hf_logging.set_verbosity_error()
+            hf_logging.disable_progress_bar()
+
+            model_type = os.getenv(
+                "ORIGINAL_BERTSCORE_MODEL",
+                "bert-base-multilingual-cased",
+            )
+
+            @lru_cache(maxsize=8)
+            def _cached_score(
+                cands: Tuple[str, ...],
+                refs: Tuple[str, ...],
+                model: str,
+                language: str,
+            ) -> Tuple[float, float, float]:
+                P, R, F1 = bert_score(
+                    list(cands),
+                    list(refs),
+                    lang=language,
+                    model_type=model,
+                    verbose=False,
+                    rescale_with_baseline=False,
+                )
+                return (
+                    float(P.mean().item()),
+                    float(R.mean().item()),
+                    float(F1.mean().item()),
+                )
+
+            p, r, f1 = _cached_score(
+                (generated_answer,),
+                (ground_truth,),
+                model_type,
+                lang,
+            )
+
+            return {
+                "precision": p,
+                "recall": r,
+                "f1": f1,
+            }
+        except Exception as e:
+            logger.error(f"Error computing original BERTScore: {e}")
+            raise
 
     def compute_bertscore(
         self,
@@ -252,13 +309,13 @@ class SemanticSimilarityService:
                 ground_truth,
                 model="openai/text-embedding-3-small"
             )
-            
+
             if not emb1 or not emb2:
                 return None
-            
+
             # Compute cosine similarity
             similarity = cosine_similarity(emb1, emb2)
-            
+
             # Use similarity as approximation for all three metrics
             return {
                 'precision': similarity,
@@ -339,6 +396,9 @@ class SemanticSimilarityService:
             'bertscore_precision': None,
             'bertscore_recall': None,
             'bertscore_f1': None,
+            'original_bertscore_precision': None,
+            'original_bertscore_recall': None,
+            'original_bertscore_f1': None,
         }
 
         # Compute ROUGE scores against best match
@@ -360,14 +420,26 @@ class SemanticSimilarityService:
                 result['bertscore_recall'] = bertscore['recall']
                 result['bertscore_f1'] = bertscore['f1']
 
+            original_bertscore = self.compute_original_bertscore(
+                generated_answer,
+                best_match,
+                lang=lang,
+            )
+            result['original_bertscore_precision'] = (
+                original_bertscore['precision']
+            )
+            result['original_bertscore_recall'] = original_bertscore['recall']
+            result['original_bertscore_f1'] = original_bertscore['f1']
+
         return result
 
     def generate_answer(
         self,
         course_id: int,
         question: str,
-        llm_provider: str = None,
-        llm_model: str = None
+        llm_provider: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ) -> Tuple[str, List[str], str]:
         """Generate an answer using the RAG pipeline.
 
@@ -397,13 +469,18 @@ class SemanticSimilarityService:
             )
 
         # Use override or course settings for LLM
-        actual_provider = llm_provider or settings.llm_provider
+        actual_provider = (
+            llm_provider or settings.llm_provider
+        )
         actual_model = llm_model or settings.llm_model
 
         # Get query embedding
+        query_embedding_model = (
+            embedding_model or settings.default_embedding_model
+        )
         query_vector = self.embedding_service.get_embedding(
             question,
-            model=settings.default_embedding_model
+            model=query_embedding_model
         )
 
         # Search for relevant chunks using hybrid search

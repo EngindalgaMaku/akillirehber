@@ -48,6 +48,7 @@ class User(Base):
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     batch_test_sessions = relationship("BatchTestSession", back_populates="user", cascade="all, delete-orphan")
+    test_datasets = relationship("TestDataset", back_populates="user", cascade="all, delete-orphan")
     giskard_quick_test_results = relationship("GiskardQuickTestResult", back_populates="creator", cascade="all, delete-orphan")
 
     @property
@@ -78,6 +79,7 @@ class Course(Base):
     settings = relationship("CourseSettings", back_populates="course", uselist=False, cascade="all, delete-orphan")
     semantic_similarity_results = relationship("SemanticSimilarityResult", back_populates="course", cascade="all, delete-orphan")
     batch_test_sessions = relationship("BatchTestSession", back_populates="course", cascade="all, delete-orphan")
+    test_datasets = relationship("TestDataset", back_populates="course", cascade="all, delete-orphan")
     giskard_test_sets = relationship("GiskardTestSet", back_populates="course", cascade="all, delete-orphan")
     giskard_runs = relationship("GiskardRun", back_populates="course", cascade="all, delete-orphan")
     giskard_quick_test_results = relationship("GiskardQuickTestResult", back_populates="course", cascade="all, delete-orphan")
@@ -646,6 +648,11 @@ class SemanticSimilarityResult(Base):
     bertscore_precision = Column(Float, nullable=True)
     bertscore_recall = Column(Float, nullable=True)
     bertscore_f1 = Column(Float, nullable=True)
+
+    # Test results - Original BERTScore metrics
+    original_bertscore_precision = Column(Float, nullable=True)
+    original_bertscore_recall = Column(Float, nullable=True)
+    original_bertscore_f1 = Column(Float, nullable=True)
     
     # Test results - Retrieval metrics
     hit_at_1 = Column(Float, nullable=True)  # 1 if best match is rank 1, else 0
@@ -701,6 +708,10 @@ class BatchTestSession(Base):
     llm_provider = Column(String(50), nullable=True)
     llm_model = Column(String(255), nullable=True)
     embedding_model_used = Column(String(255), nullable=True)
+    # Reranker configuration
+    reranker_used = Column(Boolean, nullable=True, default=False)
+    reranker_provider = Column(String(50), nullable=True)
+    reranker_model = Column(String(255), nullable=True)
 
     # Timing
     started_at = Column(DateTime, default=datetime.utcnow)
@@ -714,6 +725,35 @@ class BatchTestSession(Base):
 
     def __repr__(self):
         return f"<BatchTestSession(id={self.id}, group_name={self.group_name}, status={self.status})>"
+
+
+class TestDataset(Base):
+    """Test dataset for storing reusable batch test data."""
+
+    __tablename__ = "test_datasets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Dataset identification
+    name = Column(String(255), nullable=False)  # e.g., "Veri Seti 1", "Test Dataset 2"
+    description = Column(Text, nullable=True)
+
+    # Test cases (stored as JSON)
+    test_cases = Column(Text, nullable=False)  # JSON array of test cases
+
+    # Metadata
+    total_test_cases = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    course = relationship("Course", back_populates="test_datasets")
+    user = relationship("User", back_populates="test_datasets")
+
+    def __repr__(self):
+        return f"<TestDataset(id={self.id}, name={self.name}, course_id={self.course_id})>"
 
 
 

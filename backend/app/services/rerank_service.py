@@ -24,6 +24,12 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 
+# Provider base URLs
+DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+VOYAGE_BASE_URL = "https://api.voyageai.com/v1"
+
+
 # Reranker model configurations
 RERANKER_MODELS = {
     "cohere": {
@@ -50,13 +56,74 @@ RERANKER_MODELS = {
             "max_query_length": 1024,
             "description": "Latest multilingual reranking model"
         }
+    },
+    "jina": {
+        "jina-reranker-v1-base-en": {
+            "name": "Jina Reranker v1 Base English",
+            "languages": ["en"],
+            "max_documents": 1000,
+            "max_query_length": 2048,
+            "description": "English reranking model"
+        },
+        "jina-reranker-v2-base-multilingual": {
+            "name": "Jina Reranker v2 Base Multilingual",
+            "languages": ["100+"],
+            "max_documents": 1000,
+            "max_query_length": 2048,
+            "description": "Multilingual reranking model supporting 100+ languages"
+        }
+    },
+    "bge": {
+        "bge-reranker-v2-m3": {
+            "name": "BGE Reranker v2-M3",
+            "languages": ["100+"],
+            "max_documents": 1000,
+            "max_query_length": 2048,
+            "description": "Multilingual reranking model from BAAI"
+        }
+    },
+    "zeroentropy": {
+        "zerank-2": {
+            "name": "ZeroEntropy ZeRank-2",
+            "languages": ["100+"],
+            "max_documents": 2048,
+            "max_query_length": 4096,
+            "description": "ZeroEntropy hosted reranker (models/rerank)"
+        }
+    },
+    "voyage": {
+        "rerank-2": {
+            "name": "Voyage Rerank-2",
+            "languages": ["100+"],
+            "max_documents": 1000,
+            "max_query_length": 4096,
+            "description": "Voyage hosted reranker (v1/rerank)"
+        },
+        "rerank-2.5": {
+            "name": "Voyage Rerank-2.5",
+            "languages": ["100+"],
+            "max_documents": 1000,
+            "max_query_length": 4096,
+            "description": "Voyage hosted reranker (v1/rerank)"
+        },
+        "rerank-2.5-lite": {
+            "name": "Voyage Rerank-2.5-Lite",
+            "languages": ["100+"],
+            "max_documents": 1000,
+            "max_query_length": 4096,
+            "description": "Voyage hosted reranker (v1/rerank)"
+        }
     }
 }
 
 # Default models for each provider
 DEFAULT_MODELS = {
     "cohere": "rerank-multilingual-v3.0",
-    "alibaba": "gte-rerank-v2"
+    "alibaba": "gte-rerank-v2",
+    "jina": "jina-reranker-v2-base-multilingual",
+    "bge": "ollama-bge-reranker-v2-m3",
+    "zeroentropy": "zerank-2",
+    "voyage": "rerank-2"
 }
 
 # Reranker configuration from environment
@@ -71,18 +138,21 @@ class RerankService:
     Supports multiple reranker providers:
     - Cohere: High-quality multilingual reranking
     - Alibaba: Chinese-optimized reranking
+    - Jina: Open-source multilingual reranking
     
-    Features:
-    - Caching with TTL (5 minutes default)
-    - Graceful fallback on errors
-    - Provider-agnostic interface
-    - Performance monitoring
+    Each provider has different models and capabilities.
     """
-
+    
     def __init__(self):
         """Initialize reranker service."""
         self._cohere_api_key = os.environ.get("COHERE_API_KEY")
         self._dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY")
+        self._zeroentropy_api_key = os.environ.get("ZEROENTROPY_API_KEY")
+        self._voyage_api_key = os.environ.get("VOYAGE_API_KEY")
+        self._zeroentropy_base_url = os.environ.get(
+            "ZEROENTROPY_BASE_URL",
+            "https://api.zeroentropy.dev/v1",
+        )
         self._cohere_client = None
         self._alibaba_client = None
         
@@ -102,7 +172,10 @@ class RerankService:
                 "timeout": RERANKER_TIMEOUT,
                 "max_documents": RERANKER_MAX_DOCUMENTS,
                 "cohere_available": bool(self._cohere_api_key and COHERE_AVAILABLE),
-                "alibaba_available": bool(self._dashscope_api_key)
+                "alibaba_available": bool(self._dashscope_api_key),
+                "bge_available": True,  # Ollama is always available if running
+                "zeroentropy_available": bool(self._zeroentropy_api_key),
+                "voyage_available": bool(self._voyage_api_key)
             }
         )
 
@@ -152,7 +225,7 @@ class RerankService:
             # Alibaba DashScope uses OpenAI-compatible API
             self._alibaba_client = OpenAI(
                 api_key=self._dashscope_api_key,
-                base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+                base_url=DASHSCOPE_BASE_URL
             )
             logger.info("Alibaba reranker client initialized")
         
@@ -478,8 +551,183 @@ class RerankService:
             return self._rerank_cohere(query, documents, model, top_k)
         elif provider == "alibaba":
             return self._rerank_alibaba(query, documents, model, top_k)
+        elif provider == "jina":
+            return self._rerank_jina(query, documents, model, top_k)
+        elif provider == "bge":
+            return self._rerank_bge(query, documents, model, top_k)
+        elif provider == "zeroentropy":
+            return self._rerank_zeroentropy(query, documents, model, top_k)
+        elif provider == "voyage":
+            return self._rerank_voyage(query, documents, model, top_k)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
+
+    def _rerank_voyage(
+        self,
+        query: str,
+        documents: List[Dict],
+        model: str,
+        top_k: Optional[int] = None
+    ) -> List[Dict]:
+        if not self._voyage_api_key:
+            raise ValueError(
+                "VOYAGE_API_KEY environment variable is required "
+                "for Voyage reranker. Please configure the API key "
+                "or use a different reranker provider."
+            )
+
+        doc_texts = [doc.get("content", "") for doc in documents]
+        payload: Dict = {
+            "query": query,
+            "documents": doc_texts,
+            "model": model,
+        }
+
+        if top_k is not None:
+            payload["top_k"] = top_k
+
+        headers = {
+            "Authorization": f"Bearer {self._voyage_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        response = requests.post(
+            f"{VOYAGE_BASE_URL}/rerank",
+            headers=headers,
+            json=payload,
+            timeout=RERANKER_TIMEOUT,
+        )
+        response.raise_for_status()
+        result_data = response.json()
+
+        raw_results = result_data.get("results") or result_data.get("data") or []
+        reranked: List[Dict] = []
+        for r in raw_results:
+            idx = r.get("index")
+            if idx is None:
+                continue
+            if not (0 <= int(idx) < len(documents)):
+                continue
+
+            doc = documents[int(idx)].copy()
+            doc["relevance_score"] = r.get("relevance_score", 0)
+            doc["rerank_index"] = int(idx)
+
+            if "score" in doc and "original_score" not in doc:
+                doc["original_score"] = doc["score"]
+
+            reranked.append(doc)
+
+        if top_k is not None:
+            reranked = reranked[:top_k]
+
+        return reranked
+
+    def _rerank_zeroentropy(
+        self,
+        query: str,
+        documents: List[Dict],
+        model: str,
+        top_k: Optional[int] = None
+    ) -> List[Dict]:
+        """Rerank using ZeroEntropy API.
+
+        Args:
+            query: Search query
+            documents: List of documents
+            model: ZeroEntropy model name (e.g., zerank-2)
+            top_k: Number of top results to return
+
+        Returns:
+            Reranked documents with relevance scores
+        """
+        if not self._zeroentropy_api_key:
+            raise ValueError(
+                "ZEROENTROPY_API_KEY environment variable is required "
+                "for ZeroEntropy reranker. Please configure the API key "
+                "or use a different reranker provider."
+            )
+
+        doc_texts = [doc.get("content", "") for doc in documents]
+
+        url = f"{self._zeroentropy_base_url}/models/rerank"
+        headers = {
+            "Authorization": f"Bearer {self._zeroentropy_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: Dict = {
+            "model": model,
+            "query": query,
+            "documents": doc_texts,
+        }
+
+        if top_k is not None:
+            payload["top_n"] = top_k
+
+        latency_mode = os.environ.get("ZEROENTROPY_LATENCY")
+        if latency_mode in {"fast", "slow"}:
+            payload["latency"] = latency_mode
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=RERANKER_TIMEOUT,
+        )
+
+        if response.status_code != 200:
+            logger.error(
+                "ZeroEntropy reranker error: %s",
+                response.status_code,
+                extra={
+                    "status_code": response.status_code,
+                    "response_body": response.text[:500],
+                    "model": model,
+                },
+            )
+
+        response.raise_for_status()
+        result_data = response.json()
+
+        reranked: List[Dict] = []
+        for r in result_data.get("results", []):
+            idx = r.get("index")
+            if idx is None:
+                continue
+            if not (0 <= int(idx) < len(documents)):
+                continue
+
+            doc = documents[int(idx)].copy()
+            doc["relevance_score"] = r.get("relevance_score", 0)
+            doc["rerank_index"] = int(idx)
+
+            if "score" in doc and "original_score" not in doc:
+                doc["original_score"] = doc["score"]
+
+            reranked.append(doc)
+
+        if top_k is not None:
+            reranked = reranked[:top_k]
+
+        logger.info(
+            "ZeroEntropy reranked %d documents to %d",
+            len(documents),
+            len(reranked),
+            extra={
+                "model": model,
+                "input_count": len(documents),
+                "output_count": len(reranked),
+                "top_k": top_k,
+                "actual_latency_mode": result_data.get("actual_latency_mode"),
+                "e2e_latency": result_data.get("e2e_latency"),
+                "inference_latency": result_data.get("inference_latency"),
+                "total_tokens": result_data.get("total_tokens"),
+                "total_bytes": result_data.get("total_bytes"),
+            },
+        )
+
+        return reranked
     
     def _calculate_score_improvement(
         self,
@@ -617,8 +865,6 @@ class RerankService:
         Returns:
             Reranked documents with relevance scores
         """
-        client = self._get_alibaba_client()
-        
         # Extract text content from documents
         doc_texts = [doc.get('content', '') for doc in documents]
         
@@ -626,7 +872,7 @@ class RerankService:
             # Alibaba DashScope rerank API uses a different structure
             # The API endpoint is different from the OpenAI-compatible one
             api_key = self._dashscope_api_key
-            url = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+            url = DASHSCOPE_BASE_URL + "/text-rerank/text-rerank"
             
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -725,12 +971,256 @@ class RerankService:
             )
             raise
 
+    def _rerank_jina(
+        self,
+        query: str,
+        documents: List[Dict],
+        model: str,
+        top_k: Optional[int] = None
+    ) -> List[Dict]:
+        """Rerank using Jina Reranker API.
+        
+        Args:
+            query: Search query
+            documents: List of documents
+            model: Jina model name
+            top_k: Number of top results to return
+            
+        Returns:
+            Reranked documents with relevance scores
+        """
+        # Extract text content from documents
+        doc_texts = [doc.get('content', '') for doc in documents]
+        
+        try:
+            # Jina Reranker API endpoint
+            url = "https://api.jina.ai/v1/rerank"
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.environ.get('JINA_API_KEY', '')}"
+            }
+            
+            # Clean model name (remove provider prefix if present)
+            jina_model = model.replace("jina/", "") if model.startswith("jina/") else model
+            
+            payload = {
+                "model": jina_model,
+                "query": query,
+                "documents": doc_texts,
+                "top_k": top_k if top_k is not None else len(documents)
+            }
+            
+            # DEBUG: Log the request
+            logger.info(
+                f"[JINA RERANK DEBUG] Sending request to Jina API\n"
+                f"Original model: {model}\n"
+                f"Cleaned model: {jina_model}\n"
+                f"Query length: {len(query)}\n"
+                f"Documents count: {len(doc_texts)}\n"
+                f"Top K: {top_k}"
+            )
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=RERANKER_TIMEOUT)
+            
+            # DEBUG: Log the response
+            logger.info(
+                f"[JINA RERANK DEBUG] Response status: {response.status_code}\n"
+                f"Response body: {response.text[:500]}"
+            )
+            
+            if response.status_code != 200:
+                logger.error(
+                    f"[JINA RERANK ERROR] Bad response from Jina API\n"
+                    f"Status: {response.status_code}\n"
+                    f"Body: {response.text}"
+                )
+            
+            response.raise_for_status()
+            
+            result_data = response.json()
+            
+            # Map results back to original documents
+            reranked = []
+            for result in result_data.get("results", []):
+                # Get the original document
+                doc = documents[result["index"]].copy()
+                
+                # Add reranking metadata
+                doc['relevance_score'] = result["relevance_score"]
+                doc['rerank_index'] = result["index"]
+                
+                # Preserve original score if it exists
+                if 'score' in doc and 'original_score' not in doc:
+                    doc['original_score'] = doc['score']
+                
+                reranked.append(doc)
+            
+            logger.info(
+                f"Jina reranked {len(documents)} documents to {len(reranked)}",
+                extra={
+                    "model": model,
+                    "input_count": len(documents),
+                    "output_count": len(reranked),
+                    "top_k": top_k
+                }
+            )
+            
+            return reranked
+            
+        except Exception as e:
+            logger.error(
+                f"Jina reranking failed: {e}",
+                exc_info=True,
+                extra={
+                    "model": model,
+                    "query_length": len(query),
+                    "document_count": len(documents)
+                }
+            )
+            raise
 
+    def _rerank_bge(
+        self,
+        query: str,
+        documents: List[Dict],
+        model: str,
+        top_k: Optional[int] = None
+    ) -> List[Dict]:
+        """Rerank using Ollama BGE Reranker v2-M3.
+        
+        Args:
+            query: Search query
+            documents: List of documents
+            model: BGE model name
+            top_k: Number of top results to return
+            
+        Returns:
+            Reranked documents with relevance scores
+        """
+        # Extract text content from documents
+        doc_texts = [doc.get('content', '') for doc in documents]
+        
+        try:
+            # Ollama API endpoint for reranking
+            url = f"{OLLAMA_BASE_URL}/api/generate"
+            
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            # BGE Reranker v2-M3 expects specific format
+            # We need to create a prompt that asks the model to rerank
+            prompt = f"""Please rerank the following documents based on their relevance to the query.
+
+Query: {query}
+
+Documents to rerank:
+"""
+            
+            for i, doc_text in enumerate(doc_texts):
+                prompt += f"{i+1}. {doc_text}\n"
+            
+            prompt += f"""
+Please return the reranked results in the following format:
+- Each line should contain: document_number,relevance_score
+- Relevance scores should be between 0.0 and 1.0
+- Higher scores indicate better relevance
+- Sort by relevance score (highest first)
+- Only return the top {top_k if top_k else len(doc_texts)} results
+
+Example format:
+3,0.95
+1,0.87
+2,0.76
+"""
+            
+            payload = {
+                "model": "bge-reranker-v2-m3",
+                "prompt": prompt,
+                "stream": False
+            }
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=RERANKER_TIMEOUT)
+            
+            if response.status_code != 200:
+                logger.error(
+                    f"Ollama BGE reranker error: {response.status_code}",
+                    extra={
+                        "status_code": response.status_code,
+                        "response_body": response.text[:500]
+                    }
+                )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Parse the response to extract reranking results
+            response_text = result.get('response', '')
+            
+            # Parse the reranked results
+            reranked = []
+            lines = response_text.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if not line or ',' not in line:
+                    continue
+                
+                try:
+                    doc_num_str, score_str = line.split(',', 1)
+                    doc_num = int(doc_num_str.strip()) - 1  # Convert to 0-based index
+                    score = float(score_str.strip())
+                    
+                    if 0 <= doc_num < len(documents):
+                        doc = documents[doc_num].copy()
+                        doc['relevance_score'] = score
+                        doc['rerank_index'] = doc_num
+                        
+                        # Preserve original score if it exists
+                        if 'score' in doc and 'original_score' not in doc:
+                            doc['original_score'] = doc['score']
+                        
+                        reranked.append(doc)
+                        
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Failed to parse rerank line: {line}, error: {e}")
+                    continue
+            
+            # Sort by relevance score
+            reranked.sort(key=lambda x: x['relevance_score'], reverse=True)
+            
+            # Apply top_k limit
+            if top_k is not None:
+                reranked = reranked[:top_k]
+            
+            logger.info(
+                f"Ollama BGE reranked {len(documents)} documents to {len(reranked)}",
+                extra={
+                    "model": model,
+                    "input_count": len(documents),
+                    "output_count": len(reranked),
+                    "top_k": top_k
+                }
+            )
+            
+            return reranked
+            
+        except Exception as e:
+            logger.error(
+                f"Ollama BGE reranking failed: {e}",
+                exc_info=True,
+                extra={
+                    "model": model,
+                    "query_length": len(query),
+                    "document_count": len(documents)
+                }
+            )
+            raise
 
 
 # Singleton instance
 _rerank_service: Optional[RerankService] = None
-
 
 def get_rerank_service() -> RerankService:
     """Get singleton RerankService instance."""

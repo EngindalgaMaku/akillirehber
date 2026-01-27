@@ -116,6 +116,7 @@ LLM_PROVIDERS_CONFIG = {
             "anthropic/claude-3-haiku",
             "anthropic/claude-3-sonnet",
             "anthropic/claude-3-opus",
+            "glm-4.7",
         ],
     },
     "claudegg": {

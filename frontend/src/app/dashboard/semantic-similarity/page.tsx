@@ -69,9 +69,14 @@ export default function SemanticSimilarityPage() {
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedEmbeddingProvider, setSelectedEmbeddingProvider] = useState<string>("");
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string>("");
   const [selectedLlmProvider, setSelectedLlmProvider] = useState<string>("");
   const [selectedLlmModel, setSelectedLlmModel] = useState<string>("");
+  // Reranker state
+  const [selectedRerankerProvider, setSelectedRerankerProvider] = useState<string>("");
+  const [selectedRerankerModel, setSelectedRerankerModel] = useState<string>("");
+  const [isRerankerEnabled, setIsRerankerEnabled] = useState<boolean>(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Quick Test State
@@ -99,6 +104,14 @@ export default function SemanticSimilarityPage() {
   const [batchTestSessions, setBatchTestSessions] = useState<BatchTestSession[]>([]);
   const [isSessionsLoading, setIsSessionsLoading] = useState(false);
   const [isResumingSession, setIsResumingSession] = useState(false);
+
+  // Test Dataset State
+  const [testDatasets, setTestDatasets] = useState<any[]>([]);
+  const [selectedDataset, setSelectedDataset] = useState<string>("");
+  const [isDatasetsLoading, setIsDatasetsLoading] = useState(false);
+  const [showSaveDatasetDialog, setShowSaveDatasetDialog] = useState(false);
+  const [datasetName, setDatasetName] = useState("");
+  const [datasetDescription, setDatasetDescription] = useState("");
 
   // Saved Results State
   const [isSavedResultsExpanded, setIsSavedResultsExpanded] = useState(false);
@@ -159,6 +172,7 @@ export default function SemanticSimilarityPage() {
       loadSavedResults(true);
       loadCourseSettings();
       loadBatchTestSessions();
+      loadTestDatasets();
     }
   }, [selectedCourseId]);
 
@@ -284,6 +298,7 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
     try {
       const settings = await api.getCourseSettings(selectedCourseId);
+      console.log("Course settings loaded:", settings); // Debug log
       setSelectedEmbeddingModel(settings.default_embedding_model || "");
       // LLM ayarlarını da yükle (varsayılan olarak ders ayarlarını kullan)
       // Kullanıcı isterse ayarlardan değiştirebilir
@@ -291,6 +306,15 @@ export default function SemanticSimilarityPage() {
         setSelectedLlmProvider(settings.llm_provider || "");
         setSelectedLlmModel(settings.llm_model || "");
       }
+      // Reranker ayarlarını yükle
+      setIsRerankerEnabled(settings.enable_reranker || false);
+      setSelectedRerankerProvider(settings.reranker_provider || "");
+      setSelectedRerankerModel(settings.reranker_model || "");
+      console.log("Reranker settings:", {
+        enabled: settings.enable_reranker,
+        provider: settings.reranker_provider,
+        model: settings.reranker_model
+      }); // Debug log
     } catch {
       console.log("Course settings not available");
     }
@@ -344,8 +368,17 @@ export default function SemanticSimilarityPage() {
       setSavedResultsTotal(data.total);
       setSavedResultsGroups(data.groups);
       setSavedResultsAggregate(data.aggregate ?? null);
-    } catch {
-      /* ignore */
+    } catch (error) {
+      console.error("Failed to load saved results:", error);
+      toast.error("Sonuçlar yüklenirken hata oluştu");
+      // Reset state on error
+      if (reset) {
+        setSavedResults([]);
+        setResultsPage(1);
+        setSavedResultsTotal(0);
+        setSavedResultsGroups([]);
+        setSavedResultsAggregate(null);
+      }
     }
   }, [selectedCourseId, selectedGroup, resultsPage]);
 
@@ -370,6 +403,20 @@ export default function SemanticSimilarityPage() {
       toast.error("Batch test oturumları yüklenirken hata oluştu");
     } finally {
       setIsSessionsLoading(false);
+    }
+  };
+
+  const loadTestDatasets = async () => {
+    if (!selectedCourseId) return;
+    setIsDatasetsLoading(true);
+    try {
+      const data = await api.getTestDatasets(selectedCourseId);
+      setTestDatasets(data.datasets);
+    } catch (error) {
+      console.log("Failed to load test datasets:", error);
+      toast.error("Test veri setleri yüklenirken hata oluştu");
+    } finally {
+      setIsDatasetsLoading(false);
     }
   };
 
@@ -469,6 +516,9 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -484,6 +534,9 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || '',
                 llm_model_used: data.llm_model_used || undefined
@@ -496,6 +549,9 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -628,9 +684,9 @@ export default function SemanticSimilarityPage() {
         r.rouge1 != null ? (r.rouge1 * 100).toFixed(2) : "-",
         r.rouge2 != null ? (r.rouge2 * 100).toFixed(2) : "-",
         r.rougel != null ? (r.rougel * 100).toFixed(2) : "-",
-        r.bertscore_precision != null ? (r.bertscore_precision * 100).toFixed(2) : "-",
-        r.bertscore_recall != null ? (r.bertscore_recall * 100).toFixed(2) : "-",
-        r.bertscore_f1 != null ? (r.bertscore_f1 * 100).toFixed(2) : "-",
+        r.original_bertscore_precision != null ? (r.original_bertscore_precision * 100).toFixed(2) : "-",
+        r.original_bertscore_recall != null ? (r.original_bertscore_recall * 100).toFixed(2) : "-",
+        r.original_bertscore_f1 != null ? (r.original_bertscore_f1 * 100).toFixed(2) : "-",
         r.latency_ms
       ]);
     
@@ -658,6 +714,8 @@ export default function SemanticSimilarityPage() {
         ground_truth: quickTestGroundTruth,
         alternative_ground_truths: quickTestAlternatives.filter(a => a.trim() !== ""),
         generated_answer: quickTestGeneratedAnswer || undefined,
+        embedding_provider: selectedEmbeddingProvider || undefined,
+        embedding_model: selectedEmbeddingModel || undefined,
         llm_provider: selectedLlmProvider || undefined,
         llm_model: selectedLlmModel || undefined
       });
@@ -728,12 +786,19 @@ export default function SemanticSimilarityPage() {
         const groupName = saveGroupName || `Batch Test - Run ${run}`;
         let session;
         try {
-          session = await api.createBatchTestSession({
+          const sessionData = {
             course_id: selectedCourseId,
             test_cases: testCases,
+            embedding_provider: selectedEmbeddingProvider || undefined,
+            embedding_model: selectedEmbeddingModel || undefined,
             llm_provider: selectedLlmProvider || undefined,
-            llm_model: selectedLlmModel || undefined
-          });
+            llm_model: selectedLlmModel || undefined,
+            reranker_used: isRerankerEnabled,
+            reranker_provider: isRerankerEnabled ? (selectedRerankerProvider || undefined) : undefined,
+            reranker_model: isRerankerEnabled ? (selectedRerankerModel || undefined) : undefined
+          };
+          console.log("Creating batch test session with data:", sessionData); // Debug log
+          session = await api.createBatchTestSession(sessionData);
           
           toast.success(`Oturum oluşturuldu: ${groupName} (${run}/${totalRuns})`);
         } catch (error) {
@@ -793,6 +858,75 @@ export default function SemanticSimilarityPage() {
       loadBatchTestSessions();
     } finally {
       setIsBatchTesting(false);
+    }
+  };
+
+  // Test Dataset Handlers
+  const handleSaveDataset = async () => {
+    if (!selectedCourseId || !batchTestJson || !datasetName) {
+      toast.error("Lütfen ders, JSON verisi ve veri seti adı girin");
+      return;
+    }
+
+    try {
+      const parsedData = JSON.parse(batchTestJson);
+      let testCases = parsedData;
+
+      // Eğer RAGAS test set formatındaysa (questions array içinde), onu çıkar
+      if (parsedData.questions && Array.isArray(parsedData.questions)) {
+        testCases = parsedData.questions.map((q: any) => ({
+          question: q.question || q,
+          ground_truth: q.ground_truth || q.answer || "",
+          alternative_ground_truths: q.alternative_ground_truths || [],
+          generated_answer: q.generated_answer || ""
+        }));
+      }
+
+      await api.saveTestDataset({
+        course_id: selectedCourseId,
+        name: datasetName,
+        description: datasetDescription,
+        test_cases: testCases
+      });
+
+      toast.success("Veri seti başarıyla kaydedildi");
+      setShowSaveDatasetDialog(false);
+      setDatasetName("");
+      setDatasetDescription("");
+      loadTestDatasets();
+    } catch (error) {
+      console.error("Save dataset error:", error);
+      toast.error(error instanceof Error ? error.message : "Veri seti kaydedilemedi");
+    }
+  };
+
+  const handleLoadDataset = async (datasetId: string) => {
+    if (!selectedCourseId) return;
+
+    try {
+      const dataset = await api.getTestDataset(parseInt(datasetId));
+      setBatchTestJson(JSON.stringify(dataset.test_cases, null, 2));
+      setSelectedDataset(datasetId);
+      toast.success(`"${dataset.name}" veri seti yüklendi`);
+    } catch (error) {
+      console.error("Load dataset error:", error);
+      toast.error(error instanceof Error ? error.message : "Veri seti yüklenemedi");
+    }
+  };
+
+  const handleDeleteDataset = async (datasetId: number) => {
+    if (!confirm("Bu veri setini silmek istediğinizden emin misiniz?")) return;
+
+    try {
+      await api.deleteTestDataset(datasetId);
+      toast.success("Veri seti silindi");
+      loadTestDatasets();
+      if (selectedDataset === datasetId.toString()) {
+        setSelectedDataset("");
+      }
+    } catch (error) {
+      console.error("Delete dataset error:", error);
+      toast.error(error instanceof Error ? error.message : "Veri seti silinemedi");
     }
   };
 
@@ -889,6 +1023,9 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -904,6 +1041,9 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
@@ -916,6 +1056,9 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               const finalResult: SemanticSimilarityBatchTestResponse = {
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -931,6 +1074,9 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
@@ -966,6 +1112,9 @@ export default function SemanticSimilarityPage() {
     const bertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_precision !== undefined);
     const bertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_recall !== undefined);
     const bertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_f1 !== undefined);
+    const origBertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_precision !== undefined);
+    const origBertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_recall !== undefined);
+    const origBertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_f1 !== undefined);
 
     return {
       avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
@@ -979,6 +1128,9 @@ export default function SemanticSimilarityPage() {
       avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
       avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
       avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+      avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+      avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+      avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
     };
   };
 
@@ -1163,9 +1315,9 @@ export default function SemanticSimilarityPage() {
         r.rouge1 != null ? (r.rouge1 * 100).toFixed(2) : "-",
         r.rouge2 != null ? (r.rouge2 * 100).toFixed(2) : "-",
         r.rougel != null ? (r.rougel * 100).toFixed(2) : "-",
-        r.bertscore_precision != null ? (r.bertscore_precision * 100).toFixed(2) : "-",
-        r.bertscore_recall != null ? (r.bertscore_recall * 100).toFixed(2) : "-",
-        r.bertscore_f1 != null ? (r.bertscore_f1 * 100).toFixed(2) : "-",
+        r.original_bertscore_precision != null ? (r.original_bertscore_precision * 100).toFixed(2) : "-",
+        r.original_bertscore_recall != null ? (r.original_bertscore_recall * 100).toFixed(2) : "-",
+        r.original_bertscore_f1 != null ? (r.original_bertscore_f1 * 100).toFixed(2) : "-",
         r.latency_ms
       ]);
 
@@ -1623,7 +1775,7 @@ export default function SemanticSimilarityPage() {
 
                         {/* ROUGE and BERTScore Metrics */}
                         {(quickTestResult.rouge1 != null || quickTestResult.rouge2 != null || quickTestResult.rougel != null || 
-                          quickTestResult.bertscore_f1 != null) && (
+                          quickTestResult.bertscore_f1 != null || quickTestResult.original_bertscore_f1 != null) && (
                           <div>
                             <Label className="text-sm font-medium text-slate-700">
                               Ek Metrikler
@@ -1653,11 +1805,11 @@ export default function SemanticSimilarityPage() {
                                   </p>
                                 </div>
                               )}
-                              {quickTestResult.bertscore_f1 != null && (
-                                <div className="p-4 bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-xl border border-indigo-200 shadow-sm">
-                                  <p className="text-xs text-indigo-600 font-medium">BERTScore F1</p>
-                                  <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.bertscore_f1)}`}>
-                                    {(quickTestResult.bertscore_f1 * 100).toFixed(1)}%
+                              {quickTestResult.original_bertscore_f1 != null && (
+                                <div className="p-4 bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl border border-emerald-200 shadow-sm">
+                                  <p className="text-xs text-emerald-700 font-medium">BERTScore F1</p>
+                                  <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.original_bertscore_f1)}`}>
+                                    {(quickTestResult.original_bertscore_f1 * 100).toFixed(1)}%
                                   </p>
                                 </div>
                               )}
@@ -1764,6 +1916,53 @@ export default function SemanticSimilarityPage() {
                       <p className="text-xs text-slate-500 mt-2">
                         JSON array formatında test verilerini girin. generated_answer opsiyoneldir.
                       </p>
+
+                      {/* Dataset Management */}
+                      <div className="flex gap-2 mt-3">
+                        <Select value={selectedDataset} onValueChange={handleLoadDataset}>
+                          <SelectTrigger className="flex-1 border-slate-200 focus:border-cyan-400 focus:ring-cyan-400">
+                            <SelectValue placeholder="Kayıtlı veri seti seçin..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {testDatasets.map((dataset) => (
+                              <SelectItem key={dataset.id} value={dataset.id.toString()}>
+                                {dataset.name} ({dataset.total_test_cases} test)
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        
+                        <Button
+                          onClick={() => setShowSaveDatasetDialog(true)}
+                          disabled={!batchTestJson}
+                          variant="outline"
+                          className="border-cyan-300 text-cyan-700 hover:bg-cyan-50"
+                        >
+                          <Save className="w-4 h-4 mr-1" />
+                          Kaydet
+                        </Button>
+                      </div>
+
+                      {testDatasets.length > 0 && (
+                        <div className="mt-3 p-3 bg-cyan-50 rounded-lg border border-cyan-200">
+                          <p className="text-xs font-medium text-cyan-900 mb-2">Kayıtlı Veri Setleri:</p>
+                          <div className="space-y-1">
+                            {testDatasets.map((dataset) => (
+                              <div key={dataset.id} className="flex items-center justify-between text-xs">
+                                <span className="text-cyan-700">
+                                  • {dataset.name} ({dataset.total_test_cases} test)
+                                </span>
+                                <button
+                                  onClick={() => handleDeleteDataset(dataset.id)}
+                                  className="text-red-600 hover:text-red-800"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div>
@@ -1870,11 +2069,11 @@ export default function SemanticSimilarityPage() {
                                 </p>
                               </div>
                             )}
-                            {batchTestResult.aggregate.avg_bertscore_f1 != null && (
-                              <div className="p-4 bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl border border-blue-200 shadow-sm">
-                                <p className="text-xs text-blue-600 font-medium">Ort. BERTScore F1</p>
-                                <p className="text-xl font-bold text-blue-700">
-                                  {(batchTestResult.aggregate.avg_bertscore_f1 * 100).toFixed(1)}%
+                            {batchTestResult.aggregate.avg_original_bertscore_f1 != null && (
+                              <div className="p-4 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 shadow-sm">
+                                <p className="text-xs text-emerald-700 font-medium">Ort. BERTScore F1</p>
+                                <p className="text-xl font-bold text-emerald-800">
+                                  {(batchTestResult.aggregate.avg_original_bertscore_f1 * 100).toFixed(1)}%
                                 </p>
                               </div>
                             )}
@@ -1957,9 +2156,9 @@ export default function SemanticSimilarityPage() {
                                       )}
                                     </td>
                                     <td className="px-3 py-2 text-center">
-                                      {result.bertscore_f1 !== null && result.bertscore_f1 !== undefined ? (
-                                        <span className={`font-medium ${getMetricColor(result.bertscore_f1)}`}>
-                                          {(result.bertscore_f1 * 100).toFixed(0)}%
+                                      {result.original_bertscore_f1 !== null && result.original_bertscore_f1 !== undefined ? (
+                                        <span className={`font-medium ${getMetricColor(result.original_bertscore_f1)}`}>
+                                          {(result.original_bertscore_f1 * 100).toFixed(0)}%
                                         </span>
                                       ) : (
                                         <span className="text-slate-400">-</span>
@@ -2288,14 +2487,6 @@ export default function SemanticSimilarityPage() {
                           <p className="text-xs text-purple-600 mb-1">Ort. ROUGE-L</p>
                           <p className="text-xl font-bold text-purple-700">
                             {(savedResultsAggregate.avg_rougel * 100).toFixed(1)}%
-                          </p>
-                        </div>
-                      )}
-                      {savedResultsAggregate.avg_bertscore_f1 != null && (
-                        <div className="p-3 bg-white rounded-lg border border-blue-100">
-                          <p className="text-xs text-blue-600 mb-1">Ort. BERTScore</p>
-                          <p className="text-xl font-bold text-blue-700">
-                            {(savedResultsAggregate.avg_bertscore_f1 * 100).toFixed(1)}%
                           </p>
                         </div>
                       )}
@@ -2818,20 +3009,76 @@ export default function SemanticSimilarityPage() {
             </DialogContent>
           </Dialog>
 
-          {/* Statistics Modal */}
-          <Dialog open={isStatisticsModalOpen} onOpenChange={setIsStatisticsModalOpen}>
-            <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <Target className="w-5 h-5 text-teal-600" />
-                  İstatistik Sonuçları
-                </DialogTitle>
-                <DialogDescription>
-                  {selectedGroup && selectedGroup !== "__all__"
-                    ? `"${selectedGroup === "__no_group__" ? "Grupsuz" : selectedGroup}" grubunun detaylı istatistikleri`
-                    : "Tüm sonuçların detaylı istatistikleri"}
-                </DialogDescription>
-              </DialogHeader>
+        {/* Save Dataset Dialog */}
+        <Dialog open={showSaveDatasetDialog} onOpenChange={setShowSaveDatasetDialog}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Veri Seti Kaydet</DialogTitle>
+              <DialogDescription>
+                Mevcut test verilerini kaydederek daha sonra kullanabilirsiniz.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div>
+                <Label htmlFor="dataset-name">Veri Seti Adı</Label>
+                <Input
+                  id="dataset-name"
+                  value={datasetName}
+                  onChange={(e) => setDatasetName(e.target.value)}
+                  placeholder="Örn: Veri Seti 1, Test Dataset 2"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="dataset-description">Açıklama (Opsiyonel)</Label>
+                <Textarea
+                  id="dataset-description"
+                  value={datasetDescription}
+                  onChange={(e) => setDatasetDescription(e.target.value)}
+                  placeholder="Veri seti hakkında açıklama..."
+                  rows={3}
+                  className="mt-1"
+                />
+              </div>
+              <div className="p-3 bg-slate-50 rounded-lg">
+                <p className="text-xs font-medium text-slate-700 mb-1">Özet:</p>
+                <p className="text-xs text-slate-600">
+                  {batchTestJson ? `${JSON.parse(batchTestJson || "[]").length} test case` : "0 test case"}
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowSaveDatasetDialog(false)}
+              >
+                İptal
+              </Button>
+              <Button
+                onClick={handleSaveDataset}
+                disabled={!datasetName || !batchTestJson}
+              >
+                Kaydet
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Statistics Modal Dialog */}
+        <Dialog open={isStatisticsModalOpen} onOpenChange={setIsStatisticsModalOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {selectedGroup && selectedGroup !== "__all__"
+                  ? `${selectedGroup === "__no_group__" ? "Grupsuz" : selectedGroup} grubunun detaylı istatistikleri`
+                  : "Tüm sonuçların detaylı istatistikleri"}
+              </DialogTitle>
+              <DialogDescription>
+                {selectedGroup && selectedGroup !== "__all__"
+                  ? `"${selectedGroup === "__no_group__" ? "Grupsuz" : selectedGroup}" grubunun detaylı istatistikleri`
+                  : "Tüm sonuçların detaylı istatistikleri"}
+              </DialogDescription>
+            </DialogHeader>
               
               {savedResultsAggregate && (
                 <div className="space-y-6 py-4">
@@ -2910,17 +3157,6 @@ export default function SemanticSimilarityPage() {
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-slate-600">BERT geri çağırma skoru</td>
-                            </tr>
-                          )}
-                          {savedResultsAggregate.avg_bertscore_f1 != null && (
-                            <tr className="hover:bg-slate-50">
-                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore F1</td>
-                              <td className="px-4 py-3 text-center">
-                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_bertscore_f1)}`}>
-                                  {(savedResultsAggregate.avg_bertscore_f1 * 100).toFixed(2)}%
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-slate-600">BERT F1 skoru</td>
                             </tr>
                           )}
                         </tbody>
@@ -3171,20 +3407,6 @@ export default function SemanticSimilarityPage() {
                               </td>
                               <td className="px-4 py-3 text-center font-bold">
                                 {(savedResultsAggregate.avg_rouge1 * 100).toFixed(1)}%
-                              </td>
-                            </tr>
-                          )}
-                          {savedResultsAggregate.avg_bertscore_f1 != null && (
-                            <tr className="hover:bg-slate-50">
-                              <td className="px-4 py-3 font-medium text-blue-700">BERTScore F1</td>
-                              <td className="px-4 py-3 text-center text-emerald-600 font-bold">
-                                {(Math.max(...savedResults.filter(r => r.bertscore_f1 != null).map(r => r.bertscore_f1!)) * 100).toFixed(1)}%
-                              </td>
-                              <td className="px-4 py-3 text-center text-red-600 font-bold">
-                                {(Math.min(...savedResults.filter(r => r.bertscore_f1 != null).map(r => r.bertscore_f1!)) * 100).toFixed(1)}%
-                              </td>
-                              <td className="px-4 py-3 text-center font-bold">
-                                {(savedResultsAggregate.avg_bertscore_f1 * 100).toFixed(1)}%
                               </td>
                             </tr>
                           )}

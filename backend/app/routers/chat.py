@@ -335,34 +335,33 @@ async def chat_with_course(
             content=request.message,
         )
     )
-    db.commit()
 
     # Build messages for LLM
     # Use custom system prompt from course settings if available, otherwise use default
-    default_system_prompt = """Sen bir eğitim asistanısın. Verilen bağlam bilgilerini kullanarak
-öğrencilerin sorularını yanıtla. Yanıtlarını Türkçe ver.
+    default_system_prompt = """You are an educational assistant. Answer student questions using the provided context information.
 
-Kurallar:
-1. Sadece verilen bağlamdaki bilgileri kullan
-2. Bağlamda olmayan bilgileri uydurma
-3. Emin olmadığın konularda bunu belirt
-4. Yanıtlarını açık ve anlaşılır tut
-5. Gerektiğinde kaynaklara referans ver"""
+Rules:
+1. Use only the information from the provided context
+2. If the context doesn't contain the answer, say so clearly
+3. Provide accurate and helpful responses
+4. Keep your answers clear and understandable
+5. Reference sources when necessary"""
     
     system_prompt = settings.system_prompt if settings.system_prompt else default_system_prompt
 
     messages = [{"role": "system", "content": system_prompt}]
 
+# ... (rest of the code remains the same)
     # Add chat history
     if request.history:
         for msg in request.history[-10:]:  # Last 10 messages
             messages.append({"role": msg.role, "content": msg.content})
 
     # Add current message with context
-    user_message = f"""Bağlam:
+    user_message = f"""Context:
 {context}
 
-Soru: {request.message}"""
+Question: {request.message}"""
 
     messages.append({"role": "user", "content": user_message})
 
