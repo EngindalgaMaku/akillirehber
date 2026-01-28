@@ -203,7 +203,8 @@ async def update_test_set(
     if data.description is not None:
         test_set.description = data.description
     
-    test_set.updated_at = datetime.utcnow()
+    from datetime import timezone
+    test_set.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(test_set)
     
@@ -1040,7 +1041,8 @@ async def wandb_export_run(
     )
 
     wb_entity = os.getenv("WANDB_ENTITY")
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    from datetime import timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_name = (
         f"ragas-{data.course_id}-{run.test_set_id}-{run.id}-{timestamp}"
     )
@@ -1830,7 +1832,16 @@ async def batch_test_stream(
                 if wandb is not None and (wb_has_key or wb_mode == "offline"):
                     wb_enabled = True
                     wb_entity = os.getenv("WANDB_ENTITY")
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    from datetime import timezone
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    
+                    # Finish any existing wandb run to avoid step conflicts
+                    try:
+                        if wandb.run is not None:
+                            wandb.finish()
+                            logger.info("[BATCH W&B] Finished previous wandb run")
+                    except Exception as e:
+                        logger.warning(f"[BATCH W&B] Error finishing previous run: {e}")
                     
                     system_prompt = course_settings.system_prompt or \
                         "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
@@ -1839,6 +1850,7 @@ async def batch_test_stream(
                         project=wb_project,
                         entity=wb_entity,
                         name=f"ragas-batch-{data.course_id}-{data.group_name}-{timestamp}",
+                        reinit=True,  # Allow creating new run even if one exists
                         config={
                             "course_id": data.course_id,
                             "group_name": data.group_name,
@@ -1893,7 +1905,8 @@ async def batch_test_stream(
                             "latency_ms",
                             "contexts_count",
                             "error_message",
-                        ]
+                        ],
+                        log_mode="MUTABLE"  # Allow re-logging after mutations
                     )
             
             # Metrics aggregation
@@ -2060,30 +2073,34 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                     db.add(result)
                     db.commit()
                     
-                    # W&B logging - Her testten sonra anında gönder
+                    # DEBUG: Log W&B status - BEFORE THE IF CHECK!
+                    print(f"[BATCH W&B DEBUG] Test {idx}: wb_enabled={wb_enabled}, wb_run={wb_run is not None}, faithfulness={metrics.get('faithfulness')}", flush=True)
+                    logger.info(f"[BATCH W&B DEBUG] Test {idx}: wb_enabled={wb_enabled}, wb_run={wb_run is not None}, faithfulness={metrics.get('faithfulness')}")
+                    
+                    # W&B logging - EXACT SAME as semantic similarity!
                     if wb_enabled and wb_run is not None:
-                        # Her metriği ayrı ayrı logla ki W&B grafikler oluştursun
-                        log_data = {
-                            "test_index": idx,
-                            "latency_ms": latency_ms,
-                            "contexts_count": len(context_texts),
-                        }
+                        print(f"[BATCH W&B DEBUG] Test {idx}: INSIDE IF - Calling wandb.log with step={idx}", flush=True)
+                        logger.info(f"[BATCH W&B DEBUG] Test {idx}: INSIDE IF - Calling wandb.log with step={idx}")
+                        try:
+                            wandb.log(
+                                {
+                                    "faithfulness": metrics.get("faithfulness"),
+                                    "answer_relevancy": metrics.get("answer_relevancy"),
+                                    "context_precision": metrics.get("context_precision"),
+                                    "context_recall": metrics.get("context_recall"),
+                                    "answer_correctness": metrics.get("answer_correctness"),
+                                    "latency_ms": latency_ms,
+                                    "contexts_count": len(context_texts),
+                                },
+                                step=idx,
+                            )
+                            print(f"[BATCH W&B DEBUG] Test {idx}: wandb.log completed successfully", flush=True)
+                            logger.info(f"[BATCH W&B DEBUG] Test {idx}: wandb.log completed successfully")
+                        except Exception as e:
+                            print(f"[BATCH W&B DEBUG] Test {idx}: wandb.log FAILED: {e}", flush=True)
+                            logger.error(f"[BATCH W&B DEBUG] Test {idx}: wandb.log FAILED: {e}")
                         
-                        # Metrikleri ekle (None olanlar hariç)
-                        if metrics.get("faithfulness") is not None:
-                            log_data["faithfulness"] = metrics.get("faithfulness")
-                        if metrics.get("answer_relevancy") is not None:
-                            log_data["answer_relevancy"] = metrics.get("answer_relevancy")
-                        if metrics.get("context_precision") is not None:
-                            log_data["context_precision"] = metrics.get("context_precision")
-                        if metrics.get("context_recall") is not None:
-                            log_data["context_recall"] = metrics.get("context_recall")
-                        if metrics.get("answer_correctness") is not None:
-                            log_data["answer_correctness"] = metrics.get("answer_correctness")
-                        
-                        wandb.log(log_data, step=idx)
-                        
-                        # W&B'ye hemen gönder (buffer'ı flush et)
+                        # W&B'ye hemen gönder (buffer'ı flush et) - BU IF İÇİNDE OLMALI!
                         try:
                             if hasattr(wb_run, '_flush'):
                                 wb_run._flush()
@@ -2105,6 +2122,15 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                                 len(context_texts),
                                 None,
                             )
+                            # ✅ HER ADIMDA TABLE'I LOG ET - Semantic similarity gibi!
+                            try:
+                                wandb.log({"results": wb_table}, step=idx)
+                                print(f"[BATCH W&B DEBUG] Test {idx}: Table logged successfully", flush=True)
+                            except Exception as e:
+                                print(f"[BATCH W&B DEBUG] Test {idx}: Table log FAILED: {e}", flush=True)
+                    else:
+                        print(f"[BATCH W&B DEBUG] Test {idx}: SKIPPED - wb_enabled={wb_enabled}, wb_run is not None={wb_run is not None}", flush=True)
+                        logger.warning(f"[BATCH W&B DEBUG] Test {idx}: SKIPPED - wb_enabled={wb_enabled}, wb_run is not None={wb_run is not None}")
                     
                     # Send progress
                     progress = {

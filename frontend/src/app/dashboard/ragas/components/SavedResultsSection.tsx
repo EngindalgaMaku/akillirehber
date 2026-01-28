@@ -325,6 +325,9 @@ export function SavedResultsSection({
                           <span className={getMetricColor(result.faithfulness)}>
                             Sadakat: {result.faithfulness != null ? `${(result.faithfulness * 100).toFixed(0)}%` : "N/A"}
                           </span>
+                          <span className={getMetricColor(result.context_recall)}>
+                            Recall: {result.context_recall != null ? `${(result.context_recall * 100).toFixed(0)}%` : "N/A"}
+                          </span>
                           <span className={getMetricColor(result.answer_correctness)}>
                             Doğruluk: {result.answer_correctness != null ? `${(result.answer_correctness * 100).toFixed(0)}%` : "N/A"}
                           </span>

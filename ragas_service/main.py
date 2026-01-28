@@ -121,7 +121,7 @@ LLM_PROVIDERS_CONFIG = {
     },
     "claudegg": {
         "env_key": "CLAUDEGG_API_KEY",
-        "base_url": "https://app.claude.gg/v1",
+        "base_url": "https://claude.gg/v1",
         "default_model": "claude-sonnet-4-5",
         "embedding_model": None,  # Claude.gg doesn't provide embeddings
         "is_free": False,

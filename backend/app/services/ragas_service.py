@@ -132,24 +132,17 @@ class RagasEvaluationService:
                 wb_enabled = True
 
                 try:
-                    # Make sure charts use processed_questions as the step.
-                    wandb.define_metric("progress/processed_questions")
-                    for m in [
-                        "metrics/faithfulness",
-                        "metrics/answer_relevancy",
-                        "metrics/context_precision",
-                        "metrics/context_recall",
-                        "metrics/answer_correctness",
-                        "latency_ms",
-                        "error",
-                    ]:
-                        wandb.define_metric(
-                            m,
-                            step_metric="progress/processed_questions",
-                        )
-                except Exception:
-                    # metric definition is best-effort
-                    pass
+                    # Semantic similarity gibi basit metric definitions - step parametresini kullan!
+                    wandb.define_metric("question_index")
+                    wandb.define_metric("faithfulness", step_metric="question_index")
+                    wandb.define_metric("answer_relevancy", step_metric="question_index")
+                    wandb.define_metric("context_precision", step_metric="question_index")
+                    wandb.define_metric("context_recall", step_metric="question_index")
+                    wandb.define_metric("answer_correctness", step_metric="question_index")
+                    wandb.define_metric("latency_ms", step_metric="question_index")
+                    wandb.define_metric("contexts_count", step_metric="question_index")
+                except Exception as e:
+                    logger.warning(f"W&B metric definition failed: {e}")
 
                 wb_url = getattr(wb_run, "url", None)
                 if wb_url:
@@ -208,6 +201,9 @@ class RagasEvaluationService:
                         run, question, course, course_settings, run.config
                     )
 
+                    # DEBUG: Log W&B status
+                    logger.info(f"[W&B DEBUG] Question {i}: wb_enabled={wb_enabled}, wb_run={wb_run is not None}, result.faithfulness={result.faithfulness}")
+                    
                     if wb_enabled and wb_run is not None:
                         try:
                             if wb_table is not None:
@@ -231,27 +227,18 @@ class RagasEvaluationService:
                                     result.latency_ms,
                                     result.error_message,
                                 )
-                            wb_run.log(
-                                {
-                                    "progress/processed_questions": i + 1,
-                                    "progress/total_questions": len(questions),
-                                    "metrics/faithfulness": result.faithfulness,
-                                    "metrics/answer_relevancy": result.answer_relevancy,
-                                    "metrics/context_precision": result.context_precision,
-                                    "metrics/context_recall": result.context_recall,
-                                    "metrics/answer_correctness": result.answer_correctness,
-                                    "latency_ms": result.latency_ms,
-                                    "error": 1 if result.error_message else 0,
-                                    "generated_answer": result.generated_answer,
-                                    "retrieved_contexts": result.retrieved_contexts,
-                                    "system_prompt_used": course_settings.system_prompt,
-                                    "llm_provider": result.llm_provider,
-                                    "llm_model": result.llm_model,
-                                    "embedding_model": result.embedding_model,
-                                    "evaluation_model": result.evaluation_model,
-                                },
-                                step=i + 1,
-                            )
+                            # Semantic similarity gibi - question_index'i hem key hem step olarak gönder!
+                            log_data = {
+                                "question_index": i,
+                                "faithfulness": result.faithfulness,
+                                "answer_relevancy": result.answer_relevancy,
+                                "context_precision": result.context_precision,
+                                "context_recall": result.context_recall,
+                                "answer_correctness": result.answer_correctness,
+                                "latency_ms": result.latency_ms,
+                                "contexts_count": len(result.retrieved_contexts) if result.retrieved_contexts else 0,
+                            }
+                            wb_run.log(log_data, step=i)
                             
                             # W&B'ye hemen gönder (buffer'ı flush et) - Semantic similarity gibi!
                             try:

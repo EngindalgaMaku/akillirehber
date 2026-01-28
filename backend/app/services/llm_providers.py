@@ -30,7 +30,7 @@ LLM_PROVIDERS = {
         ]
     },
     "claudegg": {
-        "base_url": "https://app.claude.gg/v1",
+        "base_url": "https://claude.gg/v1",
         "env_key": "CLAUDEGG_API_KEY",
         "models": [
             # Claude Modelleri

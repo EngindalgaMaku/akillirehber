@@ -276,12 +276,17 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                 onBatchTestComplete();
                 
                 if (wandbUrl) {
-                  toast.success("W&B'ye başarıyla aktarıldı!", { duration: 5000 });
-                  setTimeout(() => {
-                    if (wandbUrl && confirm(`W&B run'ını açmak ister misiniz?\n\n${wandbUrl}`)) {
-                      window.open(wandbUrl, "_blank");
+                  const url = wandbUrl; // TypeScript için non-null garantisi
+                  toast.success(
+                    `W&B'ye başarıyla aktarıldı!`,
+                    { 
+                      duration: 8000,
+                      action: {
+                        label: "Aç",
+                        onClick: () => window.open(url, "_blank")
+                      }
                     }
-                  }, 500);
+                  );
                 }
               } else if (data.event === "error") {
                 throw new Error(data.error);
