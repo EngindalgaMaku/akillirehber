@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { api, Course, QuickTestResponse, QuickTestResult, RagasSettings, RagasProvider } from "@/lib/api";
+import { api, Course, QuickTestResponse, QuickTestResult, RagasSettings, RagasProvider, RagasGroupInfo } from "@/lib/api";
 import { toast } from "sonner";
 import { FlaskConical, BookOpen, History, Target } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -27,9 +27,9 @@ export default function RagasPage() {
 
   // Saved Results State
   const [savedResults, setSavedResults] = useState<QuickTestResult[]>([]);
-  const [savedResultsGroups, setSavedResultsGroups] = useState<string[]>([]);
+  const [savedResultsGroups, setSavedResultsGroups] = useState<RagasGroupInfo[]>([]);
   const [savedResultsTotal, setSavedResultsTotal] = useState(0);
-  const [savedResultsAggregate, setSavedResultsAggregate] = useState<any>(null);
+  const [savedResultsAggregate, setSavedResultsAggregate] = useState<Record<string, unknown> | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [resultsPage, setResultsPage] = useState(0);
   const RESULTS_PER_PAGE = 10;
@@ -111,27 +111,10 @@ export default function RagasPage() {
       }
       setSavedResultsTotal(data.total);
       setSavedResultsGroups(data.groups);
-
-      // Calculate aggregate
-      if (data.total > 0) {
-        const allData = await api.getQuickTestResults(selectedCourseId, groupFilter, 0, 10000);
-        const validFaithfulness = allData.results.filter(r => r.faithfulness != null);
-        const validRelevancy = allData.results.filter(r => r.answer_relevancy != null);
-        const validPrecision = allData.results.filter(r => r.context_precision != null);
-        const validRecall = allData.results.filter(r => r.context_recall != null);
-        const validCorrectness = allData.results.filter(r => r.answer_correctness != null);
-        
-        setSavedResultsAggregate({
-          avg_faithfulness: validFaithfulness.length > 0 ? validFaithfulness.reduce((sum, r) => sum + r.faithfulness!, 0) / validFaithfulness.length : undefined,
-          avg_answer_relevancy: validRelevancy.length > 0 ? validRelevancy.reduce((sum, r) => sum + r.answer_relevancy!, 0) / validRelevancy.length : undefined,
-          avg_context_precision: validPrecision.length > 0 ? validPrecision.reduce((sum, r) => sum + r.context_precision!, 0) / validPrecision.length : undefined,
-          avg_context_recall: validRecall.length > 0 ? validRecall.reduce((sum, r) => sum + r.context_recall!, 0) / validRecall.length : undefined,
-          avg_answer_correctness: validCorrectness.length > 0 ? validCorrectness.reduce((sum, r) => sum + r.answer_correctness!, 0) / validCorrectness.length : undefined,
-          test_count: data.total
-        });
-      } else {
-        setSavedResultsAggregate(null);
-      }
+      
+      // Use aggregate from backend (includes test_parameters)
+      console.log('[RAGAS DEBUG] Backend aggregate:', data.aggregate);
+      setSavedResultsAggregate(data.aggregate || null);
     } catch (error) {
       console.error("Failed to load saved results:", error);
       if (reset) {

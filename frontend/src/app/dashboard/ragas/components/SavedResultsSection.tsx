@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { QuickTestResult, api } from "@/lib/api";
+import { QuickTestResult, RagasGroupInfo, api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { History, ChevronDown, Eye, Trash2, Loader2, Download, Target, Settings, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { StatisticsModal } from "./StatisticsModal";
@@ -13,7 +14,7 @@ import { StatisticsModal } from "./StatisticsModal";
 interface SavedResultsSectionProps {
   selectedCourseId: number;
   savedResults: QuickTestResult[];
-  savedResultsGroups: string[];
+  savedResultsGroups: RagasGroupInfo[];
   savedResultsTotal: number;
   savedResultsAggregate: any;
   selectedGroup: string;
@@ -40,6 +41,12 @@ export function SavedResultsSection({
   const [viewingResult, setViewingResult] = useState<QuickTestResult | null>(null);
   const [isStatisticsModalOpen, setIsStatisticsModalOpen] = useState(false);
   
+  // Group Management States
+  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
   // W&B States
   const [isWandbExporting, setIsWandbExporting] = useState(false);
   const [isWandbRunsModalOpen, setIsWandbRunsModalOpen] = useState(false);
@@ -64,6 +71,47 @@ export function SavedResultsSection({
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Silme başarısız");
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!selectedGroup || selectedGroup === "__all__" || selectedGroup === "__no_group__") return;
+    
+    const confirmMsg = `"${selectedGroup}" grubunu ve içindeki ${savedResultsTotal} test sonucunu silmek istediğinizden emin misiniz?`;
+    if (!confirm(confirmMsg)) return;
+    
+    setIsDeleting(true);
+    try {
+      await api.deleteRagasGroup(selectedCourseId, selectedGroup);
+      toast.success("Grup silindi");
+      setSelectedGroup("");
+      onDelete();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Grup silinemedi");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleRenameGroup = async () => {
+    if (!selectedGroup || selectedGroup === "__all__" || selectedGroup === "__no_group__") return;
+    if (!newGroupName.trim()) {
+      toast.error("Yeni grup adı boş olamaz");
+      return;
+    }
+    
+    setIsRenaming(true);
+    try {
+      await api.renameRagasGroup(selectedCourseId, selectedGroup, newGroupName.trim());
+      toast.success("Grup ismi değiştirildi");
+      setSelectedGroup(newGroupName.trim());
+      setIsRenameDialogOpen(false);
+      setNewGroupName("");
+      onDelete(); // Listeyi yenile
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Grup ismi değiştirilemedi");
+    } finally {
+      setIsRenaming(false);
     }
   };
 
@@ -178,28 +226,101 @@ export function SavedResultsSection({
         {isExpanded && (
           <div className="px-6 pb-6 pt-2 border-t border-slate-100">
             {savedResultsGroups.length > 0 && (
-              <div className="mb-4">
-                <Select
-                  value={selectedGroup === "" ? "__all__" : selectedGroup}
-                  onValueChange={(v) => setSelectedGroup(v === "__all__" ? "" : v)}
-                >
-                  <SelectTrigger className="w-full max-w-md">
-                    <SelectValue placeholder="Tüm gruplar" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">Tüm gruplar</SelectItem>
-                    {savedResultsGroups
-                      .filter((g) => g && g.trim() !== "")
-                      .map((g) => (
-                        <SelectItem key={g} value={g}>
-                          {g}
-                        </SelectItem>
-                      ))}
-                    {savedResultsGroups.some((g) => !g || g.trim() === "") && (
-                      <SelectItem value="__no_group__">Grupsuz</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
+              <div className="mb-6">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3">Grup Seçin</h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {/* Tüm Gruplar Kartı */}
+                  <button
+                    onClick={() => setSelectedGroup("")}
+                    className={`p-4 rounded-xl border-2 transition-all text-left ${
+                      selectedGroup === ""
+                        ? "border-purple-500 bg-purple-50 shadow-md"
+                        : "border-slate-200 hover:border-purple-300 hover:shadow-sm"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-900">Tüm Gruplar</p>
+                        <p className="text-sm text-slate-600 mt-1">{savedResultsTotal} sonuç</p>
+                      </div>
+                      {selectedGroup === "" && (
+                        <div className="ml-2 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Grup Kartları */}
+                  {savedResultsGroups.map((group) => (
+                    <div key={group.name} className="relative">
+                      <button
+                        onClick={() => setSelectedGroup(group.name)}
+                        className={`w-full p-4 rounded-xl border-2 transition-all text-left ${
+                          selectedGroup === group.name
+                            ? "border-purple-500 bg-purple-50 shadow-md"
+                            : "border-slate-200 hover:border-purple-300 hover:shadow-sm"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-slate-900 truncate">{group.name}</p>
+                            <p className="text-xs text-slate-500 mt-1">
+                              {group.created_at
+                                ? new Date(group.created_at).toLocaleDateString("tr-TR", {
+                                    year: "numeric",
+                                    month: "short",
+                                    day: "numeric",
+                                  })
+                                : "Tarih yok"}
+                            </p>
+                          </div>
+                          {selectedGroup === group.name && (
+                            <div className="ml-2 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
+                              <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                      </button>
+
+                      {/* Grup Yönetim Butonları */}
+                      {selectedGroup === group.name && (
+                        <div className="absolute -top-2 -right-2 flex gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setNewGroupName(group.name);
+                              setIsRenameDialogOpen(true);
+                            }}
+                            className="p-2 bg-white rounded-full shadow-lg border border-slate-200 hover:bg-blue-50 hover:border-blue-300 transition-colors"
+                            title="İsim Değiştir"
+                          >
+                            <Settings className="w-4 h-4 text-blue-600" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteGroup();
+                            }}
+                            className="p-2 bg-white rounded-full shadow-lg border border-slate-200 hover:bg-red-50 hover:border-red-300 transition-colors"
+                            title="Grubu Sil"
+                            disabled={isDeleting}
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="w-4 h-4 text-red-600 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4 text-red-600" />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -251,7 +372,9 @@ export function SavedResultsSection({
                     </Button>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                
+                {/* RAGAS Metrikler */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                   {savedResultsAggregate.avg_faithfulness != null && (
                     <div className="p-3 bg-white rounded-lg border border-purple-100">
                       <p className="text-xs text-purple-600 mb-1">Ort. Faithfulness</p>
@@ -293,6 +416,53 @@ export function SavedResultsSection({
                     </div>
                   )}
                 </div>
+
+                {/* Test Parametreleri */}
+                {savedResultsAggregate.test_parameters && (
+                  <div className="pt-3 border-t border-purple-200">
+                    <h4 className="text-xs font-semibold text-purple-800 mb-2">Test Parametreleri</h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                      {savedResultsAggregate.test_parameters.llm_model && (
+                        <div className="p-2 bg-white rounded border border-purple-100">
+                          <span className="text-purple-600 font-medium">LLM Model:</span>
+                          <span className="ml-1 text-slate-700">{savedResultsAggregate.test_parameters.llm_model}</span>
+                        </div>
+                      )}
+                      {savedResultsAggregate.test_parameters.embedding_model && (
+                        <div className="p-2 bg-white rounded border border-purple-100">
+                          <span className="text-purple-600 font-medium">Embedding:</span>
+                          <span className="ml-1 text-slate-700">{savedResultsAggregate.test_parameters.embedding_model}</span>
+                        </div>
+                      )}
+                      {savedResultsAggregate.test_parameters.evaluation_model && (
+                        <div className="p-2 bg-white rounded border border-purple-100">
+                          <span className="text-purple-600 font-medium">Değerlendirme:</span>
+                          <span className="ml-1 text-slate-700">{savedResultsAggregate.test_parameters.evaluation_model}</span>
+                        </div>
+                      )}
+                      {savedResultsAggregate.test_parameters.search_alpha != null && (
+                        <div className="p-2 bg-white rounded border border-purple-100">
+                          <span className="text-purple-600 font-medium">Alpha:</span>
+                          <span className="ml-1 text-slate-700">{savedResultsAggregate.test_parameters.search_alpha}</span>
+                        </div>
+                      )}
+                      {savedResultsAggregate.test_parameters.search_top_k && (
+                        <div className="p-2 bg-white rounded border border-purple-100">
+                          <span className="text-purple-600 font-medium">Top K:</span>
+                          <span className="ml-1 text-slate-700">{savedResultsAggregate.test_parameters.search_top_k}</span>
+                        </div>
+                      )}
+                      {savedResultsAggregate.test_parameters.reranker_used && (
+                        <div className="p-2 bg-white rounded border border-purple-100">
+                          <span className="text-purple-600 font-medium">Reranker:</span>
+                          <span className="ml-1 text-slate-700">
+                            {savedResultsAggregate.test_parameters.reranker_provider}/{savedResultsAggregate.test_parameters.reranker_model}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -446,12 +616,55 @@ export function SavedResultsSection({
         </DialogContent>
       </Dialog>
 
+      {/* Rename Group Dialog */}
+      <Dialog open={isRenameDialogOpen} onOpenChange={setIsRenameDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Grup İsmini Değiştir</DialogTitle>
+            <DialogDescription>
+              &quot;{selectedGroup}&quot; grubuna yeni bir isim verin
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              placeholder="Yeni grup ismi"
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && handleRenameGroup()}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsRenameDialogOpen(false);
+                setNewGroupName("");
+              }}
+              disabled={isRenaming}
+            >
+              İptal
+            </Button>
+            <Button onClick={handleRenameGroup} disabled={isRenaming || !newGroupName.trim()}>
+              {isRenaming ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Değiştiriliyor...
+                </>
+              ) : (
+                "Değiştir"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Statistics Modal */}
       <StatisticsModal
         isOpen={isStatisticsModalOpen}
         onClose={() => setIsStatisticsModalOpen(false)}
         selectedCourseId={selectedCourseId}
         selectedGroup={selectedGroup}
+        aggregate={savedResultsAggregate}
       />
     </>
   );

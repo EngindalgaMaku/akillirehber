@@ -1,9 +1,12 @@
 // PDF Export utility for Semantic Similarity results
-import { SemanticSimilarityResult } from "@/lib/api";
+import {
+  type SemanticSimilarityBatchTestResponse,
+  type SemanticSimilarityResult,
+} from "@/lib/api";
 
 interface ExportPDFOptions {
   results: SemanticSimilarityResult[];
-  aggregate: any;
+  aggregate: SemanticSimilarityBatchTestResponse["aggregate"];
   courseName: string;
   groupName: string;
 }
@@ -72,15 +75,21 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
             <div class="stat-value">${(aggregate.avg_rougel * 100).toFixed(1)}%</div>
           </div>
         ` : ''}
-        ${aggregate.avg_bertscore_f1 != null ? `
+        ${aggregate.avg_original_bertscore_precision != null ? `
           <div class="stat-card">
-            <div class="stat-label">Ort. BERTScore F1</div>
-            <div class="stat-value">${(aggregate.avg_bertscore_f1 * 100).toFixed(1)}%</div>
+            <div class="stat-label">Ort. BERTScore P</div>
+            <div class="stat-value">${(aggregate.avg_original_bertscore_precision * 100).toFixed(1)}%</div>
+          </div>
+        ` : ''}
+        ${aggregate.avg_original_bertscore_recall != null ? `
+          <div class="stat-card">
+            <div class="stat-label">Ort. BERTScore R</div>
+            <div class="stat-value">${(aggregate.avg_original_bertscore_recall * 100).toFixed(1)}%</div>
           </div>
         ` : ''}
         ${aggregate.avg_original_bertscore_f1 != null ? `
           <div class="stat-card">
-            <div class="stat-label">Ort. Orijinal BERTScore F1</div>
+            <div class="stat-label">Ort. BERTScore F1</div>
             <div class="stat-value">${(aggregate.avg_original_bertscore_f1 * 100).toFixed(1)}%</div>
           </div>
         ` : ''}
@@ -95,8 +104,9 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
             <th style="width: 70px;">ROUGE-1</th>
             <th style="width: 70px;">ROUGE-2</th>
             <th style="width: 70px;">ROUGE-L</th>
-            <th style="width: 80px;">BERTScore</th>
-            <th style="width: 110px;">Orijinal BERTScore</th>
+            <th style="width: 70px;">BERTScore P</th>
+            <th style="width: 70px;">BERTScore R</th>
+            <th style="width: 70px;">BERTScore F1</th>
             <th style="width: 60px;">Süre</th>
           </tr>
         </thead>
@@ -112,7 +122,8 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
               <td class="${r.rouge1 != null ? getMetricClass(r.rouge1) : ''}">${r.rouge1 != null ? (r.rouge1 * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.rouge2 != null ? getMetricClass(r.rouge2) : ''}">${r.rouge2 != null ? (r.rouge2 * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.rougel != null ? getMetricClass(r.rougel) : ''}">${r.rougel != null ? (r.rougel * 100).toFixed(1) + '%' : '-'}</td>
-              <td class="${r.bertscore_f1 != null ? getMetricClass(r.bertscore_f1) : ''}">${r.bertscore_f1 != null ? (r.bertscore_f1 * 100).toFixed(1) + '%' : '-'}</td>
+              <td class="${r.original_bertscore_precision != null ? getMetricClass(r.original_bertscore_precision) : ''}">${r.original_bertscore_precision != null ? (r.original_bertscore_precision * 100).toFixed(1) + '%' : '-'}</td>
+              <td class="${r.original_bertscore_recall != null ? getMetricClass(r.original_bertscore_recall) : ''}">${r.original_bertscore_recall != null ? (r.original_bertscore_recall * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.original_bertscore_f1 != null ? getMetricClass(r.original_bertscore_f1) : ''}">${r.original_bertscore_f1 != null ? (r.original_bertscore_f1 * 100).toFixed(1) + '%' : '-'}</td>
               <td>${r.latency_ms}ms</td>
             </tr>
@@ -124,8 +135,7 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
         <p><strong>Metrik Açıklamaları:</strong></p>
         <ul style="margin: 10px 0; padding-left: 20px;">
           <li><strong>ROUGE-1/2/L:</strong> N-gram overlap metrikleri (0-100%). Üretilen cevabın referans cevapla kelime bazında ne kadar örtüştüğünü ölçer.</li>
-          <li><strong>BERTScore:</strong> Anlamsal benzerlik metrikleri (0-100%). Embedding tabanlı semantik benzerlik.</li>
-          <li><strong>Orijinal BERTScore:</strong> BERTScore (0-100%). <code>bert-score</code> kütüphanesi ile (token-level) hesaplanan orijinal metrik.</li>
+          <li><strong>BERTScore P/R/F1:</strong> BERT embedding tabanlı anlamsal benzerlik metrikleri (0-100%). <code>bert-score</code> Python kütüphanesi ile token-level hesaplanır.</li>
         </ul>
         <p style="margin-top: 20px;">Bu rapor Akıllı Rehber RAG Sistemi tarafından otomatik olarak oluşturulmuştur.</p>
       </div>

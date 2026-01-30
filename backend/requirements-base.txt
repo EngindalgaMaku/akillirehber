@@ -13,6 +13,7 @@ transformers>=4.36.0
 bert-score>=0.3.13
 
 # Giskard RAG Evaluation Toolkit (RAGET) with dependencies
+# Note: giskard[rag] includes datasets as a dependency, so we don't need to specify it separately
 giskard[rag]>=2.0.0
 
 # Required by Giskard RAGET embedding path (keeps install lighter than giskard[llm])

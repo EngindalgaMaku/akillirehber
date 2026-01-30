@@ -161,3 +161,27 @@ async def delete_existing_course(
     """
     delete_course(db, course_id, current_user)
     return None
+
+
+@router.get("/{course_id}/chunks")
+async def get_course_chunks(
+    course_id: int,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get chunks from a course's documents for test generation."""
+    # Verify access
+    verify_course_access(db, course_id, current_user)
+    
+    # Get chunks from all documents in this course
+    chunks = (
+        db.query(Chunk)
+        .join(Document, Chunk.document_id == Document.id)
+        .filter(Document.course_id == course_id)
+        .filter(Chunk.content.isnot(None))
+        .limit(limit)
+        .all()
+    )
+    
+    return [{"id": c.id, "content": c.content} for c in chunks]

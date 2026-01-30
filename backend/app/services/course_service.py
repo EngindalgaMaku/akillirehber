@@ -37,6 +37,48 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+DEFAULT_TEST_SYSTEM_PROMPT_REMEMBERING = (
+    "Sen bir eğitim uzmanısın ve Bloom Taksonomisi 'Hatırlama' seviyesinde "
+    "soru üretiyorsun. "
+    "Görev: İçerikten DOĞRUDAN bilgi çekmeyi gerektiren, "
+    "tanım/liste/terim odaklı bir soru üret. "
+    "KURALLAR: "
+    "(1) Soru self-contained olmalı (metne göre gibi ifadeler "
+    "kullanma). "
+    "(2) Cevap mutlaka verilen içerikte geçmeli veya içerikten "
+    "parafraz olmalı. "
+    "(3) Cevap detaylı olmalı (en az 2-3 cümle). "
+    "(4) Çıktı formatı: 'SORU:' ve 'CEVAP:' satırları."
+)
+
+
+DEFAULT_TEST_SYSTEM_PROMPT_UNDERSTANDING_APPLYING = (
+    "Sen bir eğitim uzmanısın ve Bloom Taksonomisi 'Anlama/Uygulama' "
+    "seviyesinde soru üretiyorsun. "
+    "Görev: İçerikteki bilgiyi YORUMLAMA veya UYGULAMA gerektiren "
+    "senaryolu bir soru üret. "
+    "KURALLAR: "
+    "(1) Soru self-contained olmalı. "
+    "(2) Cevap içerikteki kavramları kullanarak akıl yürütmeli ve uygulanabilir "
+    "açıklama vermeli (3-4 cümle). "
+    "(3) İçeriğe dayalı kal; içerikte olmayan iddialar ekleme. "
+    "(4) Çıktı formatı: 'SORU:' ve 'CEVAP:' satırları."
+)
+
+
+DEFAULT_TEST_SYSTEM_PROMPT_ANALYZING_EVALUATING = (
+    "Sen bir eğitim uzmanısın ve Bloom Taksonomisi 'Analiz/Değerlendirme' seviyesinde "
+    "soru üretiyorsun. "
+    "Görev: Karşılaştırma, analiz veya değerlendirme gerektiren bir soru üret. "
+    "KURALLAR: "
+    "(1) Soru self-contained olmalı. "
+    "(2) Cevap içerikteki bilgilerle sentez yapmalı, çok boyutlu olmalı "
+    "(4-5 cümle). "
+    "(3) İçeriğe dayalı kal; içerikte olmayan iddialar ekleme. "
+    "(4) Çıktı formatı: 'SORU:' ve 'CEVAP:' satırları."
+)
+
+
 def get_course_by_id(db: Session, course_id: int) -> Optional[Course]:
     """Get a course by ID."""
     return db.query(Course).filter(Course.id == course_id).first()
@@ -282,7 +324,12 @@ def get_or_create_settings(db: Session, course_id: int) -> CourseSettings:
             llm_model="openai/gpt-4o-mini",
             llm_temperature=0.7,
             llm_max_tokens=1000,
-            system_prompt=DEFAULT_SYSTEM_PROMPT
+            system_prompt=DEFAULT_SYSTEM_PROMPT,
+            system_prompt_remembering=DEFAULT_TEST_SYSTEM_PROMPT_REMEMBERING,
+            system_prompt_understanding_applying=(
+                DEFAULT_TEST_SYSTEM_PROMPT_UNDERSTANDING_APPLYING
+            ),
+            system_prompt_analyzing_evaluating=DEFAULT_TEST_SYSTEM_PROMPT_ANALYZING_EVALUATING,
         )
         db.add(settings)
         db.commit()

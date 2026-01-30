@@ -554,16 +554,20 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             reranker_provider: Optional reranker provider used (cohere/alibaba)
             reranker_model: Optional reranker model used
         """
-        # RAGAS expects a single ground_truth string, so we join multiple truths
-        # The first one is the primary, others are alternatives
-        combined_ground_truth = ground_truths[0] if ground_truths else ""
-        
+        # Prepare payload with ground_truths list if available
         payload = {
             "question": question,
-            "ground_truth": combined_ground_truth,
+            "ground_truth": ground_truths[0] if ground_truths else "",  # Primary (backward compat)
             "generated_answer": generated_answer,
             "retrieved_contexts": retrieved_contexts,
         }
+        
+        # Send all ground truths if we have alternatives
+        if ground_truths and len(ground_truths) > 1:
+            payload["ground_truths"] = ground_truths  # RAGAS will use all for answer_correctness
+            logger.info(
+                f"[RAGAS ALT GT] Sending {len(ground_truths)} ground truths to RAGAS service"
+            )
         
         # Add evaluation_model if provided - RAGAS service zaten modeli kullanıyor, mapping gereksiz!
         if evaluation_model:

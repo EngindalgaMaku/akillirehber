@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { QuickTestResponse, api } from "@/lib/api";
+import { QuickTestResponse, RagasGroupInfo, api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,7 +16,7 @@ interface QuickTestSectionProps {
   quickTestResult: QuickTestResponse | null;
   setQuickTestResult: (result: QuickTestResponse | null) => void;
   onResultSaved: () => void;
-  savedResultsGroups: string[];
+  savedResultsGroups: RagasGroupInfo[];
 }
 
 export function QuickTestSection({ 
@@ -366,12 +366,12 @@ export function QuickTestSection({
                           <div className="flex flex-wrap gap-1">
                             {savedResultsGroups.map((g) => (
                               <button
-                                key={g}
+                                key={g.name}
                                 type="button"
-                                onClick={() => setSaveGroupName(g)}
+                                onClick={() => setSaveGroupName(g.name)}
                                 className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded"
                               >
-                                {g}
+                                {g.name}
                               </button>
                             ))}
                           </div>

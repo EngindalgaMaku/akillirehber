@@ -384,6 +384,9 @@ class CourseSettingsBase(BaseModel):
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     llm_max_tokens: int = Field(default=1000, ge=100, le=4000)
     system_prompt: Optional[str] = None
+    system_prompt_remembering: Optional[str] = None
+    system_prompt_understanding_applying: Optional[str] = None
+    system_prompt_analyzing_evaluating: Optional[str] = None
     enable_reranker: bool = False
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
@@ -411,6 +414,24 @@ class CourseSettingsUpdate(BaseModel):
     llm_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     llm_max_tokens: Optional[int] = Field(default=None, ge=100, le=4000)
     system_prompt: Optional[str] = Field(default=None, max_length=2000)
+    system_prompt_remembering: Optional[str] = (
+        Field(
+            default=None,
+            max_length=5000,
+        )
+    )
+    system_prompt_understanding_applying: Optional[str] = (
+        Field(
+            default=None,
+            max_length=5000,
+        )
+    )
+    system_prompt_analyzing_evaluating: Optional[str] = (
+        Field(
+            default=None,
+            max_length=5000,
+        )
+    )
     enable_reranker: Optional[bool] = None
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
@@ -848,6 +869,7 @@ class QuickTestResponse(BaseModel):
     system_prompt_used: str
     llm_provider_used: str
     llm_model_used: str
+    evaluation_model_used: Optional[str] = None
     # Reranker metadata
     reranker_used: Optional[bool] = None
     reranker_provider: Optional[str] = None
@@ -867,6 +889,7 @@ class QuickTestResultCreate(BaseModel):
     system_prompt: Optional[str] = None
     llm_provider: str
     llm_model: str
+    evaluation_model: Optional[str] = None
     generated_answer: str
     retrieved_contexts: Optional[List[RetrievedContext]] = None
     faithfulness: Optional[float] = None
@@ -891,6 +914,7 @@ class QuickTestResultResponse(BaseModel):
     system_prompt: Optional[str] = None
     llm_provider: str
     llm_model: str
+    evaluation_model: Optional[str] = None
     generated_answer: str
     retrieved_contexts: Optional[List[RetrievedContext]] = None
     faithfulness: Optional[float] = None
@@ -907,12 +931,20 @@ class QuickTestResultResponse(BaseModel):
     reranker_model: Optional[str] = None
 
 
+class RagasGroupInfo(BaseModel):
+    """Schema for RAGAS group information with creation date."""
+
+    name: str
+    created_at: Optional[str] = None
+
+
 class QuickTestResultListResponse(BaseModel):
     """Schema for quick test result list response."""
 
     results: List[QuickTestResultResponse]
     total: int
-    groups: List[str]
+    groups: List[RagasGroupInfo]
+    aggregate: Optional[dict] = None  # Contains avg metrics and test_parameters
 
 
 # ==================== Custom LLM Model Schemas ====================

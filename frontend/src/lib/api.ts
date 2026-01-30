@@ -20,6 +20,24 @@ export interface ApiError {
   detail: string;
 }
 
+export interface GenerateTestSetQuestionsResponse {
+  success: boolean;
+  test_set_id: number;
+  generated_count: number;
+  saved_count: number;
+  persona_used: string;
+  llm_used?: string;
+}
+
+export interface GenerateFromCourseResponse {
+  success: boolean;
+  test_set_id: number;
+  generated_count: number;
+  saved_count: number;
+  statistics?: Record<string, unknown>;
+  message?: string;
+}
+
 export interface User {
   id: number;
   email: string;
@@ -148,6 +166,9 @@ export interface CourseSettings {
   llm_temperature: number;
   llm_max_tokens: number;
   system_prompt: string | null;
+  system_prompt_remembering?: string | null;
+  system_prompt_understanding_applying?: string | null;
+  system_prompt_analyzing_evaluating?: string | null;
   enable_reranker: boolean;
   reranker_provider: string | null;
   reranker_model: string | null;
@@ -169,6 +190,9 @@ export interface CourseSettingsUpdate {
   llm_temperature?: number;
   llm_max_tokens?: number;
   system_prompt?: string;
+  system_prompt_remembering?: string;
+  system_prompt_understanding_applying?: string;
+  system_prompt_analyzing_evaluating?: string;
   enable_reranker?: boolean;
   reranker_provider?: string;
   reranker_model?: string;
@@ -290,13 +314,19 @@ class ApiClient {
     options: RequestInit = {},
     isRetry: boolean = false
   ): Promise<T> {
+    const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
+
     const headers: HeadersInit = {
-      "Content-Type": "application/json",
       ...options.headers,
     };
 
-    if (this.token) {
-      (headers as Record<string, string>)["Authorization"] = `Bearer ${this.getToken()}`;
+    if (!isFormDataBody && (headers as Record<string, string>)["Content-Type"] === undefined) {
+      (headers as Record<string, string>)["Content-Type"] = "application/json";
+    }
+
+    const token = this.getToken();
+    if (token) {
+      (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
     }
 
     const response = await fetch(`${API_URL}${endpoint}`, {
@@ -616,6 +646,30 @@ class ApiClient {
     return this.request("/api/courses/dashboard/stats");
   }
 
+  async generateFromCourse(data: {
+    test_set_id: number;
+    total_questions?: number;
+    remembering_ratio?: number;
+    understanding_applying_ratio?: number;
+    analyzing_evaluating_ratio?: number;
+  }): Promise<GenerateFromCourseResponse> {
+    const formData = new FormData();
+    formData.append("test_set_id", data.test_set_id.toString());
+    if (data.total_questions !== undefined) formData.append("total_questions", data.total_questions.toString());
+    if (data.remembering_ratio !== undefined) formData.append("remembering_ratio", data.remembering_ratio.toString());
+    if (data.understanding_applying_ratio !== undefined) {
+      formData.append("understanding_applying_ratio", data.understanding_applying_ratio.toString());
+    }
+    if (data.analyzing_evaluating_ratio !== undefined) {
+      formData.append("analyzing_evaluating_ratio", data.analyzing_evaluating_ratio.toString());
+    }
+
+    return this.request<GenerateFromCourseResponse>("/api/test-generation/generate-from-course", {
+      method: "POST",
+      body: formData,
+    });
+  }
+
   // Legacy chunking endpoint
   async chunk(data: { 
     text: string; 
@@ -680,6 +734,23 @@ class ApiClient {
 
   async exportTestSet(testSetId: number): Promise<{ name: string; description?: string; questions: { question: string; ground_truth: string }[] }> {
     return this.request(`/api/ragas/test-sets/${testSetId}/export`);
+  }
+
+  async generateTestSetQuestions(
+    testSetId: number,
+    data: { num_questions?: number; persona?: string }
+  ): Promise<GenerateTestSetQuestionsResponse> {
+    const params = new URLSearchParams();
+    if (data.num_questions !== undefined) params.append("num_questions", data.num_questions.toString());
+    if (data.persona !== undefined) params.append("persona", data.persona);
+    const qs = params.toString();
+
+    return this.request<GenerateTestSetQuestionsResponse>(
+      `/api/ragas/test-sets/${testSetId}/generate-questions${qs ? `?${qs}` : ""}`,
+      {
+        method: "POST",
+      }
+    );
   }
 
   // Questions
@@ -1050,20 +1121,23 @@ class ApiClient {
     course_id: number;
     group_name?: string;
     question: string;
+    question_type: "relevant" | "irrelevant";
     expected_answer: string;
+    generated_answer: string;
+    score?: number;
+    correct_refusal?: boolean;
+    hallucinated?: boolean;
+    provided_answer?: boolean;
+    language?: string;
+    quality_score?: number;
     system_prompt?: string;
     llm_provider?: string;
     llm_model?: string;
-    generated_answer: string;
-    retrieved_contexts?: string[];
-    faithfulness?: number;
-    answer_relevancy?: number;
-    context_precision?: number;
-    context_recall?: number;
-    answer_correctness?: number;
+    embedding_model?: string;
     latency_ms?: number;
-  }): Promise<QuickTestResult> {
-    return this.request<QuickTestResult>("/api/giskard/quick-test/save", {
+    error_message?: string;
+  }): Promise<GiskardQuickTestSavedResult> {
+    return this.request<GiskardQuickTestSavedResult>("/api/giskard/quick-test/save", {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -1248,6 +1322,29 @@ class ApiClient {
   async deleteSemanticSimilarityGroup(courseId: number, groupName: string): Promise<{ success: boolean; message: string; deleted_count: number }> {
     return this.request<{ success: boolean; message: string; deleted_count: number }>(
       `/api/semantic-similarity/groups/${encodeURIComponent(groupName)}?course_id=${courseId}`,
+      { method: "DELETE" }
+    );
+  }
+
+  // ==================== RAGAS Group Management ====================
+
+  async renameRagasGroup(
+    courseId: number, 
+    oldGroupName: string, 
+    newGroupName: string
+  ): Promise<{ success: boolean; message: string; updated_count: number }> {
+    return this.request<{ success: boolean; message: string; updated_count: number }>(
+      `/api/ragas/groups/rename?course_id=${courseId}&old_group_name=${encodeURIComponent(oldGroupName)}&new_group_name=${encodeURIComponent(newGroupName)}`,
+      { method: "PUT" }
+    );
+  }
+
+  async deleteRagasGroup(
+    courseId: number, 
+    groupName: string
+  ): Promise<{ success: boolean; message: string; deleted_count: number }> {
+    return this.request<{ success: boolean; message: string; deleted_count: number }>(
+      `/api/ragas/groups/${encodeURIComponent(groupName)}?course_id=${courseId}`,
       { method: "DELETE" }
     );
   }
@@ -1539,6 +1636,15 @@ export interface TestQuestion {
   alternative_ground_truths?: string[];
   expected_contexts?: string[];
   metadata?: Record<string, unknown>;
+  question_metadata?: {
+    bloom_level?: string;
+    generated_by?: string;
+    generated_at?: string;
+    chunk_id?: string;
+    llm_provider?: string;
+    llm_model?: string;
+    [key: string]: unknown;
+  };
   created_at: string;
 }
 
@@ -1875,10 +1981,34 @@ export interface QuickTestResult {
   reranker_model?: string;
 }
 
+export interface RagasGroupInfo {
+  name: string;
+  created_at: string | null;
+}
+
 export interface QuickTestResultListResponse {
   results: QuickTestResult[];
   total: number;
-  groups: string[];
+  groups: RagasGroupInfo[];
+  aggregate?: {
+    avg_faithfulness?: number;
+    avg_answer_relevancy?: number;
+    avg_context_precision?: number;
+    avg_context_recall?: number;
+    avg_answer_correctness?: number;
+    test_count?: number;
+    test_parameters?: {
+      llm_model?: string;
+      llm_provider?: string;
+      embedding_model?: string;
+      evaluation_model?: string;
+      search_alpha?: number;
+      search_top_k?: number;
+      reranker_used?: boolean;
+      reranker_provider?: string | null;
+      reranker_model?: string | null;
+    };
+  };
 }
 
 // ==================== Custom LLM Model Types ====================

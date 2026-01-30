@@ -341,7 +341,16 @@ async def get_evaluation_run(
     """Get an evaluation run by ID."""
     run = db.query(GiskardRun).filter(GiskardRun.id == run_id).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Evaluation run not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Evaluation run not found"
+        )
+    
+    # Get summary for metrics if available
+    summary = db.query(GiskardSummary).filter(
+        GiskardSummary.run_id == run_id
+    ).first()
+    
     return GiskardEvaluationRunResponse(
         id=run.id,
         test_set_id=run.test_set_id,
@@ -356,9 +365,11 @@ async def get_evaluation_run(
         completed_at=run.completed_at,
         error_message=run.error_message,
         created_at=run.created_at,
-        overall_score=run.overall_score,
-        hallucination_rate=run.hallucination_rate,
-        turkish_response_rate=run.turkish_response_rate,
+        overall_score=summary.overall_score if summary else None,
+        hallucination_rate=summary.hallucination_rate if summary else None,
+        turkish_response_rate=(
+            summary.turkish_response_rate if summary else None
+        ),
     )
 
 
@@ -378,8 +389,15 @@ async def get_course_evaluation_runs(
         .order_by(GiskardRun.created_at.desc())
         .all()
     )
-    return [
-        GiskardEvaluationRunResponse(
+    
+    results = []
+    for r in runs:
+        # Get summary for metrics if available
+        summary = db.query(GiskardSummary).filter(
+            GiskardSummary.run_id == r.id
+        ).first()
+        
+        results.append(GiskardEvaluationRunResponse(
             id=r.id,
             test_set_id=r.test_set_id,
             test_set_name=None,
@@ -393,12 +411,16 @@ async def get_course_evaluation_runs(
             completed_at=r.completed_at,
             error_message=r.error_message,
             created_at=r.created_at,
-            overall_score=r.overall_score,
-            hallucination_rate=r.hallucination_rate,
-            turkish_response_rate=r.turkish_response_rate,
-        )
-        for r in runs
-    ]
+            overall_score=summary.overall_score if summary else None,
+            hallucination_rate=(
+                summary.hallucination_rate if summary else None
+            ),
+            turkish_response_rate=(
+                summary.turkish_response_rate if summary else None
+            ),
+        ))
+    
+    return results
 
 
 @router.delete("/runs/{run_id}")
@@ -518,26 +540,33 @@ async def quick_test(
 )
 async def save_quick_test_result(
     result: GiskardQuickTestResultCreate,
+    current_user: User = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ) -> GiskardQuickTestResultResponse:
     """Save a quick test result."""
+    # Verify course access
+    verify_course_access(db, result.course_id, current_user)
+    
     db_result = GiskardQuickTestResult(
         course_id=result.course_id,
         group_name=result.group_name,
         question=result.question,
         question_type=result.question_type,
         expected_answer=result.expected_answer,
+        generated_answer=result.generated_answer,
+        score=result.score,
+        correct_refusal=result.correct_refusal,
+        hallucinated=result.hallucinated,
+        provided_answer=result.provided_answer,
+        language=result.language,
+        quality_score=result.quality_score,
         system_prompt=result.system_prompt,
         llm_provider=result.llm_provider,
         llm_model=result.llm_model,
-        generated_answer=result.generated_answer,
-        retrieved_contexts=result.retrieved_contexts,
-        faithfulness=result.faithfulness,
-        answer_relevancy=result.answer_relevancy,
-        context_precision=result.context_precision,
-        context_recall=result.context_recall,
-        answer_correctness=result.answer_correctness,
+        embedding_model=result.embedding_model,
         latency_ms=result.latency_ms,
+        error_message=result.error_message,
+        created_by=current_user.id,
     )
     db.add(db_result)
     db.commit()
@@ -549,18 +578,20 @@ async def save_quick_test_result(
         question=db_result.question,
         question_type=db_result.question_type,
         expected_answer=db_result.expected_answer,
+        generated_answer=db_result.generated_answer,
+        score=db_result.score,
+        correct_refusal=db_result.correct_refusal,
+        hallucinated=db_result.hallucinated,
+        provided_answer=db_result.provided_answer,
+        language=db_result.language,
+        quality_score=db_result.quality_score,
         system_prompt=db_result.system_prompt,
         llm_provider=db_result.llm_provider,
         llm_model=db_result.llm_model,
-        generated_answer=db_result.generated_answer,
-        retrieved_contexts=db_result.retrieved_contexts,
-        faithfulness=db_result.faithfulness,
-        answer_relevancy=db_result.answer_relevancy,
-        context_precision=db_result.context_precision,
-        context_recall=db_result.context_recall,
-        answer_correctness=db_result.answer_correctness,
+        embedding_model=db_result.embedding_model,
         latency_ms=db_result.latency_ms,
-        created_by=1,
+        error_message=db_result.error_message,
+        created_by=db_result.created_by,
         created_at=db_result.created_at,
     )
 
@@ -574,9 +605,13 @@ async def get_quick_test_results(
     group_name: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
+    current_user: User = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ) -> GiskardQuickTestResultListResponse:
     """Get saved quick test results for a course."""
+    # Verify course access
+    verify_course_access(db, course_id, current_user)
+    
     query = db.query(GiskardQuickTestResult).filter(
         GiskardQuickTestResult.course_id == course_id
     )
@@ -616,17 +651,19 @@ async def get_quick_test_results(
                 question=r.question,
                 question_type=r.question_type,
                 expected_answer=r.expected_answer,
+                generated_answer=r.generated_answer,
+                score=r.score,
+                correct_refusal=r.correct_refusal,
+                hallucinated=r.hallucinated,
+                provided_answer=r.provided_answer,
+                language=r.language,
+                quality_score=r.quality_score,
                 system_prompt=r.system_prompt,
                 llm_provider=r.llm_provider,
                 llm_model=r.llm_model,
-                generated_answer=r.generated_answer,
-                retrieved_contexts=r.retrieved_contexts,
-                faithfulness=r.faithfulness,
-                answer_relevancy=r.answer_relevancy,
-                context_precision=r.context_precision,
-                context_recall=r.context_recall,
-                answer_correctness=r.answer_correctness,
+                embedding_model=r.embedding_model,
                 latency_ms=r.latency_ms,
+                error_message=r.error_message,
                 created_by=r.created_by,
                 created_at=r.created_at,
             )

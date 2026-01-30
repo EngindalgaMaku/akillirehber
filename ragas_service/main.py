@@ -6,7 +6,7 @@ import logging
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -46,7 +46,8 @@ RUNTIME_SETTINGS = {
 class EvaluationInput(BaseModel):
     """Input for single question evaluation."""
     question: str
-    ground_truth: str
+    ground_truth: str  # Primary ground truth (backward compatibility)
+    ground_truths: Optional[List[str]] = None  # Alternative ground truths
     generated_answer: str
     retrieved_contexts: List[str]
     evaluation_model: Optional[str] = None
@@ -347,28 +348,25 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
         from langchain_openai import ChatOpenAI
 
         # DEBUG: Log the evaluation_model received from request
-        print(
-            f"[RAGAS DEBUG] evaluate_with_ragas - "
-            f"input_data.evaluation_model: {input_data.evaluation_model}",
-            flush=True
-        )
-        print(
-            f"[RAGAS DEBUG] evaluate_with_ragas - "
-            f"llm_config model: {llm_config['model']}",
-            flush=True
+        logger.info(
+            "[RAGAS DEBUG] Başlatılıyor - "
+            "evaluation_model: %s, llm_config model: %s",
+            input_data.evaluation_model,
+            llm_config['model']
         )
 
         # Use evaluation_model from input if provided, otherwise use config
         model_to_use = input_data.evaluation_model or llm_config["model"]
         
-        # DEBUG: Log the final model being used
-        print(
-            f"[RAGAS DEBUG] evaluate_with_ragas - "
-            f"FINAL model_to_use: {model_to_use}",
-            flush=True
+        logger.info(
+            "[RAGAS DEBUG] Kullanılacak model: %s (provider: %s)",
+            model_to_use,
+            llm_config['provider']
         )
         
         # Configure LLM from config (use current provider settings)
+        # Note: OpenRouter doesn't support n>1, so we use single generation
+        # This may result in slightly higher variance in scores
         llm_kwargs = {
             "model": model_to_use,
             "api_key": llm_config["api_key"],
@@ -393,22 +391,64 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
                 error="No embeddings API key (need OPENROUTER or OPENAI)"
             )
 
+        logger.info("[RAGAS DEBUG] Answer Relevancy metriği hazırlandı (Orijinal RAGAS)")
+
         # Prepare dataset for RAGAS
+        # RAGAS uses "reference" column (single string)
+        # If multiple ground truths, find best match using embedding similarity
+        best_reference = input_data.ground_truth
+        
+        if input_data.ground_truths and len(input_data.ground_truths) > 1:
+            logger.info(
+                "[RAGAS ALT GT] Finding best match from %d ground truths",
+                len(input_data.ground_truths)
+            )
+            # Find best matching ground truth using embedding similarity
+            answer_embedding = embeddings.embed_query(input_data.generated_answer)
+            
+            best_score = -1
+            for gt in input_data.ground_truths:
+                gt_embedding = embeddings.embed_query(gt)
+                # Cosine similarity
+                import numpy as np
+                similarity = np.dot(answer_embedding, gt_embedding) / (
+                    np.linalg.norm(answer_embedding) * np.linalg.norm(gt_embedding)
+                )
+                if similarity > best_score:
+                    best_score = similarity
+                    best_reference = gt
+            
+            logger.info(
+                "[RAGAS ALT GT] Best match score: %.4f, Reference: %s...",
+                best_score,
+                best_reference[:50]
+            )
+        
         data = {
             "question": [input_data.question],
             "answer": [input_data.generated_answer],
             "contexts": [input_data.retrieved_contexts],
-            "ground_truth": [input_data.ground_truth],
+            "reference": [best_reference],  # Best matching GT
         }
 
         dataset = Dataset.from_dict(data)
+        
+        # DEBUG: Log input data details
+        logger.info(
+            "[RAGAS DEBUG] Input detayları - "
+            "Soru uzunluğu: %d, Cevap uzunluğu: %d, Context sayısı: %d",
+            len(input_data.question),
+            len(input_data.generated_answer),
+            len(input_data.retrieved_contexts)
+        )
 
         # Run evaluation
+        logger.info("[RAGAS DEBUG] Değerlendirme başlatılıyor...")
         result = evaluate(
             dataset,
             metrics=[
                 faithfulness,
-                answer_relevancy,
+                answer_relevancy,  # Use original RAGAS metric (works better!)
                 context_precision,
                 context_recall,
                 answer_correctness,
@@ -416,6 +456,7 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
             llm=llm,
             embeddings=embeddings,
         )
+        logger.info("[RAGAS DEBUG] Değerlendirme tamamlandı")
 
         # Parse and log the result
         parsed_result = _parse_ragas_result(result, input_data)
@@ -423,30 +464,40 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
         # Log reranker usage if present
         if input_data.reranker_provider:
             logger.info(
-                "[RAGAS] Evaluation with reranker: %s/%s",
+                "[RAGAS] Reranker kullanıldı: %s/%s",
                 input_data.reranker_provider,
                 input_data.reranker_model or "default"
             )
         
-        # DEBUG: Log the actual metrics returned
+        # DEBUG: Detailed metric logging
         logger.info(
-            "[RAGAS METRICS] Question: %s... | "
-            "Faithfulness: %s | Answer Relevancy: %s | "
-            "Context Precision: %s | Context Recall: %s | "
-            "Answer Correctness: %s | Reranker: %s",
-            input_data.question[:50],
-            parsed_result.faithfulness,
-            parsed_result.answer_relevancy,
-            parsed_result.context_precision,
-            parsed_result.context_recall,
-            parsed_result.answer_correctness,
+            "[RAGAS SONUÇLAR] ========================================\n"
+            "Soru: %s\n"
+            "Cevap Uzunluğu: %d karakter\n"
+            "Context Sayısı: %d\n"
+            "--- METRİKLER ---\n"
+            "Faithfulness (Sadakat): %s\n"
+            "Answer Relevancy (Cevap İlgisi): %s\n"
+            "Context Precision (Bağlam Kesinliği): %s\n"
+            "Context Recall (Bağlam Hatırlama): %s\n"
+            "Answer Correctness (Cevap Doğruluğu): %s\n"
+            "Reranker: %s\n"
+            "========================================",
+            input_data.question[:100],
+            len(input_data.generated_answer),
+            len(input_data.retrieved_contexts),
+            f"{parsed_result.faithfulness:.3f}" if parsed_result.faithfulness else "N/A",
+            f"{parsed_result.answer_relevancy:.3f}" if parsed_result.answer_relevancy else "N/A",
+            f"{parsed_result.context_precision:.3f}" if parsed_result.context_precision else "N/A",
+            f"{parsed_result.context_recall:.3f}" if parsed_result.context_recall else "N/A",
+            f"{parsed_result.answer_correctness:.3f}" if parsed_result.answer_correctness else "N/A",
             f"{input_data.reranker_provider}/{input_data.reranker_model}" if input_data.reranker_provider else "none"
         )
         
         return parsed_result
 
     except Exception as e:
-        logger.error("RAGAS evaluation error: %s", e)
+        logger.error("[RAGAS ERROR] Değerlendirme hatası: %s", e, exc_info=True)
         return EvaluationOutput(error=str(e))
 
 
@@ -763,6 +814,197 @@ async def root():
         "llm_provider": provider_info,
         "docs": "/docs"
     }
+
+
+# ==================== Test Generation Endpoint ====================
+
+class TestGenerationRequest(BaseModel):
+    """Request for generating test questions from documents."""
+    documents: List[str]  # List of document contents
+    persona: str  # Student persona description
+    test_size: int = 50
+    distributions: dict = {
+        "simple": 0.4,
+        "reasoning": 0.4,
+        "multi_context": 0.2
+    }
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class TestGenerationResponse(BaseModel):
+    """Response with generated test questions."""
+    questions: List[dict]
+    total_generated: int
+    persona_used: str
+    llm_used: str
+
+
+@app.post("/generate-testset", response_model=TestGenerationResponse)
+async def generate_testset(request: TestGenerationRequest):
+    """Generate test questions from documents using RAGAS TestsetGenerator.
+    
+    Uses Bloom taxonomy with different evolution types:
+    - simple: Basic factual questions
+    - reasoning: Questions requiring logical reasoning
+    - multi_context: Questions requiring multiple document contexts
+    """
+    if not RAGAS_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="RAGAS library not available"
+        )
+    
+    llm_config = get_llm_config()
+    if not llm_config:
+        raise HTTPException(
+            status_code=503,
+            detail="No LLM configured for test generation"
+        )
+    
+    try:
+        # RAGAS 0.2.15 - Direct LLM usage (no wrapper needed)
+        from ragas.testset import TestsetGenerator
+        from langchain_openai import ChatOpenAI
+        from langchain_core.documents import Document
+        
+        # Use provided LLM or get from config
+        model_to_use = request.llm_model or llm_config["model"]
+        provider_to_use = request.llm_provider or llm_config["provider"]
+        
+        logger.info(
+            "[TEST GEN] Starting generation with %s documents, persona: %s",
+            len(request.documents),
+            request.persona[:50]
+        )
+        
+        # Configure LLM
+        llm_kwargs = {
+            "model": model_to_use,
+            "api_key": llm_config["api_key"],
+            "temperature": 0.7,  # More creative for questions
+            "default_headers": {
+                "HTTP-Referer": "http://localhost:8001",
+                "X-Title": SERVICE_NAME,
+            } if provider_to_use in ["openrouter", "claudegg"] else {}
+        }
+        
+        if llm_config["base_url"]:
+            llm_kwargs["base_url"] = llm_config["base_url"]
+        
+        generator_llm = ChatOpenAI(**llm_kwargs)
+        critic_llm = ChatOpenAI(**llm_kwargs)  # Same LLM for critic
+        
+        # Get embeddings
+        embeddings_obj = get_embeddings()
+        if not embeddings_obj:
+            raise HTTPException(
+                status_code=503,
+                detail="No embeddings configured"
+            )
+        
+        # Create TestsetGenerator with proper embeddings
+        logger.info("[TEST GEN] Creating TestsetGenerator (with embeddings)...")
+        from ragas.llms import LangchainLLMWrapper
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        
+        # RAGAS needs proper wrappers after all!
+        generator = TestsetGenerator.from_langchain(
+            generator_llm,
+            critic_llm,
+            LangchainEmbeddingsWrapper(embeddings_obj)  # WRAP embeddings!
+        )
+        
+        # Convert documents with BETTER chunking for RAGAS
+        logger.info("[TEST GEN] Converting %d documents...", len(request.documents))
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        
+        # Combine all documents into one text
+        full_text = "\n\n".join(request.documents)
+        
+        # Use RecursiveCharacterTextSplitter (BETTER for RAGAS!)
+        # 1500 chars = ~300-400 tokens, enough context for questions
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1500,  # Larger chunks = more context
+            chunk_overlap=200,  # More overlap = better coherence
+            length_function=len,
+        )
+        
+        langchain_docs = splitter.create_documents(
+            texts=[full_text],
+            metadatas=[{"source": "uploaded_pdf"}]
+        )
+        
+        logger.info("[TEST GEN] Created %d chunks from documents", len(langchain_docs))
+        
+        # Debug: Log first chunk
+        if langchain_docs:
+            logger.info(
+                "[TEST GEN DEBUG] First chunk (%d chars): %s...",
+                len(langchain_docs[0].page_content),
+                langchain_docs[0].page_content[:200]
+            )
+        
+        # RAGAS 0.4.3 - Custom transforms WITHOUT HeadlineSplitter
+        logger.info("[TEST GEN] Generating %d questions (v0.4.3)...", request.test_size)
+        
+        from ragas.testset.transforms import (
+            EmbeddingExtractor,
+            KeyphrasesExtractor,
+            SummaryExtractor,
+        )
+        
+        # Create custom transforms list (skip HeadlineSplitter!)
+        custom_transforms = [
+            SummaryExtractor(llm=generator_llm),
+            KeyphrasesExtractor(llm=generator_llm),
+            EmbeddingExtractor(embeddings=embeddings_obj),
+        ]
+        
+        logger.info("[TEST GEN] Using %d custom transforms", len(custom_transforms))
+        
+        # Generate with custom transforms
+        testset = generator.generate_with_langchain_docs(
+            langchain_docs,
+            testset_size=request.test_size,
+            transforms=custom_transforms,
+        )
+        
+        logger.info("[TEST GEN] Generation complete! Converting...")
+        
+        # Convert to pandas DataFrame
+        df = testset.to_pandas()
+        
+        # Extract questions from DataFrame
+        questions = []
+        for _, row in df.iterrows():
+            questions.append({
+                "question": row.get("user_input", row.get("question", "")),
+                "ground_truth": row.get("reference", row.get("ground_truth", "")),
+                "contexts": row.get("reference_contexts", row.get("contexts", [])),
+            })
+        
+        logger.info("[TEST GEN] Generated %d questions", len(questions))
+        
+        return TestGenerationResponse(
+            questions=questions,
+            total_generated=len(questions),
+            persona_used=request.persona,
+            llm_used=f"{provider_to_use}/{model_to_use}"
+        )
+        
+    except ImportError as e:
+        logger.error("[TEST GEN] Import error: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Required library not available: {e}"
+        )
+    except Exception as e:
+        logger.error("[TEST GEN] Generation error: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Test generation failed: {e}"
+        )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from app.routers import (
     semantic_similarity,
     system,
     system_settings,
+    test_generation,
 )
 from app.api.benchmark import router as benchmark_router
 
@@ -78,6 +79,7 @@ app.include_router(giskard.router)
 app.include_router(system.router)
 app.include_router(system_settings.router)
 app.include_router(llm_models.router)
+app.include_router(test_generation.router)
 
 
 @app.get("/")

@@ -35,8 +35,37 @@ from app.services.rerank_service import get_rerank_service
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
+def clean_context_text(text: str) -> str:
+    """Temizlenmiş context metni döndürür.
+    
+    Chunk'lardaki gereksiz whitespace karakterlerini temizler:
+    - Birden fazla \n -> tek boşluk
+    - \t -> tek boşluk  
+    - Birden fazla boşluk -> tek boşluk
+    - Başta/sonda boşluk -> kaldır
+    
+    Bu iyileştirme hem LLM'in daha iyi cevap vermesini hem de
+    RAGAS metriklerinin daha yüksek olmasını sağlar.
+    """
+    import re
+    
+    if not text:
+        return text
+    
+    # \n ve \t karakterlerini boşluğa çevir
+    text = text.replace('\n', ' ').replace('\t', ' ')
+    
+    # Birden fazla boşluğu tek boşluğa indir
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Başta ve sonda boşluk varsa kaldır
+    text = text.strip()
+    
+    return text
+
+
 def build_context(results: List[SearchResult], db: Session) -> str:
-    """Build context string from search results with enhanced validation."""
+    """Build context string from search results with enhanced validation and cleaning."""
     if not results:
         return ""
 
@@ -60,6 +89,9 @@ def build_context(results: List[SearchResult], db: Session) -> str:
 
         # Use database content if available for consistency
         content = chunk.content if chunk else result.content
+        
+        # 🔥 YENİ: Context'i temizle - whitespace karakterlerini kaldır
+        content = clean_context_text(content)
 
         context_parts.append(
             f"[Kaynak {i}: {doc_name}]\n{content}\n"

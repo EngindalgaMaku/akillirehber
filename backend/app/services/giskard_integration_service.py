@@ -315,55 +315,22 @@ class GiskardIntegrationService:
         course_settings = get_or_create_settings(self.db, course_id)
 
         import os
-        embedding_model = (
-            getattr(course_settings, "default_embedding_model", None)
-            or EmbeddingService.DEFAULT_MODEL
-        )
-
-        # Configure Litellm/OpenAI-compatible environment variables.
-        # Giskard's RAGET uses litellm under the hood for embeddings.
-        # If these variables are missing, litellm can try OpenAI defaults and
-        # fail with a 401.
-        if embedding_model.startswith(EmbeddingService.OPENAI_MODEL_PREFIX):
-            openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-            openai_key = os.environ.get("OPENAI_API_KEY")
-            if not openai_key:
-                if not openrouter_key:
-                    raise ValueError(
-                        "RAGET testset generation requires embeddings. "
-                        "Set OPENROUTER_API_KEY (recommended) or "
-                        "OPENAI_API_KEY."
-                    )
-                os.environ["OPENAI_API_KEY"] = openrouter_key
-
-            os.environ.setdefault(
-                "OPENAI_API_BASE", EmbeddingService.OPENROUTER_BASE_URL
+        # For RAGET, use OpenAI text-embedding-3-small directly
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        if not openai_key:
+            raise ValueError(
+                "RAGET requires OPENAI_API_KEY environment variable. "
+                "Please set it in your .env file."
             )
-            os.environ.setdefault(
-                "OPENAI_BASE_URL", EmbeddingService.OPENROUTER_BASE_URL
-            )
-
-        elif embedding_model.startswith(EmbeddingService.ALIBABA_MODEL_PREFIX):
-            dashscope_key = os.environ.get("DASHSCOPE_API_KEY")
-            if not dashscope_key:
-                raise ValueError(
-                    "RAGET testset generation requires embeddings. "
-                    "For Alibaba embedding models set DASHSCOPE_API_KEY."
-                )
-            os.environ["OPENAI_API_KEY"] = dashscope_key
-            os.environ.setdefault(
-                "OPENAI_API_BASE", EmbeddingService.DASHSCOPE_BASE_URL
-            )
-            os.environ.setdefault(
-                "OPENAI_BASE_URL", EmbeddingService.DASHSCOPE_BASE_URL
-            )
-
-        elif embedding_model.startswith(EmbeddingService.COHERE_MODEL_PREFIX):
-            if not os.environ.get("COHERE_API_KEY"):
-                raise ValueError(
-                    "RAGET testset generation requires embeddings. "
-                    "For Cohere embedding models set COHERE_API_KEY."
-                )
+        
+        # Use OpenAI embedding model directly (no OpenRouter, no custom base URL)
+        embedding_model = "text-embedding-3-small"
+        
+        # Clear any custom API base URLs for RAGET - use OpenAI directly
+        if "OPENAI_API_BASE" in os.environ:
+            del os.environ["OPENAI_API_BASE"]
+        if "OPENAI_BASE_URL" in os.environ:
+            del os.environ["OPENAI_BASE_URL"]
 
         document_content = self._get_document_content(course_id)
 

@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python dependencies
 # First install large packages that rarely change (for better caching)
 COPY requirements-base.txt .
-RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements-base.txt
+# Disable hash checking to avoid version conflicts
+RUN pip wheel --no-cache-dir --use-deprecated=legacy-resolver --wheel-dir /app/wheels -r requirements-base.txt
 
 # Then install other packages that may change more frequently
 COPY requirements.txt .

@@ -12,9 +12,28 @@ interface StatisticsModalProps {
   onClose: () => void;
   selectedCourseId: number;
   selectedGroup: string;
+  aggregate: {
+    avg_faithfulness?: number;
+    avg_answer_relevancy?: number;
+    avg_context_precision?: number;
+    avg_context_recall?: number;
+    avg_answer_correctness?: number;
+    test_count?: number;
+    test_parameters?: {
+      llm_model?: string;
+      llm_provider?: string;
+      embedding_model?: string;
+      evaluation_model?: string;
+      search_alpha?: number;
+      search_top_k?: number;
+      reranker_used?: boolean;
+      reranker_provider?: string | null;
+      reranker_model?: string | null;
+    };
+  } | null;
 }
 
-export function StatisticsModal({ isOpen, onClose, selectedCourseId, selectedGroup }: StatisticsModalProps) {
+export function StatisticsModal({ isOpen, onClose, selectedCourseId, selectedGroup, aggregate }: StatisticsModalProps) {
   const [results, setResults] = useState<QuickTestResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -250,6 +269,72 @@ export function StatisticsModal({ isOpen, onClose, selectedCourseId, selectedGro
                 </table>
               </div>
             </div>
+
+            {/* Test Parametreleri */}
+            {aggregate?.test_parameters && (
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900 mb-3">Test Parametreleri</h3>
+                <div className="p-4 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl border border-indigo-200">
+                  {/* Test Tarihi */}
+                  {results.length > 0 && results[0].created_at && (
+                    <div className="mb-3 pb-3 border-b border-indigo-200">
+                      <p className="text-xs text-indigo-600 font-medium mb-1">Test Tarihi</p>
+                      <p className="text-sm font-bold text-slate-900">
+                        {new Date(results[0].created_at).toLocaleString("tr-TR", {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit"
+                        })}
+                      </p>
+                    </div>
+                  )}
+                  
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {aggregate.test_parameters.llm_model && (
+                      <div className="p-3 bg-white rounded-lg border border-indigo-100">
+                        <p className="text-xs text-indigo-600 font-medium mb-1">LLM Model (Cevap Üretimi)</p>
+                        <p className="text-sm font-bold text-slate-900">{aggregate.test_parameters.llm_model}</p>
+                      </div>
+                    )}
+                    {aggregate.test_parameters.evaluation_model && (
+                      <div className="p-3 bg-white rounded-lg border border-purple-100">
+                        <p className="text-xs text-purple-600 font-medium mb-1">Evaluation Model (RAGAS)</p>
+                        <p className="text-sm font-bold text-slate-900">{aggregate.test_parameters.evaluation_model}</p>
+                      </div>
+                    )}
+                    {aggregate.test_parameters.embedding_model && (
+                      <div className="p-3 bg-white rounded-lg border border-indigo-100">
+                        <p className="text-xs text-indigo-600 font-medium mb-1">Embedding Model (Retrieval)</p>
+                        <p className="text-sm font-bold text-slate-900">{aggregate.test_parameters.embedding_model}</p>
+                      </div>
+                    )}
+                    {aggregate.test_parameters.search_alpha != null && (
+                      <div className="p-3 bg-white rounded-lg border border-indigo-100">
+                        <p className="text-xs text-indigo-600 font-medium mb-1">Search Alpha</p>
+                        <p className="text-sm font-bold text-slate-900">{aggregate.test_parameters.search_alpha}</p>
+                      </div>
+                    )}
+                    {aggregate.test_parameters.search_top_k && (
+                      <div className="p-3 bg-white rounded-lg border border-indigo-100">
+                        <p className="text-xs text-indigo-600 font-medium mb-1">Top K</p>
+                        <p className="text-sm font-bold text-slate-900">{aggregate.test_parameters.search_top_k}</p>
+                      </div>
+                    )}
+                    {aggregate.test_parameters.reranker_used && (
+                      <div className="p-3 bg-white rounded-lg border border-emerald-100">
+                        <p className="text-xs text-emerald-600 font-medium mb-1">Reranker</p>
+                        <p className="text-sm font-bold text-slate-900">
+                          {aggregate.test_parameters.reranker_provider}/{aggregate.test_parameters.reranker_model}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

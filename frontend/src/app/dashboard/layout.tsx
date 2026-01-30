@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { RoleBadge } from "@/components/ui/role-badge";
-import { Brain, BookOpen, Home, LogOut, Settings, User, Loader2, Scissors, ChevronLeft, ChevronRight, FlaskConical, Target, Users, Shield, Database, BarChart3 } from "lucide-react";
+import { Brain, BookOpen, Home, LogOut, Settings, User, Loader2, Scissors, ChevronLeft, ChevronRight, FlaskConical, Target, Users, Shield, Database, BarChart3, FileText } from "lucide-react";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -60,6 +60,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const testNavItems = [
     { href: "/dashboard/chunking", icon: Scissors, label: "Chunking" },
     { href: "/dashboard/ragas", icon: FlaskConical, label: "RAGAS" },
+    { href: "/dashboard/ragas/test-sets", icon: FileText, label: "Test Setleri" },
+    { href: "/dashboard/ragas/test-sets/generate", icon: FileText, label: "Test Sorusu Üretimi" },
     { href: "/dashboard/semantic-similarity", icon: Target, label: "Rouge/BertScore" },
     { href: "/dashboard/giskard", icon: Shield, label: "Giskard" },
     { href: "/dashboard/wandb-runs", icon: Database, label: "W&B Runs" },
@@ -78,6 +80,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (exact) return pathname === href;
     return pathname === href || pathname.startsWith(href + "/");
   };
+
+  const activeTestHref = testNavItems
+    .filter((item) => isActive(item.href))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   return (
     <div className="min-h-screen flex">
@@ -141,7 +147,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   href={item.href}
                   title={isCollapsed ? item.label : undefined}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    isActive(item.href)
+                    (activeTestHref ? item.href === activeTestHref : isActive(item.href))
                       ? "bg-indigo-600 text-white"
                       : "text-slate-300 hover:bg-slate-800 hover:text-white"
                   } ${isCollapsed ? "justify-center" : ""}`}

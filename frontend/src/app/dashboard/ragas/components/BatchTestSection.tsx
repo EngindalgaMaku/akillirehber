@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { api } from "@/lib/api";
+import { api, RagasGroupInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,7 +16,7 @@ import { toast } from "sonner";
 interface BatchTestSectionProps {
   selectedCourseId: number;
   onBatchTestComplete: () => void;
-  savedResultsGroups: string[];
+  savedResultsGroups: RagasGroupInfo[];
 }
 
 interface BatchTestResult {
@@ -741,12 +741,12 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
               <div className="flex flex-wrap gap-1">
                 {savedResultsGroups.map((g) => (
                   <button
-                    key={g}
+                    key={g.name}
                     type="button"
-                    onClick={() => setSaveGroupName(g)}
+                    onClick={() => setSaveGroupName(g.name)}
                     className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded"
                   >
-                    {g}
+                    {g.name}
                   </button>
                 ))}
               </div>

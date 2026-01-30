@@ -146,12 +146,20 @@ class CourseSettings(Base):
     
     # System prompt for course-specific AI behavior
     system_prompt = Column(Text, nullable=True)
+
+    # Bloom-specific system prompts for test generation
+    system_prompt_remembering = Column(Text, nullable=True)
+    system_prompt_understanding_applying = Column(Text, nullable=True)
+    system_prompt_analyzing_evaluating = Column(Text, nullable=True)
     
     # Reranker settings
     enable_reranker = Column(Boolean, default=False, nullable=False)
     reranker_provider = Column(String(50), nullable=True)  # cohere/alibaba
     reranker_model = Column(String(100), nullable=True)
     reranker_top_k = Column(Integer, default=20, nullable=False)
+    
+    # Test Generation settings
+    test_generation_persona = Column(String(500), nullable=True)  # Student persona for RAGAS test generation
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -550,6 +558,7 @@ class QuickTestResult(Base):
     system_prompt = Column(Text, nullable=True)
     llm_provider = Column(String(100), nullable=False)
     llm_model = Column(String(255), nullable=False)
+    evaluation_model = Column(String(255), nullable=True)  # Model used for RAGAS evaluation
     generated_answer = Column(Text, nullable=False)
     retrieved_contexts = Column(JSON, nullable=True)
     

@@ -43,6 +43,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ragas", tags=["ragas"])
 
 
+def clean_context_text(text: str) -> str:
+    """Temizlenmiş context metni döndürür.
+    
+    Chunk'lardaki gereksiz whitespace karakterlerini temizler:
+    - Birden fazla \n -> tek boşluk
+    - \t -> tek boşluk  
+    - Birden fazla boşluk -> tek boşluk
+    - Başta/sonda boşluk -> kaldır
+    """
+    import re
+    
+    if not text:
+        return text
+    
+    # \n ve \t karakterlerini boşluğa çevir
+    text = text.replace('\n', ' ').replace('\t', ' ')
+    
+    # Birden fazla boşluğu tek boşluğa indir
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Başta ve sonda boşluk varsa kaldır
+    text = text.strip()
+    
+    return text
+
+
 def _run_evaluation_background(run_id: int) -> None:
     db = SessionLocal()
     try:
@@ -1438,6 +1464,18 @@ async def quick_test(
     llm_provider = data.llm_provider or course_settings.llm_provider
     llm_model = data.llm_model or course_settings.llm_model
     
+    # Get evaluation model from RAGAS service
+    evaluation_model_used = None
+    try:
+        ragas_service = RagasEvaluationService(db)
+        import httpx
+        response = httpx.get(f"{ragas_service.ragas_url}/settings", timeout=5.0)
+        if response.status_code == 200:
+            ragas_settings = response.json()
+            evaluation_model_used = ragas_settings.get("current_model")
+    except Exception:
+        pass  # If RAGAS service is not available, continue without evaluation model info
+    
     start_time = time.time()
     
     try:
@@ -1475,11 +1513,14 @@ async def quick_test(
         for result in search_results:
             content = result.content
             if content:
+                # 🔥 Temiz context kullan - whitespace karakterlerini kaldır
+                clean_content = clean_context_text(content)
+                
                 retrieved_contexts.append({
-                    "text": content,
+                    "text": clean_content,
                     "score": result.score
                 })
-                context_texts.append(content)
+                context_texts.append(clean_content)
 
         logger.info(
             "[RAGAS QUICK TEST] Retrieved contexts: %s (search_results=%s, min_score=%s, top_k=%s)",
@@ -1526,16 +1567,12 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
         # Call RAGAS service for metrics (RAGAS expects plain text contexts)
         ragas_service = RagasEvaluationService(db)
         
-        # DEBUG: Log the llm_model being passed to RAGAS evaluation
-        print(f"[RAGAS DEBUG] Quick test - llm_model for RAGAS evaluation: {llm_model}", flush=True)
-        print(f"[RAGAS DEBUG] Quick test - data.llm_model: {data.llm_model}, course_settings.llm_model: {course_settings.llm_model}", flush=True)
-        
         metrics = ragas_service._get_ragas_metrics_sync(
             data.question,
             ground_truths,
             generated_answer,
             context_texts,
-            llm_model  # RAGAS değerlendirmesi için de aynı modeli kullan
+            evaluation_model_used
         )
 
         logger.info(
@@ -1560,6 +1597,7 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             system_prompt_used=system_prompt,
             llm_provider_used=llm_provider,
             llm_model_used=llm_model,
+            evaluation_model_used=evaluation_model_used,
             reranker_used=False,
             reranker_provider=None,
             reranker_model=None,
@@ -1666,15 +1704,74 @@ async def list_quick_test_results(
         # Apply pagination
         results = query.order_by(QuickTestResult.created_at.desc()).offset(skip).limit(limit).all()
         
-        # Get unique group names
-        groups_query = db.query(QuickTestResult.group_name).filter(
+        # Get unique group names with their creation dates (oldest entry per group)
+        from sqlalchemy import func as sql_func
+        groups_query = db.query(
+            QuickTestResult.group_name,
+            sql_func.min(QuickTestResult.created_at).label('created_at')
+        ).filter(
             QuickTestResult.course_id == course_id,
             QuickTestResult.group_name.isnot(None)
-        ).distinct().all()
-        groups = [g[0] for g in groups_query if g[0]]
+        ).group_by(QuickTestResult.group_name).order_by(sql_func.min(QuickTestResult.created_at).desc()).all()
         
-        return QuickTestResultListResponse(
-            results=[QuickTestResultResponse(
+        groups = [{"name": g[0], "created_at": g[1].isoformat() if g[1] else None} for g in groups_query if g[0]]
+        
+        # Calculate aggregate statistics for the filtered results (not just current page)
+        all_results_query = db.query(QuickTestResult).filter(
+            QuickTestResult.course_id == course_id
+        )
+        if group_name:
+            all_results_query = all_results_query.filter(QuickTestResult.group_name == group_name)
+        
+        all_results = all_results_query.all()
+        
+        # Collect test parameters from most recent result
+        test_parameters = None
+        if all_results:
+            latest = all_results[0]
+            from app.services.course_service import get_or_create_settings
+            course_settings = get_or_create_settings(db, course_id)
+            
+            # Get evaluation model from RAGAS service
+            evaluation_model = None
+            try:
+                ragas_service = RagasEvaluationService(db)
+                import httpx
+                response = httpx.get(f"{ragas_service.ragas_url}/settings", timeout=5.0)
+                if response.status_code == 200:
+                    ragas_settings = response.json()
+                    evaluation_model = ragas_settings.get("current_model")
+            except Exception:
+                pass  # If RAGAS service is not available, skip
+            
+            test_parameters = {
+                "llm_model": latest.llm_model,
+                "llm_provider": latest.llm_provider,
+                "embedding_model": course_settings.default_embedding_model,
+                "evaluation_model": evaluation_model,
+                "search_alpha": course_settings.search_alpha,
+                "search_top_k": course_settings.search_top_k,
+                "reranker_used": course_settings.enable_reranker,
+                "reranker_provider": course_settings.reranker_provider if course_settings.enable_reranker else None,
+                "reranker_model": course_settings.reranker_model if course_settings.enable_reranker else None,
+            }
+        
+        # Calculate average metrics
+        successful_results = [r for r in all_results if r.faithfulness is not None]
+        aggregate = None
+        if successful_results:
+            aggregate = {
+                "avg_faithfulness": sum(r.faithfulness for r in successful_results if r.faithfulness) / len([r for r in successful_results if r.faithfulness]),
+                "avg_answer_relevancy": sum(r.answer_relevancy for r in successful_results if r.answer_relevancy) / len([r for r in successful_results if r.answer_relevancy]) if any(r.answer_relevancy for r in successful_results) else None,
+                "avg_context_precision": sum(r.context_precision for r in successful_results if r.context_precision) / len([r for r in successful_results if r.context_precision]) if any(r.context_precision for r in successful_results) else None,
+                "avg_context_recall": sum(r.context_recall for r in successful_results if r.context_recall) / len([r for r in successful_results if r.context_recall]) if any(r.context_recall for r in successful_results) else None,
+                "avg_answer_correctness": sum(r.answer_correctness for r in successful_results if r.answer_correctness) / len([r for r in successful_results if r.answer_correctness]) if any(r.answer_correctness for r in successful_results) else None,
+                "test_count": len(all_results),
+                "test_parameters": test_parameters
+            }
+        
+        response_data = {
+            "results": [QuickTestResultResponse(
                 id=r.id,
                 course_id=r.course_id,
                 group_name=r.group_name,
@@ -1698,9 +1795,15 @@ async def list_quick_test_results(
                 reranker_provider=None,
                 reranker_model=None,
             ) for r in results],
-            total=total_count,
-            groups=groups,
-        )
+            "total": total_count,
+            "groups": groups,
+        }
+        
+        # Add aggregate if available
+        if aggregate:
+            response_data["aggregate"] = aggregate
+        
+        return QuickTestResultListResponse(**response_data)
     except Exception as e:
         logger.error(f"Error listing quick test results: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2001,11 +2104,14 @@ async def batch_test_stream(
                     for result in search_results:
                         content = result.content
                         if content:
+                            # 🔥 Temiz context kullan - whitespace karakterlerini kaldır
+                            clean_content = clean_context_text(content)
+                            
                             retrieved_contexts.append({
-                                "text": content,
+                                "text": clean_content,
                                 "score": result.score
                             })
-                            context_texts.append(content)
+                            context_texts.append(clean_content)
                     
                     # Generate answer
                     context_text = "\n\n---\n\n".join(context_texts) if context_texts else ""
@@ -2151,7 +2257,8 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                             "retrieved_contexts": retrieved_contexts,
                         }
                     }
-                    yield f"data: {json.dumps(progress, ensure_ascii=False)}\n\n"
+                    # ✅ ensure_ascii=True to prevent JSON parse errors with Turkish chars
+                    yield f"data: {json.dumps(progress, ensure_ascii=True)}\n\n"
                     await asyncio.sleep(0)
                     
                 except Exception as e:
@@ -2183,7 +2290,8 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                             str(e),
                         )
                     
-                    yield f"data: {json.dumps(error_result, ensure_ascii=False)}\n\n"
+                    # ✅ ensure_ascii=True to prevent JSON parse errors
+                    yield f"data: {json.dumps(error_result, ensure_ascii=True)}\n\n"
                     await asyncio.sleep(0)
             
             # W&B finalize
@@ -2216,7 +2324,8 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                 "completed": len(data.test_cases),
                 "wandb_url": wb_run_url,
             }
-            yield f"data: {json.dumps(completion, ensure_ascii=False)}\n\n"
+            # ✅ ensure_ascii=True to prevent JSON parse errors
+            yield f"data: {json.dumps(completion, ensure_ascii=True)}\n\n"
             await asyncio.sleep(0)
             
         except Exception as e:
@@ -2227,7 +2336,8 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                     wb_run.finish(exit_code=1)
                 except Exception:
                     pass
-            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+            # ✅ ensure_ascii=True to prevent JSON parse errors
+            yield f"data: {json.dumps(error, ensure_ascii=True)}\n\n"
             await asyncio.sleep(0)
     
     return StreamingResponse(
@@ -2403,4 +2513,213 @@ async def fix_run_summary(
         "total_questions": total_results,
         "successful_questions": successful_count,
         "failed_questions": failed_count,
+    }
+
+
+# ==================== Group Management Endpoints ====================
+
+@router.put("/groups/rename")
+async def rename_ragas_group(
+    course_id: int,
+    old_group_name: str,
+    new_group_name: str,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Rename all quick test results in a group."""
+    verify_course_access(db, course_id, current_user)
+
+    # Check if old group exists
+    results = db.query(QuickTestResult).filter(
+        QuickTestResult.course_id == course_id,
+        QuickTestResult.group_name == old_group_name
+    ).all()
+
+    if not results:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # Update all results in the group
+    for result in results:
+        result.group_name = new_group_name
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Group renamed from '{old_group_name}' to '{new_group_name}'",
+        "updated_count": len(results)
+    }
+
+
+@router.delete("/groups/{group_name}")
+async def delete_ragas_group(
+    course_id: int,
+    group_name: str,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Delete all quick test results in a group."""
+    verify_course_access(db, course_id, current_user)
+
+    # Check if group exists
+    results = db.query(QuickTestResult).filter(
+        QuickTestResult.course_id == course_id,
+        QuickTestResult.group_name == group_name
+    ).all()
+
+    if not results:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # Delete all results in the group
+    for result in results:
+        db.delete(result)
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Group '{group_name}' deleted with {len(results)} results",
+        "deleted_count": len(results)
+    }
+
+
+# ==================== Test Generation Endpoint ====================
+
+@router.post("/test-sets/{test_set_id}/generate-questions")
+async def generate_questions_from_documents(
+    test_set_id: int,
+    num_questions: int = 50,
+    persona: Optional[str] = None,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Generate test questions from course documents using RAGAS.
+    
+    Uses RAGAS TestsetGenerator with Bloom taxonomy to create questions from
+    course documents. Supports custom persona for student-level adaptation.
+    """
+    import httpx
+    from app.config import get_settings
+    from app.models.db_models import Document
+    
+    # Get test set and verify access
+    test_set = db.query(TestSet).filter(TestSet.id == test_set_id).first()
+    if not test_set:
+        raise HTTPException(status_code=404, detail="Test set not found")
+    
+    verify_course_access(db, test_set.course_id, current_user)
+    
+    # Get persona from course settings if not provided
+    if not persona:
+        settings = get_or_create_settings(db, test_set.course_id)
+        persona = settings.test_generation_persona or \
+            "Öğrenci, temel seviye bilgisayar kullanımı"
+    
+    # Get processed documents for the course
+    documents = db.query(Document).filter(
+        Document.course_id == test_set.course_id,
+        Document.is_processed == True
+    ).all()
+    
+    if not documents:
+        raise HTTPException(
+            status_code=400,
+            detail="No processed documents found in this course"
+        )
+    
+    # Extract document contents
+    doc_contents = []
+    for doc in documents:
+        if doc.content:
+            doc_contents.append(doc.content)
+    
+    if not doc_contents:
+        raise HTTPException(
+            status_code=400,
+            detail="No document content available"
+        )
+    
+    logger.info(
+        f"[TEST GEN] Generating {num_questions} questions from {len(doc_contents)} documents"
+    )
+    
+    # Call RAGAS service
+    settings_obj = get_settings()
+    ragas_url = getattr(settings_obj, 'ragas_url', 'http://rag-ragas:8001')
+    
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:  # 10 min timeout
+            response = await client.post(
+                f"{ragas_url}/generate-testset",
+                json={
+                    "documents": doc_contents,
+                    "persona": persona,
+                    "test_size": num_questions,
+                    "distributions": {
+                        "simple": 0.4,
+                        "reasoning": 0.4,
+                        "multi_context": 0.2
+                    }
+                }
+            )
+            
+            if response.status_code != 200:
+                error_detail = response.text
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"RAGAS service error: {error_detail}"
+                )
+            
+            result = response.json()
+            generated_questions = result.get("questions", [])
+            
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="Test generation timed out. Try with fewer questions."
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"RAGAS service unavailable: {e}"
+        )
+    
+    # Save generated questions to test set
+    saved_count = 0
+    for q_data in generated_questions:
+        # Extract fields from RAGAS response
+        question_text = q_data.get("question")
+        ground_truth = q_data.get("ground_truth")
+        
+        if not question_text or not ground_truth:
+            logger.warning(f"[TEST GEN] Skipping invalid question: {q_data}")
+            continue
+        
+        # Create TestQuestion
+        question = TestQuestion(
+            test_set_id=test_set_id,
+            question=question_text,
+            ground_truth=ground_truth,
+            expected_contexts=q_data.get("contexts"),
+            question_metadata={
+                "generated_by": "ragas",
+                "persona": persona,
+                "evolution_type": q_data.get("evolution_type"),
+                "episode_done": q_data.get("episode_done")
+            }
+        )
+        db.add(question)
+        saved_count += 1
+    
+    db.commit()
+    
+    logger.info(f"[TEST GEN] Saved {saved_count} questions to test set {test_set_id}")
+    
+    return {
+        "success": True,
+        "test_set_id": test_set_id,
+        "generated_count": len(generated_questions),
+        "saved_count": saved_count,
+        "persona_used": persona,
+        "llm_used": result.get("llm_used")
     }

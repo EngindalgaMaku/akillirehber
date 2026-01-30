@@ -446,6 +446,10 @@ export default function SemanticSimilarityPage() {
       }
 
       const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Response body reader is not available');
+      }
+      
       const decoder = new TextDecoder();
       type StreamingResult = {
         question: string;
@@ -461,6 +465,9 @@ export default function SemanticSimilarityPage() {
         bertscore_precision?: number | null;
         bertscore_recall?: number | null;
         bertscore_f1?: number | null;
+        original_bertscore_precision?: number | null;
+        original_bertscore_recall?: number | null;
+        original_bertscore_f1?: number | null;
         hit_at_1?: number | null;
         mrr?: number | null;
         system_prompt_used?: string;
@@ -516,9 +523,6 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -534,9 +538,6 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
-                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
-                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
-                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || '',
                 llm_model_used: data.llm_model_used || undefined
@@ -1023,9 +1024,6 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1041,9 +1039,6 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
-                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
-                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
-                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
@@ -1056,9 +1051,6 @@ export default function SemanticSimilarityPage() {
               const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
               const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
               const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               const finalResult: SemanticSimilarityBatchTestResponse = {
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1074,9 +1066,6 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
-                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
-                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
-                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
@@ -2461,11 +2450,11 @@ export default function SemanticSimilarityPage() {
                           disabled={!selectedCourseId}
                           className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
                         >
-                          <Settings className="w-3 h-3 mr-1" /> W&B Run’ları
+                          <Settings className="w-3 h-3 mr-1" /> W&B Run'ları
                         </Button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                       {savedResultsAggregate.avg_rouge1 != null && (
                         <div className="p-3 bg-white rounded-lg border border-purple-100">
                           <p className="text-xs text-purple-600 mb-1">Ort. ROUGE-1</p>
@@ -2487,6 +2476,14 @@ export default function SemanticSimilarityPage() {
                           <p className="text-xs text-purple-600 mb-1">Ort. ROUGE-L</p>
                           <p className="text-xl font-bold text-purple-700">
                             {(savedResultsAggregate.avg_rougel * 100).toFixed(1)}%
+                          </p>
+                        </div>
+                      )}
+                      {savedResultsAggregate.avg_original_bertscore_f1 != null && (
+                        <div className="p-3 bg-white rounded-lg border border-emerald-100">
+                          <p className="text-xs text-emerald-700 mb-1">Ort. BERTScore F1</p>
+                          <p className="text-xl font-bold text-emerald-800">
+                            {(savedResultsAggregate.avg_original_bertscore_f1 * 100).toFixed(1)}%
                           </p>
                         </div>
                       )}
@@ -3137,26 +3134,37 @@ export default function SemanticSimilarityPage() {
                               <td className="px-4 py-3 text-slate-600">En uzun ortak alt dizi oranı</td>
                             </tr>
                           )}
-                          {savedResultsAggregate.avg_bertscore_precision != null && (
+                          {savedResultsAggregate.avg_original_bertscore_precision != null && (
                             <tr className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore Precision</td>
                               <td className="px-4 py-3 text-center">
-                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_bertscore_precision)}`}>
-                                  {(savedResultsAggregate.avg_bertscore_precision * 100).toFixed(2)}%
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_original_bertscore_precision)}`}>
+                                  {(savedResultsAggregate.avg_original_bertscore_precision * 100).toFixed(2)}%
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-slate-600">BERT hassasiyet skoru</td>
                             </tr>
                           )}
-                          {savedResultsAggregate.avg_bertscore_recall != null && (
+                          {savedResultsAggregate.avg_original_bertscore_recall != null && (
                             <tr className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore Recall</td>
                               <td className="px-4 py-3 text-center">
-                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_bertscore_recall)}`}>
-                                  {(savedResultsAggregate.avg_bertscore_recall * 100).toFixed(2)}%
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_original_bertscore_recall)}`}>
+                                  {(savedResultsAggregate.avg_original_bertscore_recall * 100).toFixed(2)}%
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-slate-600">BERT geri çağırma skoru</td>
+                            </tr>
+                          )}
+                          {savedResultsAggregate.avg_original_bertscore_f1 != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama BERTScore F1</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_original_bertscore_f1)}`}>
+                                  {(savedResultsAggregate.avg_original_bertscore_f1 * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">BERT F1 skoru (precision ve recall'ın harmonik ortalaması)</td>
                             </tr>
                           )}
                         </tbody>
@@ -3292,9 +3300,9 @@ export default function SemanticSimilarityPage() {
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-1</th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-2</th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-L</th>
-                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERT P</th>
-                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERT R</th>
-                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERT F1</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERTScore P</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERTScore R</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">BERTScore F1</th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">Gecikme</th>
                                 </tr>
                               </thead>
@@ -3343,27 +3351,27 @@ export default function SemanticSimilarityPage() {
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
-                                  {result.bertscore_precision != null ? (
-                                    <span className={`font-medium ${getMetricColor(result.bertscore_precision)}`}>
-                                      {(result.bertscore_precision * 100).toFixed(1)}%
+                                  {result.original_bertscore_precision != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.original_bertscore_precision)}`}>
+                                      {(result.original_bertscore_precision * 100).toFixed(1)}%
                                     </span>
                                   ) : (
                                     <span className="text-slate-400">-</span>
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
-                                  {result.bertscore_recall != null ? (
-                                    <span className={`font-medium ${getMetricColor(result.bertscore_recall)}`}>
-                                      {(result.bertscore_recall * 100).toFixed(1)}%
+                                  {result.original_bertscore_recall != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.original_bertscore_recall)}`}>
+                                      {(result.original_bertscore_recall * 100).toFixed(1)}%
                                     </span>
                                   ) : (
                                     <span className="text-slate-400">-</span>
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
-                                  {result.bertscore_f1 != null ? (
-                                    <span className={`font-medium ${getMetricColor(result.bertscore_f1)}`}>
-                                      {(result.bertscore_f1 * 100).toFixed(1)}%
+                                  {result.original_bertscore_f1 != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.original_bertscore_f1)}`}>
+                                      {(result.original_bertscore_f1 * 100).toFixed(1)}%
                                     </span>
                                   ) : (
                                     <span className="text-slate-400">-</span>

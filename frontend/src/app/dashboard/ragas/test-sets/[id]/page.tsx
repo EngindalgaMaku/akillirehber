@@ -68,10 +68,10 @@ export default function TestSetEditorPage() {
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
-  const [courseSettings, setCourseSettings] = useState<any>(null);
+  const [courseSettings, setCourseSettings] = useState<Record<string, unknown> | null>(null);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
 
-  const [testDatasets, setTestDatasets] = useState<any[]>([]);
+  const [testDatasets, setTestDatasets] = useState<Array<Record<string, unknown>>>([]);
   const [selectedDataset, setSelectedDataset] = useState<string>("");
   const [isDatasetsLoading, setIsDatasetsLoading] = useState(false);
 
@@ -508,6 +508,25 @@ export default function TestSetEditorPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-2">
                         <span className="text-xs font-medium text-slate-400">#{index + 1}</span>
+                        {q.question_metadata?.bloom_level && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                            q.question_metadata.bloom_level === 'remembering' ? 'bg-blue-100 text-blue-700' :
+                            q.question_metadata.bloom_level === 'understanding_applying' ? 'bg-purple-100 text-purple-700' :
+                            q.question_metadata.bloom_level === 'analyzing_evaluating' ? 'bg-orange-100 text-orange-700' :
+                            // Legacy support for old names
+                            q.question_metadata.bloom_level === 'applying_analyzing' ? 'bg-purple-100 text-purple-700' :
+                            q.question_metadata.bloom_level === 'evaluating_creating' ? 'bg-orange-100 text-orange-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {q.question_metadata.bloom_level === 'remembering' ? '🧠 Hatırlama' :
+                             q.question_metadata.bloom_level === 'understanding_applying' ? '🔧 Anlama/Uygulama' :
+                             q.question_metadata.bloom_level === 'analyzing_evaluating' ? '⭐ Analiz/Değerlendirme' :
+                             // Legacy support for old names
+                             q.question_metadata.bloom_level === 'applying_analyzing' ? '🔧 Uygulama/Analiz' :
+                             q.question_metadata.bloom_level === 'evaluating_creating' ? '⭐ Değerlendirme/Sentez' :
+                             q.question_metadata.bloom_level}
+                          </span>
+                        )}
                         <span className="text-sm font-medium text-slate-900">{q.question}</span>
                       </div>
                       <div className="space-y-2">
