@@ -595,7 +595,7 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                with httpx.Client(timeout=180.0) as client:
+                with httpx.Client(timeout=300.0) as client:  # Increased to 5 minutes for RAGAS
                     response = client.post(
                         f"{self.ragas_url}/evaluate",
                         json=payload,

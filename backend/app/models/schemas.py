@@ -870,6 +870,9 @@ class QuickTestResponse(BaseModel):
     llm_provider_used: str
     llm_model_used: str
     evaluation_model_used: Optional[str] = None
+    embedding_model_used: Optional[str] = None
+    search_top_k_used: Optional[int] = None
+    search_alpha_used: Optional[float] = None
     # Reranker metadata
     reranker_used: Optional[bool] = None
     reranker_provider: Optional[str] = None
@@ -890,6 +893,12 @@ class QuickTestResultCreate(BaseModel):
     llm_provider: str
     llm_model: str
     evaluation_model: Optional[str] = None
+    embedding_model: Optional[str] = None
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
     generated_answer: str
     retrieved_contexts: Optional[List[RetrievedContext]] = None
     faithfulness: Optional[float] = None
@@ -915,6 +924,9 @@ class QuickTestResultResponse(BaseModel):
     llm_provider: str
     llm_model: str
     evaluation_model: Optional[str] = None
+    embedding_model: Optional[str] = None
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
     generated_answer: str
     retrieved_contexts: Optional[List[RetrievedContext]] = None
     faithfulness: Optional[float] = None
@@ -936,6 +948,21 @@ class RagasGroupInfo(BaseModel):
 
     name: str
     created_at: Optional[str] = None
+    test_count: Optional[int] = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    evaluation_model: Optional[str] = None
+    embedding_model: Optional[str] = None
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
+    avg_faithfulness: Optional[float] = None
+    avg_answer_relevancy: Optional[float] = None
+    avg_context_precision: Optional[float] = None
+    avg_context_recall: Optional[float] = None
+    avg_answer_correctness: Optional[float] = None
 
 
 class QuickTestResultListResponse(BaseModel):
@@ -1051,6 +1078,8 @@ class SemanticSimilarityTestCase(BaseModel):
     ground_truth: str
     alternative_ground_truths: Optional[List[str]] = None
     generated_answer: Optional[str] = None
+    bloom_level: Optional[str] = None
+    question_metadata: Optional[Dict[str, Any]] = None
 
 
 class SemanticSimilarityBatchTestRequest(BaseModel):
@@ -1121,6 +1150,7 @@ class SemanticSimilarityResultCreate(BaseModel):
     ground_truth: str
     alternative_ground_truths: Optional[List[str]] = None
     generated_answer: str
+    bloom_level: Optional[str] = None
     similarity_score: float
     best_match_ground_truth: str
     all_scores: Optional[List[ScoreDetail]] = None
@@ -1159,6 +1189,7 @@ class SemanticSimilarityResultResponse(BaseModel):
     ground_truth: str
     alternative_ground_truths: Optional[List[str]] = None
     generated_answer: str
+    bloom_level: Optional[str] = None
     similarity_score: float
     best_match_ground_truth: str
     all_scores: Optional[List[ScoreDetail]] = None

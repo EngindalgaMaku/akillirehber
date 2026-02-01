@@ -176,3 +176,6 @@ static/uploads/
 # Misc
 *.orig
 .git-rewrite/
+
+# Dataset folder (separate repository)
+veriseti/

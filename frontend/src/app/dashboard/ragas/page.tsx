@@ -2,15 +2,16 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { api, Course, QuickTestResponse, QuickTestResult, RagasSettings, RagasProvider, RagasGroupInfo } from "@/lib/api";
+import { api, Course, QuickTestResponse, RagasSettings, RagasProvider, RagasGroupInfo } from "@/lib/api";
 import { toast } from "sonner";
-import { FlaskConical, BookOpen, History, Target } from "lucide-react";
+import { FlaskConical, BookOpen, History } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 
 import { SettingsDialog } from "./components/SettingsDialog";
 import { QuickTestSection } from "./components/QuickTestSection";
 import { BatchTestSection } from "./components/BatchTestSection";
-import { SavedResultsSection } from "./components/SavedResultsSection";
 
 export default function RagasPage() {
   const { user } = useAuth();
@@ -25,14 +26,7 @@ export default function RagasPage() {
   // Quick Test Result
   const [quickTestResult, setQuickTestResult] = useState<QuickTestResponse | null>(null);
 
-  // Saved Results State
-  const [savedResults, setSavedResults] = useState<QuickTestResult[]>([]);
   const [savedResultsGroups, setSavedResultsGroups] = useState<RagasGroupInfo[]>([]);
-  const [savedResultsTotal, setSavedResultsTotal] = useState(0);
-  const [savedResultsAggregate, setSavedResultsAggregate] = useState<Record<string, unknown> | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<string>("");
-  const [resultsPage, setResultsPage] = useState(0);
-  const RESULTS_PER_PAGE = 10;
 
   useEffect(() => {
     loadCourses();
@@ -41,16 +35,9 @@ export default function RagasPage() {
 
   useEffect(() => {
     if (selectedCourseId) {
-      loadSavedResults(true);
+      loadSavedResultsGroups();
     }
   }, [selectedCourseId]);
-
-  useEffect(() => {
-    if (selectedCourseId) {
-      setResultsPage(0);
-      loadSavedResults(true);
-    }
-  }, [selectedGroup]);
 
   const loadCourses = async () => {
     try {
@@ -84,48 +71,16 @@ export default function RagasPage() {
     }
   };
 
-  const loadSavedResults = useCallback(async (reset: boolean = true) => {
+  const loadSavedResultsGroups = useCallback(async () => {
     if (!selectedCourseId) return;
     try {
-      let groupFilter: string | undefined;
-      if (selectedGroup === "__all__" || selectedGroup === "") {
-        groupFilter = undefined;
-      } else if (selectedGroup === "__no_group__") {
-        groupFilter = "";
-      } else {
-        groupFilter = selectedGroup;
-      }
-      const skip = reset ? 0 : resultsPage * RESULTS_PER_PAGE;
-      const data = await api.getQuickTestResults(selectedCourseId, groupFilter, skip, RESULTS_PER_PAGE);
-      
-      const sortedResults = [...data.results].sort((a, b) => 
-        a.question.localeCompare(b.question, 'tr')
-      );
-      
-      if (reset) {
-        setSavedResults(sortedResults);
-        setResultsPage(1);
-      } else {
-        setSavedResults(prev => [...prev, ...sortedResults]);
-        setResultsPage(prev => prev + 1);
-      }
-      setSavedResultsTotal(data.total);
+      const data = await api.getQuickTestResults(selectedCourseId, undefined, 0, 1);
       setSavedResultsGroups(data.groups);
-      
-      // Use aggregate from backend (includes test_parameters)
-      console.log('[RAGAS DEBUG] Backend aggregate:', data.aggregate);
-      setSavedResultsAggregate(data.aggregate || null);
     } catch (error) {
-      console.error("Failed to load saved results:", error);
-      if (reset) {
-        setSavedResults([]);
-        setResultsPage(1);
-        setSavedResultsTotal(0);
-        setSavedResultsGroups([]);
-        setSavedResultsAggregate(null);
-      }
+      console.error("Failed to load saved results groups:", error);
+      setSavedResultsGroups([]);
     }
-  }, [selectedCourseId, selectedGroup, resultsPage]);
+  }, [selectedCourseId]);
 
   if (!user) return null;
 
@@ -170,6 +125,17 @@ export default function RagasPage() {
                 onSettingsUpdate={loadRagasSettings}
               />
 
+              <Link href="/dashboard/ragas/results">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-10 bg-white/20 text-white border-0 hover:bg-white/30 backdrop-blur-sm"
+                >
+                  <History className="w-4 h-4 mr-2" />
+                  Sonuçlar
+                </Button>
+              </Link>
+
               <Select 
                 value={selectedCourseId?.toString() || ""} 
                 onValueChange={(v) => {
@@ -194,29 +160,7 @@ export default function RagasPage() {
           </div>
 
           {selectedCourseId && (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-8">
-              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <History className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-purple-200 text-sm">Kayıtlı Sonuçlar</p>
-                    <p className="text-2xl font-bold">{savedResultsTotal}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Target className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-purple-200 text-sm">Gruplar</p>
-                    <p className="text-2xl font-bold">{savedResultsGroups.length}</p>
-                  </div>
-                </div>
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
               <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-white/20 rounded-lg">
@@ -227,6 +171,17 @@ export default function RagasPage() {
                     <p className="text-lg font-bold truncate">
                       {courses.find(c => c.id === selectedCourseId)?.name || "-"}
                     </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/20 rounded-lg">
+                    <History className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-purple-200 text-sm">Gruplar</p>
+                    <p className="text-2xl font-bold">{savedResultsGroups.length}</p>
                   </div>
                 </div>
               </div>
@@ -251,27 +206,14 @@ export default function RagasPage() {
             selectedCourseId={selectedCourseId}
             quickTestResult={quickTestResult}
             setQuickTestResult={setQuickTestResult}
-            onResultSaved={() => loadSavedResults(true)}
+            onResultSaved={loadSavedResultsGroups}
             savedResultsGroups={savedResultsGroups}
           />
 
           <BatchTestSection
             selectedCourseId={selectedCourseId}
-            onBatchTestComplete={() => loadSavedResults(true)}
+            onBatchTestComplete={loadSavedResultsGroups}
             savedResultsGroups={savedResultsGroups}
-          />
-
-          <SavedResultsSection
-            selectedCourseId={selectedCourseId}
-            savedResults={savedResults}
-            savedResultsGroups={savedResultsGroups}
-            savedResultsTotal={savedResultsTotal}
-            savedResultsAggregate={savedResultsAggregate}
-            selectedGroup={selectedGroup}
-            setSelectedGroup={setSelectedGroup}
-            resultsPage={resultsPage}
-            onLoadMore={() => loadSavedResults(false)}
-            onDelete={() => loadSavedResults(true)}
           />
         </div>
       )}

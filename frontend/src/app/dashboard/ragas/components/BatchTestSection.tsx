@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { api, RagasGroupInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -32,6 +32,26 @@ interface BatchTestResult {
   error_message?: string;
 }
 
+type BatchTestCase = {
+  question: string;
+  ground_truth: string;
+  alternative_ground_truths?: string[];
+  expected_contexts?: string[];
+  [key: string]: unknown;
+};
+
+interface BatchResumeState {
+  version: 1;
+  courseId: number;
+  groupName: string;
+  enableWandb: boolean;
+  startedAtMs: number;
+  testCases: BatchTestCase[];
+  completedIndices: number[];
+  resultsByIndex: Record<number, BatchTestResult>;
+  lastUpdatedAtMs: number;
+}
+
 export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedResultsGroups }: BatchTestSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [batchTestJson, setBatchTestJson] = useState("");
@@ -39,6 +59,7 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
   const [batchTestElapsedTime, setBatchTestElapsedTime] = useState("00:00:00");
   const batchTestStartTimeRef = useRef<number | null>(null);
   const elapsedTimeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const completionCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Realtime Results
   const [batchResults, setBatchResults] = useState<BatchTestResult[]>([]);
@@ -48,6 +69,9 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
   // W&B Integration
   const [enableWandbExport, setEnableWandbExport] = useState(true);
   const [wandbGroupName, setWandbGroupName] = useState("");
+
+  // Resume
+  const [resumeState, setResumeState] = useState<BatchResumeState | null>(null);
   
   // Dataset Management
   const [testDatasets, setTestDatasets] = useState<Array<{
@@ -63,6 +87,296 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
   // Save Results Dialog
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [saveGroupName, setSaveGroupName] = useState("");
+
+  const getResumeStorageKey = (courseId: number, groupName: string) =>
+    `ragas_batch_resume_v1:${courseId}:${groupName}`;
+
+  const persistResumeState = (state: BatchResumeState | null) => {
+    try {
+      const groupName = state?.groupName || wandbGroupName;
+      if (!groupName) return;
+      const key = getResumeStorageKey(selectedCourseId, groupName);
+      if (!state) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, JSON.stringify(state));
+      }
+    } catch {
+      // Ignore persistence errors
+    }
+  };
+
+  const restoreResumeState = (groupName: string) => {
+    try {
+      if (!groupName) return;
+      const raw = localStorage.getItem(getResumeStorageKey(selectedCourseId, groupName));
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as BatchResumeState;
+      if (!parsed || parsed.version !== 1) return;
+      if (parsed.courseId !== selectedCourseId) return;
+      if (!parsed.testCases || !Array.isArray(parsed.testCases)) return;
+      if (!parsed.groupName) return;
+      setResumeState(parsed);
+    } catch {
+      // Ignore restore errors
+    }
+  };
+
+  const computeIndicesToRunFromDb = useCallback(async (opts: {
+    groupName: string;
+    testCases: BatchTestCase[];
+  }) => {
+    const existing = await api.getExistingQuickTestQuestions(
+      selectedCourseId,
+      opts.groupName
+    );
+    const existingSet = new Set(
+      (existing?.questions || []).map((q) => String(q))
+    );
+    const indicesToRun: number[] = [];
+    const completedIndices: number[] = [];
+    for (let i = 0; i < opts.testCases.length; i++) {
+      const q = String(opts.testCases[i]?.question || "");
+      if (existingSet.has(q)) {
+        completedIndices.push(i);
+      } else {
+        indicesToRun.push(i);
+      }
+    }
+    return { indicesToRun, completedIndices };
+  }, [selectedCourseId]);
+
+  const buildResultsArrayFromResume = (state: BatchResumeState) => {
+    const total = state.testCases.length;
+    const arr: BatchTestResult[] = new Array(total);
+    for (let i = 0; i < total; i++) {
+      const existing = state.resultsByIndex[i];
+      if (existing) {
+        arr[i] = existing;
+      } else {
+        const tc = state.testCases[i];
+        arr[i] = {
+          question: String(tc?.question || ""),
+          ground_truth: String(tc?.ground_truth || ""),
+          generated_answer: "",
+          latency_ms: 0,
+        };
+      }
+    }
+    return arr;
+  };
+
+  const normalizeTestCasesFromJson = (jsonStr: string) => {
+    const parsedData = JSON.parse(jsonStr);
+    let testCases = parsedData;
+    if (parsedData.questions && Array.isArray(parsedData.questions)) {
+      testCases = parsedData.questions;
+    }
+    if (!Array.isArray(testCases)) {
+      throw new Error("Geçersiz JSON formatı: test case listesi bulunamadı");
+    }
+
+    return (testCases as unknown[]).map((tc, idx) => {
+      if (!tc || typeof tc !== "object") {
+        throw new Error(`Geçersiz test case (index=${idx}): object olmalı`);
+      }
+      const obj = tc as Record<string, unknown>;
+      const question = String(obj.question ?? "");
+      const ground_truth = String(obj.ground_truth ?? "");
+      if (!question.trim() || !ground_truth.trim()) {
+        throw new Error(
+          `Geçersiz test case (index=${idx}): question ve ground_truth zorunlu`
+        );
+      }
+      const alternative_ground_truths = Array.isArray(obj.alternative_ground_truths)
+        ? (obj.alternative_ground_truths as unknown[])
+            .filter((x) => typeof x === "string")
+            .map((x) => String(x))
+        : undefined;
+      const expected_contexts = Array.isArray(obj.expected_contexts)
+        ? (obj.expected_contexts as unknown[])
+            .filter((x) => typeof x === "string")
+            .map((x) => String(x))
+        : undefined;
+
+      return {
+        ...obj,
+        question,
+        ground_truth,
+        alternative_ground_truths,
+        expected_contexts,
+      } as BatchTestCase;
+    });
+  };
+
+  const startBatchStream = async (opts: {
+    testCases: BatchTestCase[];
+    groupName: string;
+    enableWandb: boolean;
+    resumeBase?: BatchResumeState;
+    onlyIndices?: number[];
+  }) => {
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const token = localStorage.getItem("akilli_rehber_token");
+    if (!token) {
+      throw new Error("Oturum süresi dolmuş. Lütfen tekrar giriş yapın.");
+    }
+
+    const response = await fetch(`${API_URL}/api/ragas/quick-test-results/batch-stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        course_id: selectedCourseId,
+        test_cases: opts.testCases,
+        group_name: opts.groupName,
+        enable_wandb: false,
+        only_indices: opts.onlyIndices,
+      }),
+    });
+
+    if (response.status === 401) {
+      throw new Error("Oturum süresi dolmuş. Lütfen sayfayı yenileyip tekrar deneyin.");
+    }
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    if (!reader) {
+      throw new Error("No response body");
+    }
+
+    let wandbUrl: string | null = null;
+    let buffer = "";
+
+    let base = opts.resumeBase;
+    const total = base ? base.testCases.length : opts.testCases.length;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        if (!line.startsWith("data: ")) continue;
+
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+
+        try {
+          const data = JSON.parse(jsonStr);
+
+          if (data.event === "progress") {
+            const idx = Number(data.index);
+            const result: BatchTestResult = {
+              question: data.result.question,
+              ground_truth: data.result.ground_truth,
+              generated_answer: data.result.generated_answer,
+              faithfulness: data.result.faithfulness,
+              answer_relevancy: data.result.answer_relevancy,
+              context_precision: data.result.context_precision,
+              context_recall: data.result.context_recall,
+              answer_correctness: data.result.answer_correctness,
+              latency_ms: data.result.latency_ms,
+              error_message: data.result.error_message,
+            };
+
+            if (base) {
+              const next: BatchResumeState = {
+                ...base,
+                completedIndices: Array.from(new Set([...(base.completedIndices || []), idx])).sort((a, b) => a - b),
+                resultsByIndex: { ...base.resultsByIndex, [idx]: result },
+                lastUpdatedAtMs: Date.now(),
+              };
+              base = next;
+              setResumeState(next);
+              persistResumeState(next);
+
+              const arr = buildResultsArrayFromResume(next);
+              setBatchResults(arr);
+              setTotalTests(total);
+              setCurrentTestIndex(next.completedIndices.length);
+            } else {
+              // Non-resume path; keep existing behaviour in caller
+              throw new Error("Internal: resumeBase missing");
+            }
+
+            if (!data.result.error_message) {
+              const retryInfo = data.result.retry_count > 0 ? ` (${data.result.retry_count} retry)` : '';
+              const missingInfo = data.result.missing_metrics ? ` ⚠️ Eksik: ${data.result.missing_metrics.join(', ')}` : '';
+              const lowScoreInfo = data.result.low_score_metrics ? ` ⚠️ Düşük skor: ${data.result.low_score_metrics.join(', ')}` : '';
+              const hasIssues = missingInfo || lowScoreInfo;
+              const toastMessage = `Test ${base.completedIndices.length}/${total} tamamlandı${retryInfo}${missingInfo}${lowScoreInfo}`;
+
+              if (hasIssues) {
+                toast.warning(toastMessage, {
+                  id: `test-${idx}`,
+                  duration: 4000,
+                });
+              } else {
+                toast.success(toastMessage, {
+                  id: `test-${idx}`,
+                  duration: 1000,
+                });
+              }
+            } else {
+              toast.error(`Test başarısız: ${data.result.error_message}`, {
+                id: `test-error-${idx}`,
+                duration: 2000,
+              });
+            }
+          } else if (data.event === "complete") {
+            wandbUrl = data.wandb_url;
+
+            if (resumeState) {
+              const successCount = Object.values(resumeState.resultsByIndex).filter(r => !r.error_message).length;
+              toast.success(`Tüm testler tamamlandı! ${successCount}/${resumeState.testCases.length} başarılı`, {
+                duration: 3000,
+              });
+            } else {
+              toast.success(`Tüm testler tamamlandı!`, { duration: 3000 });
+            }
+
+            onBatchTestComplete();
+
+            if (wandbUrl) {
+              const url = wandbUrl;
+              toast.success(
+                `W&B'ye başarıyla aktarıldı!`,
+                {
+                  duration: 8000,
+                  action: {
+                    label: "Aç",
+                    onClick: () => window.open(url, "_blank")
+                  }
+                }
+              );
+            }
+
+            setResumeState(null);
+            persistResumeState(null);
+          } else if (data.event === "error") {
+            throw new Error(data.error);
+          }
+        } catch (e) {
+          console.warn("SSE parse warning (will retry with next chunk):", {
+            line: line.substring(0, 100) + "...",
+            error: e instanceof Error ? e.message : String(e)
+          });
+        }
+      }
+    }
+  };
 
   // Elapsed time counter
   useEffect(() => {
@@ -91,28 +405,138 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
     };
   }, [isBatchTesting]);
 
+  useEffect(() => {
+    if (!selectedCourseId) return;
+    if (!wandbGroupName) return;
+    restoreResumeState(wandbGroupName);
+  }, [selectedCourseId, wandbGroupName]);
+
+  useEffect(() => {
+    if (!resumeState) return;
+    setWandbGroupName(resumeState.groupName);
+    setSaveGroupName(resumeState.groupName);
+    setEnableWandbExport(resumeState.enableWandb);
+    try {
+      setBatchTestJson(JSON.stringify(resumeState.testCases, null, 2));
+    } catch {
+      // ignore
+    }
+    batchTestStartTimeRef.current = resumeState.startedAtMs;
+    setTotalTests(resumeState.testCases.length);
+    setCurrentTestIndex(resumeState.completedIndices.length);
+    setBatchResults(buildResultsArrayFromResume(resumeState));
+  }, [resumeState]);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    if (!selectedCourseId) return;
+    if (isBatchTesting) return;
+
+    const groupName = (wandbGroupName || "").trim();
+    if (!groupName) return;
+    if (!batchTestJson.trim()) return;
+
+    if (completionCheckTimeoutRef.current) {
+      clearTimeout(completionCheckTimeoutRef.current);
+      completionCheckTimeoutRef.current = null;
+    }
+
+    completionCheckTimeoutRef.current = setTimeout(async () => {
+      try {
+        const testCases = normalizeTestCasesFromJson(batchTestJson);
+        const { completedIndices } = await computeIndicesToRunFromDb({
+          groupName,
+          testCases,
+        });
+
+        setResumeState((prev) => {
+          if (
+            prev &&
+            prev.courseId === selectedCourseId &&
+            prev.groupName === groupName &&
+            prev.testCases.length === testCases.length
+          ) {
+            return {
+              ...prev,
+              completedIndices: Array.from(new Set(completedIndices)).sort(
+                (a, b) => a - b
+              ),
+              lastUpdatedAtMs: Date.now(),
+            };
+          }
+
+          const next: BatchResumeState = {
+            version: 1,
+            courseId: selectedCourseId,
+            groupName,
+            enableWandb: enableWandbExport,
+            startedAtMs: Date.now(),
+            testCases,
+            completedIndices: Array.from(new Set(completedIndices)).sort(
+              (a, b) => a - b
+            ),
+            resultsByIndex: prev?.resultsByIndex || {},
+            lastUpdatedAtMs: Date.now(),
+          };
+          return next;
+        });
+      } catch {
+        // ignore invalid JSON while typing
+      }
+    }, 350);
+
+    return () => {
+      if (completionCheckTimeoutRef.current) {
+        clearTimeout(completionCheckTimeoutRef.current);
+        completionCheckTimeoutRef.current = null;
+      }
+    };
+  }, [
+    isExpanded,
+    selectedCourseId,
+    wandbGroupName,
+    batchTestJson,
+    isBatchTesting,
+    enableWandbExport,
+    computeIndicesToRunFromDb,
+  ]);
+
   const loadTestDatasets = async () => {
     try {
-      const data = await api.getTestDatasets(selectedCourseId);
-      setTestDatasets(data.datasets);
+      // Use RAGAS test sets instead of old test_datasets
+      const testSets = await api.getTestSets(selectedCourseId);
+      // Convert to dataset format for compatibility
+      const datasets = testSets.map(ts => ({
+        id: ts.id,
+        name: ts.name,
+        total_test_cases: ts.question_count,
+      }));
+      setTestDatasets(datasets);
     } catch (error) {
-      console.log("Failed to load test datasets");
+      console.log("Failed to load test sets");
     }
   };
 
   const handleLoadDataset = async (datasetId: string) => {
     try {
-      const dataset = await api.getTestDataset(parseInt(datasetId));
-      setBatchTestJson(JSON.stringify(dataset.test_cases, null, 2));
+      // Use RAGAS test set instead of old test_dataset
+      const testSet = await api.getTestSet(parseInt(datasetId));
+      
+      // Convert test set questions to test cases format and sort alphabetically
+      const testCases = testSet.questions
+        .sort((a, b) => a.question.localeCompare(b.question, 'tr-TR'))
+        .map(q => ({
+          question: q.question,
+          ground_truth: q.ground_truth,
+          alternative_ground_truths: q.alternative_ground_truths,
+          expected_contexts: q.expected_contexts,
+        }));
+      
+      setBatchTestJson(JSON.stringify(testCases, null, 2));
       setSelectedDataset(datasetId);
-      // Otomatik grup adını dataset'ten al
-      if (dataset.name && !wandbGroupName) {
-        setWandbGroupName(dataset.name);
-        setSaveGroupName(dataset.name);
-      }
-      toast.success(`"${dataset.name}" veri seti yüklendi`);
+      toast.success(`"${testSet.name}" test seti yüklendi (${testCases.length} soru)`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Veri seti yüklenemedi");
+      toast.error(error instanceof Error ? error.message : "Test seti yüklenemedi");
     }
   };
 
@@ -162,143 +586,73 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
       return;
     }
 
-    setIsBatchTesting(true);
-    setBatchResults([]);
-    setCurrentTestIndex(0);
-    batchTestStartTimeRef.current = Date.now();
-    setBatchTestElapsedTime("00:00:00");
-    
     try {
-      const parsedData = JSON.parse(batchTestJson);
-      let testCases = parsedData;
+      const testCases = normalizeTestCasesFromJson(batchTestJson);
 
-      // RAGAS test set formatı kontrolü
-      if (parsedData.questions && Array.isArray(parsedData.questions)) {
-        testCases = parsedData.questions;
-        if (parsedData.name && !wandbGroupName) {
-          setWandbGroupName(parsedData.name);
-          setSaveGroupName(parsedData.name);
-        }
+      batchTestStartTimeRef.current = Date.now();
+      setBatchTestElapsedTime("00:00:00");
+
+      const groupName = (wandbGroupName || "").trim();
+      if (!groupName) {
+        toast.error("Lütfen bir grup adı girin");
+        return;
       }
 
-      setTotalTests(testCases.length);
-      
-      // Streaming endpoint'e bağlan
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const token = localStorage.getItem("akilli_rehber_token");
-      
-      if (!token) {
-        throw new Error("Oturum süresi dolmuş. Lütfen tekrar giriş yapın.");
-      }
-      
-      const response = await fetch(`${API_URL}/api/ragas/quick-test-results/batch-stream`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          course_id: selectedCourseId,
-          test_cases: testCases,
-          group_name: wandbGroupName || `RAGAS Batch ${new Date().toISOString()}`,
-          enable_wandb: enableWandbExport,
-        }),
+      const { indicesToRun, completedIndices } = await computeIndicesToRunFromDb({
+        groupName,
+        testCases,
       });
 
-      if (response.status === 401) {
-        throw new Error("Oturum süresi dolmuş. Lütfen sayfayı yenileyip tekrar deneyin.");
+      if (indicesToRun.length === 0) {
+        toast.success("Bu grup için tüm sorular zaten kaydedilmiş. Çalıştırılacak soru yok.");
+        setTotalTests(testCases.length);
+        setCurrentTestIndex(testCases.length);
+        const doneState: BatchResumeState = {
+          version: 1,
+          courseId: selectedCourseId,
+          groupName,
+          enableWandb: enableWandbExport,
+          startedAtMs: Date.now(),
+          testCases,
+          completedIndices: Array.from(new Set(completedIndices)).sort((a, b) => a - b),
+          resultsByIndex: {},
+          lastUpdatedAtMs: Date.now(),
+        };
+        setResumeState(doneState);
+        persistResumeState(doneState);
+        return;
       }
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      const initialResume: BatchResumeState = {
+        version: 1,
+        courseId: selectedCourseId,
+        groupName,
+        enableWandb: enableWandbExport,
+        startedAtMs: batchTestStartTimeRef.current || Date.now(),
+        testCases,
+        completedIndices: Array.from(new Set(completedIndices)).sort((a, b) => a - b),
+        resultsByIndex: {},
+        lastUpdatedAtMs: Date.now(),
+      };
+      setResumeState(initialResume);
+      persistResumeState(initialResume);
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      
-      if (!reader) {
-        throw new Error("No response body");
-      }
+      setTotalTests(testCases.length);
+      setWandbGroupName(groupName);
+      setSaveGroupName(groupName);
+      setCurrentTestIndex(initialResume.completedIndices.length);
 
-      let wandbUrl: string | null = null;
-      const results: BatchTestResult[] = [];
+      setBatchResults(buildResultsArrayFromResume(initialResume));
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      setIsBatchTesting(true);
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.event === "progress") {
-                const result: BatchTestResult = {
-                  question: data.result.question,
-                  ground_truth: data.result.ground_truth,
-                  generated_answer: data.result.generated_answer,
-                  faithfulness: data.result.faithfulness,
-                  answer_relevancy: data.result.answer_relevancy,
-                  context_precision: data.result.context_precision,
-                  context_recall: data.result.context_recall,
-                  answer_correctness: data.result.answer_correctness,
-                  latency_ms: data.result.latency_ms,
-                  error_message: data.result.error_message,
-                };
-
-                results.push(result);
-                setBatchResults([...results]);
-                setCurrentTestIndex(data.completed);
-
-                if (!data.result.error_message) {
-                  toast.success(`Test ${data.completed}/${data.total} tamamlandı`, {
-                    id: `test-${data.index}`,
-                    duration: 1000,
-                  });
-                } else {
-                  toast.error(`Test ${data.completed} başarısız`, {
-                    id: `test-error-${data.index}`,
-                    duration: 2000,
-                  });
-                }
-              } else if (data.event === "complete") {
-                wandbUrl = data.wandb_url;
-                
-                const successCount = results.filter(r => !r.error_message).length;
-                toast.success(`Tüm testler tamamlandı! ${successCount}/${results.length} başarılı`, {
-                  duration: 3000,
-                });
-                
-                // Saved Results'ı refresh et
-                onBatchTestComplete();
-                
-                if (wandbUrl) {
-                  const url = wandbUrl; // TypeScript için non-null garantisi
-                  toast.success(
-                    `W&B'ye başarıyla aktarıldı!`,
-                    { 
-                      duration: 8000,
-                      action: {
-                        label: "Aç",
-                        onClick: () => window.open(url, "_blank")
-                      }
-                    }
-                  );
-                }
-              } else if (data.event === "error") {
-                throw new Error(data.error);
-              }
-            } catch (e) {
-              console.error("Error parsing SSE data:", e);
-            }
-          }
-        }
-      }
-      
-      onBatchTestComplete();
+      await startBatchStream({
+        testCases,
+        groupName,
+        enableWandb: enableWandbExport,
+        resumeBase: initialResume,
+        onlyIndices: indicesToRun,
+      });
       
     } catch (error) {
       console.error("Batch test error:", error);
@@ -311,8 +665,64 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
     }
   };
 
+  const handleResumeBatchTest = async () => {
+    if (!resumeState) {
+      toast.error("Devam edilecek bir batch test bulunamadı");
+      return;
+    }
+    if (isBatchTesting) return;
+
+    const groupName = (resumeState.groupName || wandbGroupName || "").trim();
+    if (!groupName) {
+      toast.error("Grup adı bulunamadı");
+      return;
+    }
+
+    const { indicesToRun, completedIndices } = await computeIndicesToRunFromDb({
+      groupName,
+      testCases: resumeState.testCases,
+    });
+
+    if (indicesToRun.length === 0) {
+      toast.success("Eksik soru yok. Sonuçlar tamamlanmış görünüyor.");
+      setResumeState(null);
+      persistResumeState(null);
+      return;
+    }
+
+    setIsBatchTesting(true);
+    batchTestStartTimeRef.current = resumeState.startedAtMs || Date.now();
+    setBatchTestElapsedTime("00:00:00");
+    setTotalTests(resumeState.testCases.length);
+    setCurrentTestIndex(completedIndices.length);
+    setBatchResults(buildResultsArrayFromResume(resumeState));
+
+    try {
+      await startBatchStream({
+        testCases: resumeState.testCases,
+        groupName,
+        enableWandb: resumeState.enableWandb,
+        resumeBase: {
+          ...resumeState,
+          groupName,
+          completedIndices: Array.from(new Set(completedIndices)).sort((a, b) => a - b),
+        },
+        onlyIndices: indicesToRun,
+      });
+    } catch (error) {
+      console.error("Resume batch test error:", error);
+      toast.error(error instanceof Error ? error.message : "Resume başarısız");
+    } finally {
+      setIsBatchTesting(false);
+      if (elapsedTimeIntervalRef.current) {
+        clearInterval(elapsedTimeIntervalRef.current);
+      }
+    }
+  };
+
   const handleSaveBatchResults = async () => {
     try {
+      const settings = await api.getCourseSettings(selectedCourseId);
       let successCount = 0;
       for (const result of batchResults) {
         try {
@@ -321,8 +731,14 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
             group_name: saveGroupName || undefined,
             question: result.question,
             ground_truth: result.ground_truth,
-            llm_provider: "",
-            llm_model: "",
+            llm_provider: settings.llm_provider || "",
+            llm_model: settings.llm_model || "",
+            embedding_model: settings.default_embedding_model || undefined,
+            search_top_k: settings.search_top_k ?? undefined,
+            search_alpha: settings.search_alpha ?? undefined,
+            reranker_used: settings.enable_reranker ?? undefined,
+            reranker_provider: settings.reranker_provider || undefined,
+            reranker_model: settings.reranker_model || undefined,
             generated_answer: result.generated_answer,
             faithfulness: result.faithfulness,
             answer_relevancy: result.answer_relevancy,
@@ -502,6 +918,19 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                   </p>
                 </div>
 
+                {/* Performance Info */}
+                <div className="p-3 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200">
+                  <div className="flex items-start gap-2">
+                    <Zap className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                    <div className="text-xs text-emerald-800">
+                      <p className="font-medium mb-1">⚡ Paralel İşleme Aktif</p>
+                      <p className="text-emerald-700">
+                        Testler paralel olarak çalıştırılır. 100 soru için beklenen süre: ~10-15 dakika
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 <Button
                   onClick={handleBatchTest}
                   disabled={isBatchTesting || !batchTestJson}
@@ -519,6 +948,29 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                     </>
                   )}
                 </Button>
+
+                {resumeState && !isBatchTesting && resumeState.completedIndices.length < resumeState.testCases.length && (
+                  <div className="space-y-2">
+                    <Button
+                      onClick={handleResumeBatchTest}
+                      variant="outline"
+                      className="w-full border-amber-300 text-amber-800 hover:bg-amber-50"
+                    >
+                      Devam Et (Resume) ({resumeState.completedIndices.length}/{resumeState.testCases.length})
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setResumeState(null);
+                        persistResumeState(null);
+                        toast.success("Resume verisi temizlendi");
+                      }}
+                      variant="outline"
+                      className="w-full border-slate-200 text-slate-700 hover:bg-slate-50"
+                    >
+                      Resume Bilgisini Temizle
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {/* Results Section */}
@@ -611,8 +1063,11 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                             {batchResults.map((result, idx) => (
                               <tr key={idx} className="hover:bg-slate-50">
                                 <td className="px-3 py-2 text-slate-600">{idx + 1}</td>
-                                <td className="px-3 py-2 text-slate-700 truncate max-w-[150px]" title={result.question}>
-                                  {result.question}
+                                <td
+                                  className="px-3 py-2 text-slate-700 truncate max-w-[150px]"
+                                  title={result?.question || ""}
+                                >
+                                  {result?.question || "-"}
                                 </td>
                                 <td className="px-3 py-2 text-center">
                                   {result.faithfulness != null ? (
@@ -622,7 +1077,13 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                                   ) : result.error_message ? (
                                     <span className="text-red-600 text-xs">✗</span>
                                   ) : (
-                                    <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    resumeState?.completedIndices?.includes(idx) ? (
+                                      <span className="text-slate-400 text-xs">✓</span>
+                                    ) : isBatchTesting ? (
+                                      <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    ) : (
+                                      <span className="text-slate-300 text-xs">-</span>
+                                    )
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
@@ -633,7 +1094,13 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                                   ) : result.error_message ? (
                                     <span className="text-red-600 text-xs">✗</span>
                                   ) : (
-                                    <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    resumeState?.completedIndices?.includes(idx) ? (
+                                      <span className="text-slate-400 text-xs">✓</span>
+                                    ) : isBatchTesting ? (
+                                      <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    ) : (
+                                      <span className="text-slate-300 text-xs">-</span>
+                                    )
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
@@ -644,7 +1111,13 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                                   ) : result.error_message ? (
                                     <span className="text-red-600 text-xs">✗</span>
                                   ) : (
-                                    <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    resumeState?.completedIndices?.includes(idx) ? (
+                                      <span className="text-slate-400 text-xs">✓</span>
+                                    ) : isBatchTesting ? (
+                                      <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    ) : (
+                                      <span className="text-slate-300 text-xs">-</span>
+                                    )
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
@@ -655,7 +1128,13 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                                   ) : result.error_message ? (
                                     <span className="text-red-600 text-xs">✗</span>
                                   ) : (
-                                    <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    resumeState?.completedIndices?.includes(idx) ? (
+                                      <span className="text-slate-400 text-xs">✓</span>
+                                    ) : isBatchTesting ? (
+                                      <Loader2 className="w-3 h-3 animate-spin mx-auto text-blue-600" />
+                                    ) : (
+                                      <span className="text-slate-300 text-xs">-</span>
+                                    )
                                   )}
                                 </td>
                               </tr>

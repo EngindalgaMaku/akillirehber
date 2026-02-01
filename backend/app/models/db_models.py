@@ -559,6 +559,12 @@ class QuickTestResult(Base):
     llm_provider = Column(String(100), nullable=False)
     llm_model = Column(String(255), nullable=False)
     evaluation_model = Column(String(255), nullable=True)  # Model used for RAGAS evaluation
+    embedding_model = Column(String(255), nullable=True)  # Embedding model used at test time
+    search_top_k = Column(Integer, nullable=True)  # Retrieval top_k used at test time
+    search_alpha = Column(Float, nullable=True)  # Hybrid search alpha used at test time
+    reranker_used = Column(Boolean, nullable=True)
+    reranker_provider = Column(String(255), nullable=True)
+    reranker_model = Column(String(255), nullable=True)
     generated_answer = Column(Text, nullable=False)
     retrieved_contexts = Column(JSON, nullable=True)
     
@@ -642,6 +648,7 @@ class SemanticSimilarityResult(Base):
     ground_truth = Column(Text, nullable=False)
     alternative_ground_truths = Column(JSON, nullable=True)
     generated_answer = Column(Text, nullable=False)
+    bloom_level = Column(String(50), nullable=True)  # remembering, understanding_applying, analyzing_evaluating
     
     # Test results - Cosine Similarity
     similarity_score = Column(Float, nullable=False)

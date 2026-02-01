@@ -329,7 +329,8 @@ class EmbeddingBenchmarkService:
             "models": model_names,
             "tasks": tasks or ["default"],
             "model_results": {},
-            "comparison_table": []
+            "comparison_table": [],
+            "best_model": ""
         }
         
         for model_name in model_names:
@@ -340,6 +341,32 @@ class EmbeddingBenchmarkService:
             except Exception as e:
                 logger.error(f"Failed to benchmark {model_name}: {e}")
                 comparison_results["model_results"][model_name] = {"error": str(e)}
+        
+        # Generate comparison table
+        if tasks:
+            for task in tasks:
+                row = {"task": task}
+                for model_name in model_names:
+                    model_result = comparison_results["model_results"].get(model_name, {})
+                    task_scores = model_result.get("task_scores", {})
+                    task_score = task_scores.get(task, {})
+                    if isinstance(task_score, dict):
+                        row[model_name] = task_score.get("main_score", "N/A")
+                    else:
+                        row[model_name] = "N/A"
+                comparison_results["comparison_table"].append(row)
+        
+        # Determine best model based on overall average
+        best_model = None
+        best_score = -1
+        for model_name in model_names:
+            model_result = comparison_results["model_results"].get(model_name, {})
+            overall_avg = model_result.get("overall_average", 0)
+            if overall_avg > best_score:
+                best_score = overall_avg
+                best_model = model_name
+        
+        comparison_results["best_model"] = best_model or "N/A"
         
         # Log comparison to W&B if enabled
         try:
@@ -353,15 +380,5 @@ class EmbeddingBenchmarkService:
                 comparison_results["wb_url"] = self.wb_tracker.get_project_url()
         except Exception as e:
             logger.warning(f"Failed to log comparison to W&B: {e}")
-        
-        # Generate comparison table
-        if tasks:
-            for task in tasks:
-                row = {"task": task}
-                for model_name in model_names:
-                    model_result = comparison_results["model_results"].get(model_name, {})
-                    task_scores = model_result.get("task_scores", {})
-                    row[model_name] = task_scores.get(task, {}).get("main_score", "N/A")
-                comparison_results["comparison_table"].append(row)
         
         return comparison_results

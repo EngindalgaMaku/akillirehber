@@ -670,6 +670,88 @@ class ApiClient {
     });
   }
 
+  async *generateWithQualityFilter(data: {
+    test_set_id: number;
+    target_questions: number;
+    min_rouge1_score?: number;
+    remembering_ratio?: number;
+    understanding_applying_ratio?: number;
+    analyzing_evaluating_ratio?: number;
+  }): AsyncGenerator<{
+    event: string;
+    message?: string;
+    question?: string;
+    bloom_level?: string;
+    rouge1?: number;
+    accepted?: number;
+    rejected?: number;
+    target?: number;
+    reason?: string;
+    error?: string;
+  }> {
+    const formData = new FormData();
+    formData.append("test_set_id", data.test_set_id.toString());
+    formData.append("target_questions", data.target_questions.toString());
+    if (data.min_rouge1_score !== undefined) {
+      formData.append("min_rouge1_score", data.min_rouge1_score.toString());
+    }
+    if (data.remembering_ratio !== undefined) {
+      formData.append("remembering_ratio", data.remembering_ratio.toString());
+    }
+    if (data.understanding_applying_ratio !== undefined) {
+      formData.append("understanding_applying_ratio", data.understanding_applying_ratio.toString());
+    }
+    if (data.analyzing_evaluating_ratio !== undefined) {
+      formData.append("analyzing_evaluating_ratio", data.analyzing_evaluating_ratio.toString());
+    }
+
+    const token = this.getToken();
+    const response = await fetch(`${API_URL}/api/test-generation/generate-with-quality-filter`, {
+      method: "POST",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    if (!reader) {
+      throw new Error("No response body");
+    }
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data.trim()) {
+              try {
+                const parsed = JSON.parse(data);
+                yield parsed;
+              } catch (e) {
+                console.error("Failed to parse SSE data:", e);
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   // Legacy chunking endpoint
   async chunk(data: { 
     text: string; 
@@ -701,13 +783,6 @@ class ApiClient {
     return this.request<TestSetDetail>(`/api/ragas/test-sets/${testSetId}`);
   }
 
-  async createTestSet(data: { course_id: number; name: string; description?: string }): Promise<TestSet> {
-    return this.request<TestSet>("/api/ragas/test-sets", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
   async updateTestSet(testSetId: number, data: { name?: string; description?: string }): Promise<TestSet> {
     return this.request<TestSet>(`/api/ragas/test-sets/${testSetId}`, {
       method: "PUT",
@@ -721,6 +796,12 @@ class ApiClient {
 
   async duplicateTestSet(testSetId: number): Promise<TestSet> {
     return this.request<TestSet>(`/api/ragas/test-sets/${testSetId}/duplicate`, {
+      method: "POST",
+    });
+  }
+
+  async mergeTestSets(targetTestSetId: number, sourceTestSetId: number): Promise<TestSetDetail> {
+    return this.request<TestSetDetail>(`/api/ragas/test-sets/${targetTestSetId}/merge/${sourceTestSetId}`, {
       method: "POST",
     });
   }
@@ -1256,6 +1337,19 @@ class ApiClient {
     });
     if (groupName) params.append("group_name", groupName);
     return this.request<QuickTestResultListResponse>(`/api/ragas/quick-test-results?${params.toString()}`);
+  }
+
+  async getExistingQuickTestQuestions(
+    courseId: number,
+    groupName: string
+  ): Promise<{ questions: string[] }> {
+    const params = new URLSearchParams({
+      course_id: courseId.toString(),
+      group_name: groupName,
+    });
+    return this.request<{ questions: string[] }>(
+      `/api/ragas/quick-test-results/existing-questions?${params.toString()}`
+    );
   }
 
   async getQuickTestResult(resultId: number): Promise<QuickTestResult> {
@@ -1928,6 +2022,10 @@ export interface QuickTestResponse {
   system_prompt_used: string;
   llm_provider_used: string;
   llm_model_used: string;
+  evaluation_model_used?: string;
+  embedding_model_used?: string;
+  search_top_k_used?: number;
+  search_alpha_used?: number;
   // Reranker metadata
   reranker_used?: boolean;
   reranker_provider?: string;
@@ -1945,6 +2043,13 @@ export interface QuickTestResultCreate {
   system_prompt?: string;
   llm_provider: string;
   llm_model: string;
+  evaluation_model?: string;
+  embedding_model?: string;
+  search_top_k?: number;
+  search_alpha?: number;
+  reranker_used?: boolean;
+  reranker_provider?: string;
+  reranker_model?: string;
   generated_answer: string;
   retrieved_contexts?: RetrievedContext[];
   faithfulness?: number;
@@ -1965,6 +2070,10 @@ export interface QuickTestResult {
   system_prompt?: string;
   llm_provider: string;
   llm_model: string;
+  evaluation_model?: string;
+  embedding_model?: string;
+  search_top_k?: number;
+  search_alpha?: number;
   generated_answer: string;
   retrieved_contexts?: RetrievedContext[];
   faithfulness?: number;
@@ -1984,6 +2093,21 @@ export interface QuickTestResult {
 export interface RagasGroupInfo {
   name: string;
   created_at: string | null;
+  test_count?: number | null;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+  evaluation_model?: string | null;
+  embedding_model?: string | null;
+  search_top_k?: number | null;
+  search_alpha?: number | null;
+  reranker_used?: boolean | null;
+  reranker_provider?: string | null;
+  reranker_model?: string | null;
+  avg_faithfulness?: number | null;
+  avg_answer_relevancy?: number | null;
+  avg_context_precision?: number | null;
+  avg_context_recall?: number | null;
+  avg_answer_correctness?: number | null;
 }
 
 export interface QuickTestResultListResponse {
@@ -2139,6 +2263,7 @@ export interface SemanticSimilarityResult {
   ground_truth: string;
   alternative_ground_truths?: string[];
   generated_answer: string;
+  bloom_level?: string;
   similarity_score: number;
   best_match_ground_truth: string;
   all_scores?: Array<{ ground_truth: string; score: number }>;

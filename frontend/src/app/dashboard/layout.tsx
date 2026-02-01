@@ -58,14 +58,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   ];
 
   const testNavItems = [
-    { href: "/dashboard/chunking", icon: Scissors, label: "Chunking" },
-    { href: "/dashboard/ragas", icon: FlaskConical, label: "RAGAS" },
-    { href: "/dashboard/ragas/test-sets", icon: FileText, label: "Test Setleri" },
-    { href: "/dashboard/ragas/test-sets/generate", icon: FileText, label: "Test Sorusu Üretimi" },
-    { href: "/dashboard/semantic-similarity", icon: Target, label: "Rouge/BertScore" },
-    { href: "/dashboard/giskard", icon: Shield, label: "Giskard" },
-    { href: "/dashboard/wandb-runs", icon: Database, label: "W&B Runs" },
-    { href: "/dashboard/mteb-benchmark", icon: BarChart3, label: "MTEB Benchmark" },
+    { href: "/dashboard/system-tests", icon: FlaskConical, label: "Sistem Testleri" },
   ];
 
   const bottomNavItems = [
@@ -135,11 +128,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
           {/* Sistem Testleri Section */}
           <div className="mt-8 pt-6 border-t border-slate-700/50">
-            {!isCollapsed && (
-              <p className="px-3 text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">
-                Sistem Testleri
-              </p>
-            )}
             <div className="space-y-1">
               {testNavItems.map((item) => (
                 <Link

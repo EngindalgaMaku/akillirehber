@@ -196,6 +196,36 @@ LLM_PROVIDERS_CONFIG = {
             "gpt-3.5-turbo",
         ],
     },
+    "deepseek": {
+        "env_key": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "default_model": "deepseek-chat",
+        "embedding_model": None,
+        "is_free": False,
+        "priority": 6,
+        "models": [
+            "deepseek-chat",
+            "deepseek-coder",
+        ],
+    },
+    "alibaba": {
+        "env_key": "DASHSCOPE_API_KEY",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "default_model": "qwen-turbo",
+        "embedding_model": None,
+        "is_free": False,
+        "priority": 7,
+        "models": [
+            "qwen-turbo",
+            "qwen-flash",
+            "qwen3-8b",
+            "qwen3-14b",
+            "qwen-plus",
+            "qwen3-32b",
+            "qwen-max",
+            "qwen3-max",
+        ],
+    },
 }
 
 
@@ -229,7 +259,7 @@ def get_llm_config():
         config = LLM_PROVIDERS_CONFIG[preferred_provider]
         api_key = os.getenv(config["env_key"])
         if api_key:
-            return {
+            result = {
                 "provider": preferred_provider,
                 "api_key": api_key,
                 "base_url": config["base_url"],
@@ -237,6 +267,10 @@ def get_llm_config():
                 "embedding_model": config["embedding_model"],
                 "is_free": config["is_free"],
             }
+            # Add default_headers if provider has them
+            if "default_headers" in config:
+                result["default_headers"] = config["default_headers"]
+            return result
 
     # Auto-select based on priority (free providers first)
     sorted_providers = sorted(
@@ -247,7 +281,7 @@ def get_llm_config():
     for provider_name, config in sorted_providers:
         api_key = os.getenv(config["env_key"])
         if api_key:
-            return {
+            result = {
                 "provider": provider_name,
                 "api_key": api_key,
                 "base_url": config["base_url"],
@@ -255,6 +289,10 @@ def get_llm_config():
                 "embedding_model": config["embedding_model"],
                 "is_free": config["is_free"],
             }
+            # Add default_headers if provider has them
+            if "default_headers" in config:
+                result["default_headers"] = config["default_headers"]
+            return result
 
     return None
 
@@ -365,22 +403,27 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
         )
         
         # Configure LLM from config (use current provider settings)
-        # Note: OpenRouter doesn't support n>1, so we use single generation
-        # This may result in slightly higher variance in scores
+        # Note: Most providers (OpenRouter, Claude.gg, etc.) don't support n>1
+        # We explicitly set n=1 to avoid "returned 1 generations instead of 3" warnings
         llm_kwargs = {
             "model": model_to_use,
             "api_key": llm_config["api_key"],
             "temperature": 0,
+            "n": 1,  # Explicitly set to 1 to avoid multi-generation warnings
         }
 
         if llm_config["base_url"]:
             llm_kwargs["base_url"] = llm_config["base_url"]
-            # Add headers for OpenRouter and Claude.gg
-            if llm_config["provider"] in ["openrouter", "claudegg"]:
-                llm_kwargs["default_headers"] = {
-                    "HTTP-Referer": "http://localhost:8001",
-                    "X-Title": SERVICE_NAME,
-                }
+            
+        # Add default headers from config if available
+        if "default_headers" in llm_config:
+            llm_kwargs["default_headers"] = llm_config["default_headers"]
+        # Legacy: Add headers for OpenRouter and Claude.gg if not already set
+        elif llm_config["provider"] in ["openrouter", "claudegg"]:
+            llm_kwargs["default_headers"] = {
+                "HTTP-Referer": "http://localhost:8001",
+                "X-Title": SERVICE_NAME,
+            }
 
         llm = ChatOpenAI(**llm_kwargs)
         
@@ -883,14 +926,20 @@ async def generate_testset(request: TestGenerationRequest):
             "model": model_to_use,
             "api_key": llm_config["api_key"],
             "temperature": 0.7,  # More creative for questions
-            "default_headers": {
-                "HTTP-Referer": "http://localhost:8001",
-                "X-Title": SERVICE_NAME,
-            } if provider_to_use in ["openrouter", "claudegg"] else {}
         }
         
         if llm_config["base_url"]:
             llm_kwargs["base_url"] = llm_config["base_url"]
+        
+        # Add default headers from config if available
+        if "default_headers" in llm_config:
+            llm_kwargs["default_headers"] = llm_config["default_headers"]
+        # Legacy: Add headers for OpenRouter and Claude.gg if not already set
+        elif provider_to_use in ["openrouter", "claudegg"]:
+            llm_kwargs["default_headers"] = {
+                "HTTP-Referer": "http://localhost:8001",
+                "X-Title": SERVICE_NAME,
+            }
         
         generator_llm = ChatOpenAI(**llm_kwargs)
         critic_llm = ChatOpenAI(**llm_kwargs)  # Same LLM for critic

@@ -28,6 +28,28 @@ export default function GenerateTestSetQuestionsPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  
+  // Quality filter states
+  const [isQualityFilterOpen, setIsQualityFilterOpen] = useState(false);
+  const [isQualityGenerating, setIsQualityGenerating] = useState(false);
+  const [minRouge1Score, setMinRouge1Score] = useState<number>(0.60);
+  const [qualityProgress, setQualityProgress] = useState<{
+    accepted: number;
+    rejected: number;
+    target: number;
+    events: Array<{
+      type: 'accepted' | 'rejected';
+      question: string;
+      bloom_level: string;
+      rouge1: number;
+      reason?: string;
+    }>;
+  }>({
+    accepted: 0,
+    rejected: 0,
+    target: 0,
+    events: []
+  });
 
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false);
   const [newTestSetName, setNewTestSetName] = useState("");
@@ -41,6 +63,7 @@ export default function GenerateTestSetQuestionsPage() {
   const [promptRemembering, setPromptRemembering] = useState<string>("");
   const [promptUnderstandingApplying, setPromptUnderstandingApplying] = useState<string>("");
   const [promptAnalyzingEvaluating, setPromptAnalyzingEvaluating] = useState<string>("");
+  const [showPrompts, setShowPrompts] = useState<boolean>(false);
 
   useEffect(() => {
     const loadCourses = async () => {
@@ -184,6 +207,82 @@ export default function GenerateTestSetQuestionsPage() {
       toast.error(error instanceof Error ? error.message : "Soru üretimi başarısız");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleQualityFilterGenerate = async () => {
+    if (!selectedTestSet) return;
+
+    const safeNum = Number.isFinite(numQuestions) ? Math.max(1, Math.min(200, numQuestions)) : 10;
+    const totalRatio = rememberingRatio + understandingApplyingRatio + analyzingEvaluatingRatio;
+    if (Math.abs(totalRatio - 1.0) > 0.01) {
+      toast.error(`Bloom oranları toplamı 1.0 olmalı (şu an: ${totalRatio.toFixed(2)})`);
+      return;
+    }
+
+    setIsQualityGenerating(true);
+    setQualityProgress({
+      accepted: 0,
+      rejected: 0,
+      target: safeNum,
+      events: []
+    });
+
+    try {
+      const generator = api.generateWithQualityFilter({
+        test_set_id: selectedTestSet,
+        target_questions: safeNum,
+        min_rouge1_score: minRouge1Score,
+        remembering_ratio: rememberingRatio,
+        understanding_applying_ratio: understandingApplyingRatio,
+        analyzing_evaluating_ratio: analyzingEvaluatingRatio,
+      });
+
+      for await (const event of generator) {
+        if (event.event === 'start') {
+          setQualityProgress(prev => ({
+            ...prev,
+            target: event.target || safeNum
+          }));
+        } else if (event.event === 'accepted') {
+          setQualityProgress(prev => ({
+            accepted: event.accepted || prev.accepted,
+            rejected: event.rejected || prev.rejected,
+            target: prev.target,
+            events: [...prev.events, {
+              type: 'accepted',
+              question: event.question || '',
+              bloom_level: event.bloom_level || '',
+              rouge1: event.rouge1 || 0,
+            }]
+          }));
+        } else if (event.event === 'rejected') {
+          setQualityProgress(prev => ({
+            accepted: event.accepted || prev.accepted,
+            rejected: event.rejected || prev.rejected,
+            target: prev.target,
+            events: [...prev.events, {
+              type: 'rejected',
+              question: event.question || '',
+              bloom_level: event.bloom_level || '',
+              rouge1: event.rouge1 || 0,
+              reason: event.reason
+            }]
+          }));
+        } else if (event.event === 'complete') {
+          toast.success(`${event.accepted} kaliteli soru oluşturuldu!`);
+          setTimeout(() => {
+            router.push(`/dashboard/ragas/test-sets/${selectedTestSet}`);
+          }, 2000);
+        } else if (event.event === 'error') {
+          toast.error(event.error || 'Hata oluştu');
+        }
+      }
+    } catch (error) {
+      console.error("Quality filter generate error:", error);
+      toast.error(error instanceof Error ? error.message : "Soru üretimi başarısız");
+    } finally {
+      setIsQualityGenerating(false);
     }
   };
 
@@ -332,103 +431,208 @@ export default function GenerateTestSetQuestionsPage() {
               <div className="text-xs text-muted-foreground">1-200 arası önerilir</div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Bloom Dağılımı (toplam 1.0)</Label>
-              <div className="grid gap-3">
-                <div className="grid grid-cols-3 items-center gap-3">
-                  <div className="text-sm">Hatırlama</div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={rememberingRatio}
-                    onChange={(e) => setRememberingRatio(Number(e.target.value))}
-                  />
-                  <div className="text-xs text-muted-foreground text-right">{(rememberingRatio * 100).toFixed(0)}%</div>
+            <div className="space-y-4">
+              <Label>Bloom Dağılımı</Label>
+              
+              {/* Hatırlama */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">🧠 Hatırlama</span>
+                  <span className="text-sm font-bold text-blue-600">{(rememberingRatio * 100).toFixed(0)}%</span>
                 </div>
-                <div className="grid grid-cols-3 items-center gap-3">
-                  <div className="text-sm">Anlama/Uygulama</div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={understandingApplyingRatio}
-                    onChange={(e) => setUnderstandingApplyingRatio(Number(e.target.value))}
-                  />
-                  <div className="text-xs text-muted-foreground text-right">{(understandingApplyingRatio * 100).toFixed(0)}%</div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={rememberingRatio * 100}
+                  onChange={(e) => {
+                    const newValue = Number(e.target.value) / 100;
+                    const remaining = 1 - newValue;
+                    const currentOtherTotal = understandingApplyingRatio + analyzingEvaluatingRatio;
+                    
+                    if (currentOtherTotal > 0) {
+                      // Diğer ikisini orantılı olarak ayarla
+                      const ratio = remaining / currentOtherTotal;
+                      setRememberingRatio(newValue);
+                      setUnderstandingApplyingRatio(understandingApplyingRatio * ratio);
+                      setAnalyzingEvaluatingRatio(analyzingEvaluatingRatio * ratio);
+                    } else {
+                      // Eğer diğerleri 0 ise, eşit dağıt
+                      setRememberingRatio(newValue);
+                      setUnderstandingApplyingRatio(remaining / 2);
+                      setAnalyzingEvaluatingRatio(remaining / 2);
+                    }
+                  }}
+                  className="w-full h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+              </div>
+
+              {/* Anlama/Uygulama */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">🔧 Anlama/Uygulama</span>
+                  <span className="text-sm font-bold text-purple-600">{(understandingApplyingRatio * 100).toFixed(0)}%</span>
                 </div>
-                <div className="grid grid-cols-3 items-center gap-3">
-                  <div className="text-sm">Analiz/Değerlendirme</div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={analyzingEvaluatingRatio}
-                    onChange={(e) => setAnalyzingEvaluatingRatio(Number(e.target.value))}
-                  />
-                  <div className="text-xs text-muted-foreground text-right">{(analyzingEvaluatingRatio * 100).toFixed(0)}%</div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={understandingApplyingRatio * 100}
+                  onChange={(e) => {
+                    const newValue = Number(e.target.value) / 100;
+                    const remaining = 1 - newValue;
+                    const currentOtherTotal = rememberingRatio + analyzingEvaluatingRatio;
+                    
+                    if (currentOtherTotal > 0) {
+                      const ratio = remaining / currentOtherTotal;
+                      setUnderstandingApplyingRatio(newValue);
+                      setRememberingRatio(rememberingRatio * ratio);
+                      setAnalyzingEvaluatingRatio(analyzingEvaluatingRatio * ratio);
+                    } else {
+                      setUnderstandingApplyingRatio(newValue);
+                      setRememberingRatio(remaining / 2);
+                      setAnalyzingEvaluatingRatio(remaining / 2);
+                    }
+                  }}
+                  className="w-full h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                />
+              </div>
+
+              {/* Analiz/Değerlendirme */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">⭐ Analiz/Değerlendirme</span>
+                  <span className="text-sm font-bold text-orange-600">{(analyzingEvaluatingRatio * 100).toFixed(0)}%</span>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Toplam: {(rememberingRatio + understandingApplyingRatio + analyzingEvaluatingRatio).toFixed(2)}
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={analyzingEvaluatingRatio * 100}
+                  onChange={(e) => {
+                    const newValue = Number(e.target.value) / 100;
+                    const remaining = 1 - newValue;
+                    const currentOtherTotal = rememberingRatio + understandingApplyingRatio;
+                    
+                    if (currentOtherTotal > 0) {
+                      const ratio = remaining / currentOtherTotal;
+                      setAnalyzingEvaluatingRatio(newValue);
+                      setRememberingRatio(rememberingRatio * ratio);
+                      setUnderstandingApplyingRatio(understandingApplyingRatio * ratio);
+                    } else {
+                      setAnalyzingEvaluatingRatio(newValue);
+                      setRememberingRatio(remaining / 2);
+                      setUnderstandingApplyingRatio(remaining / 2);
+                    }
+                  }}
+                  className="w-full h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                />
+              </div>
+
+              {/* Görsel Bar */}
+              <div className="mt-4">
+                <div className="flex h-8 rounded-lg overflow-hidden border border-slate-200">
+                  <div 
+                    className="bg-blue-500 flex items-center justify-center text-white text-xs font-bold transition-all duration-300"
+                    style={{ width: `${rememberingRatio * 100}%` }}
+                  >
+                    {rememberingRatio > 0.1 && `${(rememberingRatio * 100).toFixed(0)}%`}
+                  </div>
+                  <div 
+                    className="bg-purple-500 flex items-center justify-center text-white text-xs font-bold transition-all duration-300"
+                    style={{ width: `${understandingApplyingRatio * 100}%` }}
+                  >
+                    {understandingApplyingRatio > 0.1 && `${(understandingApplyingRatio * 100).toFixed(0)}%`}
+                  </div>
+                  <div 
+                    className="bg-orange-500 flex items-center justify-center text-white text-xs font-bold transition-all duration-300"
+                    style={{ width: `${analyzingEvaluatingRatio * 100}%` }}
+                  >
+                    {analyzingEvaluatingRatio > 0.1 && `${(analyzingEvaluatingRatio * 100).toFixed(0)}%`}
+                  </div>
                 </div>
+                <div className="flex justify-between text-xs text-muted-foreground mt-2">
+                  <span>🧠 Hatırlama</span>
+                  <span>🔧 Anlama/Uygulama</span>
+                  <span>⭐ Analiz/Değerlendirme</span>
+                </div>
+              </div>
+
+              <div className="text-xs text-center text-muted-foreground bg-slate-50 p-2 rounded">
+                Toplam: {((rememberingRatio + understandingApplyingRatio + analyzingEvaluatingRatio) * 100).toFixed(0)}%
               </div>
             </div>
 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <Label>Bloom Sistem Promptları</Label>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleSavePrompts}
-                  disabled={!selectedCourse || isLoadingSettings || isSavingSettings}
+                <button
+                  onClick={() => setShowPrompts(!showPrompts)}
+                  className="flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-slate-900"
                 >
-                  {isSavingSettings ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Kaydediliyor...
-                    </>
-                  ) : (
-                    "Kaydet"
-                  )}
-                </Button>
+                  <span>{showPrompts ? "▼" : "▶"}</span>
+                  <span>Bloom Sistem Promptları (Gelişmiş)</span>
+                </button>
+                {showPrompts && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSavePrompts}
+                    disabled={!selectedCourse || isLoadingSettings || isSavingSettings}
+                  >
+                    {isSavingSettings ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Kaydediliyor...
+                      </>
+                    ) : (
+                      "Kaydet"
+                    )}
+                  </Button>
+                )}
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="prompt_remembering">Hatırlama</Label>
-                <Textarea
-                  id="prompt_remembering"
-                  value={promptRemembering}
-                  onChange={(e) => setPromptRemembering(e.target.value)}
-                  rows={4}
-                  disabled={!selectedCourse || isLoadingSettings}
-                />
-              </div>
+              {showPrompts && (
+                <div className="space-y-3 pt-2 border-t">
+                  <div className="space-y-2">
+                    <Label htmlFor="prompt_remembering" className="text-xs">Hatırlama Promptu</Label>
+                    <Textarea
+                      id="prompt_remembering"
+                      value={promptRemembering}
+                      onChange={(e) => setPromptRemembering(e.target.value)}
+                      rows={4}
+                      disabled={!selectedCourse || isLoadingSettings}
+                      className="text-xs"
+                    />
+                  </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="prompt_understanding_applying">Anlama/Uygulama</Label>
-                <Textarea
-                  id="prompt_understanding_applying"
-                  value={promptUnderstandingApplying}
-                  onChange={(e) => setPromptUnderstandingApplying(e.target.value)}
-                  rows={4}
-                  disabled={!selectedCourse || isLoadingSettings}
-                />
-              </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="prompt_understanding_applying" className="text-xs">Anlama/Uygulama Promptu</Label>
+                    <Textarea
+                      id="prompt_understanding_applying"
+                      value={promptUnderstandingApplying}
+                      onChange={(e) => setPromptUnderstandingApplying(e.target.value)}
+                      rows={4}
+                      disabled={!selectedCourse || isLoadingSettings}
+                      className="text-xs"
+                    />
+                  </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="prompt_analyzing_evaluating">Analiz/Değerlendirme</Label>
-                <Textarea
-                  id="prompt_analyzing_evaluating"
-                  value={promptAnalyzingEvaluating}
-                  onChange={(e) => setPromptAnalyzingEvaluating(e.target.value)}
-                  rows={4}
-                  disabled={!selectedCourse || isLoadingSettings}
-                />
-              </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="prompt_analyzing_evaluating" className="text-xs">Analiz/Değerlendirme Promptu</Label>
+                    <Textarea
+                      id="prompt_analyzing_evaluating"
+                      value={promptAnalyzingEvaluating}
+                      onChange={(e) => setPromptAnalyzingEvaluating(e.target.value)}
+                      rows={4}
+                      disabled={!selectedCourse || isLoadingSettings}
+                      className="text-xs"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <Button
@@ -448,9 +652,111 @@ export default function GenerateTestSetQuestionsPage() {
                 </>
               )}
             </Button>
+
+            <Button
+              className="w-full mt-3"
+              variant="outline"
+              onClick={() => setIsQualityFilterOpen(true)}
+              disabled={!selectedTestSet || isQualityGenerating}
+            >
+              <Sparkles className="mr-2 h-4 w-4" />
+              🎯 Kalite Filtreli Üretim (Önerilen)
+            </Button>
           </CardContent>
         </Card>
       </div>
+
+      {/* Quality Filter Modal */}
+      <Dialog open={isQualityFilterOpen} onOpenChange={setIsQualityFilterOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>🎯 Kalite Filtreli Soru Üretimi</DialogTitle>
+            <DialogDescription>
+              Her soru test edilir, kalitesiz olanlar otomatik elenir. Sadece ROUGE-1 ≥ {(minRouge1Score * 100).toFixed(0)}% olan sorular kabul edilir.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label>Minimum ROUGE-1 Skoru (%)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={minRouge1Score * 100}
+                onChange={(e) => setMinRouge1Score(Number(e.target.value) / 100)}
+                disabled={isQualityGenerating}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Önerilen: 60% (Daha yüksek = daha kaliteli ama daha yavaş)
+              </p>
+            </div>
+
+            {isQualityGenerating && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-slate-100 rounded">
+                  <div>
+                    <p className="font-medium">İlerleme</p>
+                    <p className="text-sm text-muted-foreground">
+                      {qualityProgress.accepted} / {qualityProgress.target} kabul edildi
+                      {qualityProgress.rejected > 0 && ` (${qualityProgress.rejected} reddedildi)`}
+                    </p>
+                  </div>
+                  <Loader2 className="h-6 w-6 animate-spin text-indigo-600" />
+                </div>
+
+                <div className="max-h-96 overflow-y-auto space-y-2">
+                  {qualityProgress.events.slice().reverse().map((event, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-3 rounded border ${
+                        event.type === 'accepted'
+                          ? 'bg-green-50 border-green-200'
+                          : 'bg-red-50 border-red-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">
+                            {event.type === 'accepted' ? '✅' : '❌'} {event.question}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {event.bloom_level} • ROUGE-1: {event.rouge1.toFixed(1)}%
+                            {event.reason && ` • ${event.reason}`}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsQualityFilterOpen(false)}
+              disabled={isQualityGenerating}
+            >
+              {isQualityGenerating ? 'Devam Ediyor...' : 'İptal'}
+            </Button>
+            <Button
+              onClick={handleQualityFilterGenerate}
+              disabled={isQualityGenerating || !selectedTestSet}
+            >
+              {isQualityGenerating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Üretiliyor...
+                </>
+              ) : (
+                'Başlat'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

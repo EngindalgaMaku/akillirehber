@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { api, TestSetDetail, TestQuestion, EvaluationRun } from "@/lib/api";
+import { api, TestSetDetail, TestQuestion, TestSet } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,9 +35,6 @@ import {
   Download,
   Upload,
   Save,
-  Play,
-  BarChart3,
-  Settings,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -60,20 +57,49 @@ export default function TestSetEditorPage() {
   const [newAltAnswer, setNewAltAnswer] = useState("");
   const [editAltAnswer, setEditAltAnswer] = useState("");
   const [importJson, setImportJson] = useState("");
-  const [isStartingEval, setIsStartingEval] = useState(false);
   const [selectedQuestions, setSelectedQuestions] = useState<Set<number>>(new Set());
   const [isDuplicating, setIsDuplicating] = useState(false);
-  const [evaluationRun, setEvaluationRun] = useState<EvaluationRun | null>(null);
-  const [isLoadingRun, setIsLoadingRun] = useState(false);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
-  const [courseSettings, setCourseSettings] = useState<Record<string, unknown> | null>(null);
-  const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+
+  const [isMergeOpen, setIsMergeOpen] = useState(false);
+  const [sourceTestSetId, setSourceTestSetId] = useState<string>("");
+  const [isMerging, setIsMerging] = useState(false);
+  const [availableTestSets, setAvailableTestSets] = useState<TestSet[]>([]);
 
   const [testDatasets, setTestDatasets] = useState<Array<Record<string, unknown>>>([]);
   const [selectedDataset, setSelectedDataset] = useState<string>("");
   const [isDatasetsLoading, setIsDatasetsLoading] = useState(false);
+
+  // Filtering and pagination
+  const [bloomFilter, setBloomFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [questionsPerPage] = useState<number>(10);
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+
+  // Quick test state
+  const [isQuickTesting, setIsQuickTesting] = useState(false);
+  const [testResults, setTestResults] = useState<Map<number, any>>(() => {
+    // Load from localStorage
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(`test_results_${id}`);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          // Convert string keys back to numbers
+          const entries: [number, any][] = Object.entries(parsed).map(([key, value]) => [Number(key), value]);
+          return new Map(entries);
+        } catch (e) {
+          console.error('Failed to parse saved test results:', e);
+        }
+      }
+    }
+    return new Map();
+  });
+  const [selectedResultId, setSelectedResultId] = useState<number | null>(null);
+  const [isResultModalOpen, setIsResultModalOpen] = useState(false);
 
   const toggleQuestionSelection = (questionId: number) => {
     const newSelected = new Set(selectedQuestions);
@@ -105,38 +131,6 @@ export default function TestSetEditorPage() {
     }
   }, [id, router]);
 
-  const loadEvaluationRun = useCallback(async () => {
-    if (!testSet) return;
-    setIsLoadingRun(true);
-    try {
-      const runs = await api.getEvaluationRuns(testSet.course_id, testSet.id);
-      const latestRun = [...runs].sort((a, b) => {
-        const at = a.created_at ? Date.parse(a.created_at) : 0;
-        const bt = b.created_at ? Date.parse(b.created_at) : 0;
-        if (bt !== at) return bt - at;
-        return (b.id ?? 0) - (a.id ?? 0);
-      })[0];
-      setEvaluationRun(latestRun ?? null);
-    } catch {
-      console.error("Değerlendirme yüklenirken hata oluştu");
-    } finally {
-      setIsLoadingRun(false);
-    }
-  }, [testSet]);
-
-  const loadCourseSettings = useCallback(async () => {
-    if (!testSet) return;
-    setIsLoadingSettings(true);
-    try {
-      const settings = await api.getCourseSettings(testSet.course_id);
-      setCourseSettings(settings);
-    } catch {
-      console.error("Ders ayarları yüklenirken hata oluştu");
-    } finally {
-      setIsLoadingSettings(false);
-    }
-  }, [testSet]);
-
   const loadTestDatasets = useCallback(async () => {
     if (!testSet) return;
     setIsDatasetsLoading(true);
@@ -154,13 +148,19 @@ export default function TestSetEditorPage() {
     loadTestSet();
   }, [loadTestSet]);
 
+  // Save test results to localStorage when they change
+  useEffect(() => {
+    if (testResults.size > 0) {
+      const resultsObj = Object.fromEntries(testResults);
+      localStorage.setItem(`test_results_${id}`, JSON.stringify(resultsObj));
+    }
+  }, [testResults, id]);
+
   useEffect(() => {
     if (testSet) {
-      loadEvaluationRun();
-      loadCourseSettings();
       loadTestDatasets();
     }
-  }, [testSet, loadEvaluationRun, loadCourseSettings, loadTestDatasets]);
+  }, [testSet, loadTestDatasets]);
 
   const handleLoadDataset = async (datasetId: string) => {
     if (!datasetId) return;
@@ -236,6 +236,72 @@ export default function TestSetEditorPage() {
     }
   };
 
+  const handleDeleteSelected = async () => {
+    if (selectedQuestions.size === 0) return;
+    if (!confirm(`${selectedQuestions.size} soruyu silmek istediğinizden emin misiniz?`)) return;
+    
+    setIsDeletingSelected(true);
+    try {
+      const deletePromises = Array.from(selectedQuestions).map(id => api.deleteQuestion(id));
+      await Promise.all(deletePromises);
+      setSelectedQuestions(new Set());
+      loadTestSet();
+      toast.success(`${deletePromises.length} soru silindi`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Silme işlemi başarısız");
+    } finally {
+      setIsDeletingSelected(false);
+    }
+  };
+
+  const handleQuickTest = async () => {
+    if (!testSet || selectedQuestions.size === 0) return;
+    
+    const questionsToTest = testSet.questions.filter(q => selectedQuestions.has(q.id));
+    if (questionsToTest.length === 0) return;
+
+    setIsQuickTesting(true);
+    toast.info(`${questionsToTest.length} soru test ediliyor...`);
+
+    try {
+      const results = new Map(testResults);
+      
+      for (const question of questionsToTest) {
+        try {
+          // Semantic similarity quick test
+          const result = await api.semanticSimilarityQuickTest({
+            course_id: testSet.course_id,
+            question: question.question,
+            ground_truth: question.ground_truth,
+            alternative_ground_truths: question.alternative_ground_truths || [],
+          });
+          
+          results.set(question.id, {
+            ...result,
+            tested_at: new Date().toISOString(),
+          });
+        } catch (error) {
+          console.error(`Test failed for question ${question.id}:`, error);
+          results.set(question.id, {
+            error: error instanceof Error ? error.message : "Test başarısız",
+            tested_at: new Date().toISOString(),
+          });
+        }
+      }
+      
+      setTestResults(results);
+      toast.success(`${questionsToTest.length} soru test edildi`);
+    } catch (error) {
+      toast.error("Test işlemi başarısız");
+    } finally {
+      setIsQuickTesting(false);
+    }
+  };
+
+  const getQuestionTestResult = (questionId: number) => {
+    return testResults.get(questionId);
+  };
+
   const handleImport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!testSet) return;
@@ -259,7 +325,9 @@ export default function TestSetEditorPage() {
   const handleExport = async () => {
     if (!testSet) return;
     try {
+      console.log(`Exporting test set ID: ${testSet.id}, Name: ${testSet.name}`);
       const data = await api.exportTestSet(testSet.id);
+      console.log(`Export data received:`, data);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -267,38 +335,9 @@ export default function TestSetEditorPage() {
       a.download = `${testSet.name.replaceAll(/\s+/g, "_")}_export.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("Test seti dışa aktarıldı");
+      toast.success(`Test seti dışa aktarıldı: ${testSet.name} (ID: ${testSet.id})`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Hata oluştu");
-    }
-  };
-
-  const handleStartEvaluation = async () => {
-    if (!testSet) return;
-    
-    const questionsToEvaluate = selectedQuestions.size > 0 
-      ? testSet.questions.filter(q => selectedQuestions.has(q.id))
-      : testSet.questions;
-
-    if (questionsToEvaluate.length === 0) {
-      toast.error("Değerlendirilecek soru seçilmedi");
-      return;
-    }
-
-    setIsStartingEval(true);
-    try {
-      const run = await api.startEvaluation({
-        test_set_id: testSet.id,
-        course_id: testSet.course_id,
-        name: `${testSet.name} - ${new Date().toLocaleString("tr-TR")}`,
-        question_ids: selectedQuestions.size > 0 ? Array.from(selectedQuestions) : undefined,
-      });
-      toast.success(`Değerlendirme başlatıldı (${questionsToEvaluate.length} soru)`);
-      router.push(`/dashboard/ragas/runs/${run.id}`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Değerlendirme başlatılamadı");
-    } finally {
-      setIsStartingEval(false);
     }
   };
 
@@ -336,6 +375,44 @@ export default function TestSetEditorPage() {
     }
   };
 
+  const handleMergeTestSets = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testSet || !sourceTestSetId) return;
+    
+    const sourceSet = availableTestSets.find(ts => ts.id === Number(sourceTestSetId));
+    if (!confirm(`"${sourceSet?.name}" test setindeki tüm soruları bu test setine eklemek istediğinizden emin misiniz?`)) return;
+    
+    setIsMerging(true);
+    try {
+      await api.mergeTestSets(testSet.id, Number(sourceTestSetId));
+      toast.success(`${sourceSet?.name} test seti birleştirildi`);
+      setIsMergeOpen(false);
+      setSourceTestSetId("");
+      loadTestSet();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Birleştirme başarısız");
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
+  const loadAvailableTestSets = useCallback(async () => {
+    if (!testSet) return;
+    try {
+      const sets = await api.getTestSets(testSet.course_id);
+      // Mevcut test setini listeden çıkar
+      setAvailableTestSets(sets.filter(ts => ts.id !== testSet.id));
+    } catch (error) {
+      console.error("Test setleri yüklenemedi:", error);
+    }
+  }, [testSet]);
+
+  useEffect(() => {
+    if (isMergeOpen && testSet) {
+      loadAvailableTestSets();
+    }
+  }, [isMergeOpen, testSet, loadAvailableTestSets]);
+
   if (!user) return null;
 
   if (isLoading) {
@@ -347,6 +424,45 @@ export default function TestSetEditorPage() {
   }
 
   if (!testSet) return null;
+
+  // Filter questions by Bloom level and search query
+  const filteredQuestions = testSet.questions.filter(q => {
+    // Bloom filter
+    if (bloomFilter !== "all" && q.question_metadata?.bloom_level !== bloomFilter) {
+      return false;
+    }
+    
+    // Search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      const questionMatch = q.question.toLowerCase().includes(query);
+      const answerMatch = q.ground_truth.toLowerCase().includes(query);
+      const topicMatch = q.question_metadata?.topic?.toLowerCase().includes(query);
+      return questionMatch || answerMatch || topicMatch;
+    }
+    
+    return true;
+  }).sort((a, b) => {
+    // Alfabetik sıralama (Türkçe karakterlere duyarlı)
+    return a.question.localeCompare(b.question, 'tr-TR');
+  });
+
+  // Pagination
+  const totalPages = Math.ceil(filteredQuestions.length / questionsPerPage);
+  const startIndex = (currentPage - 1) * questionsPerPage;
+  const endIndex = startIndex + questionsPerPage;
+  const paginatedQuestions = filteredQuestions.slice(startIndex, endIndex);
+
+  // Reset to page 1 when filter or search changes
+  const handleBloomFilterChange = (value: string) => {
+    setBloomFilter(value);
+    setCurrentPage(1);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    setCurrentPage(1);
+  };
 
   return (
     <div>
@@ -360,16 +476,6 @@ export default function TestSetEditorPage() {
         description={testSet.description || "Test seti düzenleme"}
       >
         <div className="flex items-center gap-2">
-          {evaluationRun && (
-            <Link href={`/dashboard/ragas/runs/${evaluationRun.id}`}>
-              <Button variant="outline" size="sm" className="border-indigo-200 text-indigo-600 hover:bg-indigo-50">
-                <BarChart3 className="w-4 h-4 mr-1" />
-                {evaluationRun.status === "completed" ? "Sonuçları Gör" : 
-                 evaluationRun.status === "running" ? "Çalışıyor..." : 
-                 "Değerlendirme"}
-              </Button>
-            </Link>
-          )}
           <Link href="/dashboard/ragas">
             <Button variant="outline" size="sm">
               <ArrowLeft className="w-4 h-4 mr-1" /> Geri
@@ -397,6 +503,9 @@ export default function TestSetEditorPage() {
               <>📋 Kopyala</>
             )}
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setIsMergeOpen(true)}>
+            🔀 Birleştir
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setIsImportOpen(true)}>
             <Upload className="w-4 h-4 mr-1" /> İçe Aktar
           </Button>
@@ -406,58 +515,8 @@ export default function TestSetEditorPage() {
           <Button size="sm" onClick={() => setIsAddOpen(true)}>
             <Plus className="w-4 h-4 mr-1" /> Soru Ekle
           </Button>
-          <Button
-            size="sm"
-            onClick={handleStartEvaluation}
-            disabled={isStartingEval || testSet.questions.length === 0}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            {isStartingEval ? (
-              <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Başlatılıyor...</>
-            ) : (
-              <><Play className="w-4 h-4 mr-1" /> 
-                {selectedQuestions.size > 0 
-                  ? `Seçili ${selectedQuestions.size} Soruyu Değerlendir` 
-                  : evaluationRun ? 'Devam Ettir' : 'Değerlendir'}
-              </>
-            )}
-          </Button>
         </div>
       </PageHeader>
-
-      {/* Course Settings Info Card */}
-      {courseSettings && (
-        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 p-4 mb-4">
-          <div className="flex items-start gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Settings className="w-5 h-5 text-blue-600" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-slate-900 mb-2">Ders Ayarları (Test için kullanılacak)</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                <div className="bg-white rounded-lg p-3 border border-blue-100">
-                  <p className="text-xs text-slate-500 mb-1">Alpha (Benzerlik Eşiği)</p>
-                  <p className="font-bold text-blue-600 text-lg">{courseSettings.search_alpha ?? 0.7}</p>
-                </div>
-                <div className="bg-white rounded-lg p-3 border border-blue-100">
-                  <p className="text-xs text-slate-500 mb-1">Top K</p>
-                  <p className="font-bold text-slate-900 text-lg">{courseSettings.search_top_k ?? 5}</p>
-                </div>
-                <div className="bg-white rounded-lg p-3 border border-blue-100">
-                  <p className="text-xs text-slate-500 mb-1">Embedding Model</p>
-                  <p className="font-medium text-slate-900 text-xs truncate">{courseSettings.default_embedding_model || "Varsayılan"}</p>
-                </div>
-              </div>
-              {courseSettings.system_prompt && (
-                <div className="mt-3 bg-white rounded-lg p-3 border border-blue-100">
-                  <p className="text-xs text-slate-500 mb-1">Sistem Promptu</p>
-                  <p className="text-xs text-slate-700 line-clamp-2">{courseSettings.system_prompt}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {testSet.questions.length === 0 ? (
@@ -470,33 +529,119 @@ export default function TestSetEditorPage() {
           </div>
         ) : (
           <div>
-            {/* Select All Header */}
-            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center gap-3">
-              <input
-                type="checkbox"
-                checked={selectedQuestions.size === testSet.questions.length && testSet.questions.length > 0}
-                onChange={toggleSelectAll}
-                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
-              />
-              <span className="text-sm font-medium text-slate-700">
-                {selectedQuestions.size > 0 
-                  ? `${selectedQuestions.size} soru seçildi` 
-                  : 'Tümünü seç'}
-              </span>
-              {selectedQuestions.size > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSelectedQuestions(new Set())}
-                  className="text-xs text-slate-500 hover:text-slate-700"
+            {/* Filters and Actions */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 space-y-3">
+              {/* Search Bar */}
+              <div className="flex items-center gap-3">
+                <div className="flex-1 relative">
+                  <Input
+                    type="text"
+                    placeholder="Soru, cevap veya konuda ara..."
+                    value={searchQuery}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    className="pl-8"
+                  />
+                  <svg
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  {searchQuery && (
+                    <button
+                      onClick={() => handleSearchChange("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                
+                <select
+                  value={bloomFilter}
+                  onChange={(e) => handleBloomFilterChange(e.target.value)}
+                  className="text-sm px-3 py-2 border border-slate-300 rounded-md"
                 >
-                  Seçimi Temizle
-                </Button>
+                  <option value="all">Tüm Seviyeler ({testSet.questions.length})</option>
+                  <option value="remembering">🧠 Hatırlama ({testSet.questions.filter(q => q.question_metadata?.bloom_level === 'remembering').length})</option>
+                  <option value="understanding_applying">🔧 Anlama/Uygulama ({testSet.questions.filter(q => q.question_metadata?.bloom_level === 'understanding_applying').length})</option>
+                  <option value="analyzing_evaluating">⭐ Analiz/Değerlendirme ({testSet.questions.filter(q => q.question_metadata?.bloom_level === 'analyzing_evaluating').length})</option>
+                </select>
+              </div>
+
+              {/* Selection and Actions */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedQuestions.size === filteredQuestions.length && filteredQuestions.length > 0}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                  />
+                  <span className="text-sm font-medium text-slate-700">
+                    {selectedQuestions.size > 0 
+                      ? `${selectedQuestions.size} soru seçildi` 
+                      : 'Tümünü seç'}
+                  </span>
+                  {selectedQuestions.size > 0 && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedQuestions(new Set())}
+                        className="text-xs text-slate-500 hover:text-slate-700"
+                      >
+                        Seçimi Temizle
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleDeleteSelected}
+                        disabled={isDeletingSelected}
+                        className="text-xs"
+                      >
+                        {isDeletingSelected ? (
+                          <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Siliniyor...</>
+                        ) : (
+                          <><Trash2 className="w-3 h-3 mr-1" /> Seçilenleri Sil</>
+                        )}
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={handleQuickTest}
+                        disabled={isQuickTesting}
+                        className="text-xs bg-indigo-600 hover:bg-indigo-700"
+                      >
+                        {isQuickTesting ? (
+                          <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Test Ediliyor...</>
+                        ) : (
+                          <>🧪 Hızlı Test</>
+                        )}
+                      </Button>
+                    </>
+                  )}
+                </div>
+                
+                {/* Results info */}
+                <div className="text-xs text-slate-500">
+                  {filteredQuestions.length} soru bulundu
+                  {searchQuery && ` (arama: "${searchQuery}")`}
+                </div>
+              </div>
+              
+              {/* Pagination info */}
+              {filteredQuestions.length > questionsPerPage && (
+                <div className="text-xs text-slate-500 text-center">
+                  Sayfa {currentPage} / {totalPages}
+                </div>
               )}
             </div>
             
             <div className="divide-y divide-slate-100">
-              {testSet.questions.map((q, index) => (
+              {paginatedQuestions.map((q, index) => (
                 <div key={q.id} className="p-4 hover:bg-slate-50">
                   <div className="flex items-start gap-3">
                     <input
@@ -507,7 +652,7 @@ export default function TestSetEditorPage() {
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="text-xs font-medium text-slate-400">#{index + 1}</span>
+                        <span className="text-xs font-medium text-slate-400">#{startIndex + index + 1}</span>
                         {q.question_metadata?.bloom_level && (
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                             q.question_metadata.bloom_level === 'remembering' ? 'bg-blue-100 text-blue-700' :
@@ -546,6 +691,96 @@ export default function TestSetEditorPage() {
                             </ul>
                           </div>
                         )}
+                        {q.question_metadata && (
+                          <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
+                            <div className="flex flex-wrap gap-3">
+                              {q.question_metadata.topic && (
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">📚 Konu:</span>
+                                  <span className="text-slate-700">{q.question_metadata.topic}</span>
+                                </span>
+                              )}
+                              {q.question_metadata.document_name && (
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">📄 Döküman:</span>
+                                  <span className="text-slate-700">{q.question_metadata.document_name}</span>
+                                </span>
+                              )}
+                              {q.question_metadata.chunk_id && (
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">🔖 Chunk:</span>
+                                  <span className="text-slate-700">#{q.question_metadata.chunk_id}</span>
+                                </span>
+                              )}
+                              {q.question_metadata.generated_at && (
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">🕐 Oluşturulma:</span>
+                                  <span className="text-slate-700">{new Date(q.question_metadata.generated_at).toLocaleDateString('tr-TR')}</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        {(() => {
+                          const result = getQuestionTestResult(q.id);
+                          if (result && !result.error) {
+                            // Check for warning condition: BERTScore < 80% OR ROUGE-1 < 60%
+                            const bertscoreLow = result.original_bertscore_f1 !== undefined && result.original_bertscore_f1 < 0.80;
+                            const rouge1Low = result.rouge1 !== undefined && result.rouge1 < 0.60;
+                            const hasWarning = bertscoreLow || rouge1Low;
+                            
+                            return (
+                              <button
+                                onClick={() => {
+                                  setSelectedResultId(q.id);
+                                  setIsResultModalOpen(true);
+                                }}
+                                className={`text-xs px-3 py-1.5 rounded border hover:opacity-80 transition-all cursor-pointer w-full text-left ${
+                                  hasWarning 
+                                    ? 'bg-yellow-50 border-yellow-400 border-2' 
+                                    : 'bg-indigo-50 border-indigo-200'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3 flex-wrap">
+                                  <span className={`font-medium ${hasWarning ? 'text-yellow-900' : 'text-indigo-900'}`}>
+                                    {hasWarning ? '⚠️ Test:' : '🧪 Test:'}
+                                  </span>
+                                  {result.rouge1 !== undefined && (
+                                    <span className={`font-bold ${rouge1Low ? 'text-orange-700' : 'text-green-700'}`}>
+                                      R1: {(result.rouge1 * 100).toFixed(0)}%
+                                    </span>
+                                  )}
+                                  {result.rouge2 !== undefined && (
+                                    <span className="font-bold text-green-700">R2: {(result.rouge2 * 100).toFixed(0)}%</span>
+                                  )}
+                                  {result.rougel !== undefined && (
+                                    <span className="font-bold text-green-700">RL: {(result.rougel * 100).toFixed(0)}%</span>
+                                  )}
+                                  {result.original_bertscore_f1 !== undefined && (
+                                    <span className={`font-bold ${bertscoreLow ? 'text-orange-700' : 'text-purple-700'}`}>
+                                      B: {(result.original_bertscore_f1 * 100).toFixed(0)}%
+                                    </span>
+                                  )}
+                                  {result.llm_model_used && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded font-medium">
+                                      {result.llm_model_used}
+                                    </span>
+                                  )}
+                                  <span className={hasWarning ? 'text-yellow-600 ml-auto' : 'text-indigo-500 ml-auto'}>
+                                    → Detay
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          } else if (result && result.error) {
+                            return (
+                              <div className="text-xs bg-red-50 px-3 py-1.5 rounded border border-red-200">
+                                <span className="text-red-700 font-medium">❌ Test Hatası: {result.error}</span>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -570,6 +805,43 @@ export default function TestSetEditorPage() {
                 </div>
               ))}
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  ← Önceki
+                </Button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                    <Button
+                      key={page}
+                      variant={currentPage === page ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setCurrentPage(page)}
+                      className="w-8 h-8 p-0"
+                    >
+                      {page}
+                    </Button>
+                  ))}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Sonraki →
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -852,6 +1124,137 @@ export default function TestSetEditorPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Merge Dialog */}
+      <Dialog open={isMergeOpen} onOpenChange={setIsMergeOpen}>
+        <DialogContent>
+          <form onSubmit={handleMergeTestSets}>
+            <DialogHeader>
+              <DialogTitle>Test Setlerini Birleştir</DialogTitle>
+              <DialogDescription>
+                Başka bir test setindeki tüm soruları bu test setine ekleyin.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>Kaynak Test Seti (soruları buradan alınacak)</Label>
+                <Select value={sourceTestSetId} onValueChange={setSourceTestSetId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Test seti seçin..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableTestSets.length === 0 ? (
+                      <SelectItem value="none" disabled>Başka test seti yok</SelectItem>
+                    ) : (
+                      availableTestSets.map(ts => (
+                        <SelectItem key={ts.id} value={ts.id.toString()}>
+                          {ts.name} ({ts.question_count} soru)
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  ⚠️ Kaynak test seti değişmez, soruları kopyalanır.
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsMergeOpen(false)}>
+                İptal
+              </Button>
+              <Button type="submit" disabled={isMerging || !sourceTestSetId}>
+                {isMerging ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Birleştiriliyor...</> : "🔀 Birleştir"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Test Result Modal */}
+      <Dialog open={isResultModalOpen} onOpenChange={setIsResultModalOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Test Sonucu</DialogTitle>
+            <DialogDescription>
+              Semantic Similarity test sonuçları
+            </DialogDescription>
+          </DialogHeader>
+          {selectedResultId && (() => {
+            const result = testResults.get(selectedResultId);
+            const question = testSet?.questions.find(q => q.id === selectedResultId);
+            if (!result || !question) return null;
+
+            if (result.error) {
+              return (
+                <div className="p-4 bg-red-50 rounded-lg border border-red-200">
+                  <p className="text-red-700 font-medium">❌ Test Hatası</p>
+                  <p className="text-sm text-red-600 mt-2">{result.error}</p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-4">
+                <div className="p-3 bg-slate-50 rounded-lg">
+                  <p className="text-xs text-slate-500 mb-1">Soru:</p>
+                  <p className="text-sm font-medium">{question.question}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <p className="text-xs text-blue-600 mb-1">Similarity Score</p>
+                    <p className="text-2xl font-bold text-blue-700">
+                      {(result.similarity_score * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                  {result.rouge1 && (
+                    <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+                      <p className="text-xs text-green-600 mb-1">ROUGE-1</p>
+                      <p className="text-2xl font-bold text-green-700">
+                        {(result.rouge1 * 100).toFixed(1)}%
+                      </p>
+                    </div>
+                  )}
+                  {result.original_bertscore_f1 && (
+                    <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
+                      <p className="text-xs text-purple-600 mb-1">BERTScore F1</p>
+                      <p className="text-2xl font-bold text-purple-700">
+                        {(result.original_bertscore_f1 * 100).toFixed(1)}%
+                      </p>
+                    </div>
+                  )}
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <p className="text-xs text-slate-600 mb-1">Latency</p>
+                    <p className="text-2xl font-bold text-slate-700">
+                      {result.latency_ms}ms
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-lg">
+                  <p className="text-xs text-slate-500 mb-1">Üretilen Cevap:</p>
+                  <p className="text-sm">{result.generated_answer}</p>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-lg">
+                  <p className="text-xs text-slate-500 mb-1">Beklenen Cevap:</p>
+                  <p className="text-sm">{question.ground_truth}</p>
+                </div>
+
+                <div className="text-xs text-slate-400">
+                  Test tarihi: {new Date(result.tested_at).toLocaleString('tr-TR')}
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsResultModalOpen(false)}>
+              Kapat
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

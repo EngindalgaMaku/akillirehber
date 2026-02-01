@@ -125,7 +125,46 @@ export default function MTEBBenchmarkPage() {
       setAvailableTasks(data.tasks || []);
     } catch (error) {
       console.error("Failed to fetch tasks:", error);
-      setAvailableTasks([]);
+      // Fallback to default MTEB tasks if API fails
+      setAvailableTasks([
+        // English Retrieval Tasks
+        { name: "ArguAna", category: "english", description: "Argument retrieval" },
+        { name: "ClimateFEVER", category: "english", description: "Climate fact verification" },
+        { name: "CQADupstackRetrieval", category: "english", description: "Community QA retrieval" },
+        { name: "DBPedia", category: "english", description: "DBPedia entity retrieval" },
+        { name: "FEVER", category: "english", description: "Fact verification" },
+        { name: "FiQA2018", category: "english", description: "Financial QA" },
+        { name: "HotpotQA", category: "english", description: "Multi-hop QA" },
+        { name: "MSMARCO", category: "english", description: "MS MARCO passage retrieval" },
+        { name: "NFCorpus", category: "english", description: "Medical information retrieval" },
+        { name: "NQ", category: "english", description: "Natural Questions" },
+        { name: "QuoraRetrieval", category: "english", description: "Quora duplicate questions" },
+        { name: "SCIDOCS", category: "english", description: "Scientific document retrieval" },
+        { name: "SciFact", category: "english", description: "Scientific fact verification" },
+        { name: "Touche2020", category: "english", description: "Argument retrieval" },
+        { name: "TRECCOVID", category: "english", description: "COVID-19 retrieval" },
+        
+        // Multilingual Tasks
+        { name: "MultilingualSentiment", category: "multilingual", description: "Multilingual sentiment" },
+        { name: "XPQARetrieval", category: "multilingual", description: "Cross-lingual QA" },
+        
+        // Clustering Tasks
+        { name: "ArxivClusteringP2P", category: "clustering", description: "ArXiv paper clustering" },
+        { name: "ArxivClusteringS2S", category: "clustering", description: "ArXiv clustering S2S" },
+        { name: "BiorxivClusteringP2P", category: "clustering", description: "BioRxiv clustering" },
+        { name: "BiorxivClusteringS2S", category: "clustering", description: "BioRxiv clustering S2S" },
+        { name: "MedrxivClusteringP2P", category: "clustering", description: "MedRxiv clustering" },
+        { name: "MedrxivClusteringS2S", category: "clustering", description: "MedRxiv clustering S2S" },
+        { name: "RedditClustering", category: "clustering", description: "Reddit post clustering" },
+        { name: "StackExchangeClustering", category: "clustering", description: "StackExchange clustering" },
+        { name: "TwentyNewsgroupsClustering", category: "clustering", description: "20 Newsgroups clustering" },
+        
+        // Reranking Tasks
+        { name: "AskUbuntuDupQuestions", category: "reranking", description: "Ubuntu duplicate questions" },
+        { name: "MindSmallReranking", category: "reranking", description: "News reranking" },
+        { name: "SciDocsRR", category: "reranking", description: "Scientific doc reranking" },
+        { name: "StackOverflowDupQuestions", category: "reranking", description: "StackOverflow duplicates" },
+      ]);
     }
   };
 
@@ -266,7 +305,8 @@ export default function MTEBBenchmarkPage() {
       });
 
       const result = await response.json();
-      setBenchmarkResults(result);
+      // Extract data from BenchmarkResponse wrapper
+      setBenchmarkResults(result.data || result);
       await fetchHistory(); // Refresh history
     } catch (error) {
       console.error("Benchmark failed:", error);
@@ -293,11 +333,31 @@ export default function MTEBBenchmarkPage() {
         }),
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
       const result = await response.json();
-      setComparisonResults(result);
+      console.log("Comparison API response:", result);
+      
+      // Extract data from BenchmarkResponse wrapper
+      const comparisonData = result.data || result;
+      console.log("Comparison data:", comparisonData);
+      
+      // Check if we got valid data
+      if (!comparisonData.comparison_table || comparisonData.comparison_table.length === 0) {
+        alert("Benchmark comparison returned no data. This could be because:\n\n" +
+              "1. MTEB library is not installed on the backend\n" +
+              "2. Models require API keys that aren't configured\n" +
+              "3. Benchmarks take hours to run and may have timed out\n\n" +
+              "Check the browser console and backend logs for details.");
+      }
+      
+      setComparisonResults(comparisonData);
       await fetchHistory(); // Refresh history
     } catch (error) {
       console.error("Comparison failed:", error);
+      alert(`Comparison failed: ${error.message}\n\nCheck the browser console for details.`);
     } finally {
       setIsLoading(false);
     }
@@ -546,28 +606,53 @@ export default function MTEBBenchmarkPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-sm font-medium mb-2 block">Select Models (min 2)</label>
+                  <ScrollArea className="h-64">
+                    <div className="space-y-2 pr-4">
+                      {models.map((model) => (
+                        <div key={model} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`compare-${model}`}
+                            checked={selectedModels.includes(model)}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                setSelectedModels([...selectedModels, model]);
+                              } else {
+                                setSelectedModels(selectedModels.filter(m => m !== model));
+                              }
+                            }}
+                          />
+                          <label
+                            htmlFor={`compare-${model}`}
+                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                          >
+                            {model}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Categories</label>
                   <div className="space-y-2">
-                    {models.map((model) => (
-                      <div key={model} className="flex items-center space-x-2">
+                    {categories.map((category) => (
+                      <div key={category.value} className="flex items-center space-x-2">
                         <Checkbox
-                          id={model}
-                          checked={selectedModels.includes(model)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setSelectedModels([...selectedModels, model]);
-                            } else {
-                              setSelectedModels(selectedModels.filter(m => m !== model));
-                            }
-                          }}
+                          id={`compare-cat-${category.value}`}
+                          checked={selectedCategories.includes(category.value)}
+                          onCheckedChange={(checked) => 
+                            handleCategoryChange(category.value, checked as boolean)
+                          }
                         />
                         <label
-                          htmlFor={model}
+                          htmlFor={`compare-cat-${category.value}`}
                           className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                         >
-                          {model}
+                          {category.label}
                         </label>
                       </div>
                     ))}
@@ -606,6 +691,42 @@ export default function MTEBBenchmarkPage() {
                     Compare Models
                   </>
                 )}
+              </Button>
+
+              <Button 
+                onClick={() => {
+                  // Load demo data to show what the UI looks like
+                  const demoData = {
+                    models: selectedModels.length >= 2 ? selectedModels : ["openai/text-embedding-3-small", "openai/text-embedding-3-large"],
+                    tasks: selectedTasks.length > 0 ? selectedTasks.slice(0, 5) : ["Banking77Classification.v2", "ImdbClassification.v2", "MSMARCO", "ArxivClusteringP2P.v2", "AskUbuntuDupQuestions"],
+                    best_model: "openai/text-embedding-3-large",
+                    model_results: {},
+                    comparison_table: [],
+                    wb_url: "https://wandb.ai/demo/embedding-benchmarks"
+                  };
+                  
+                  // Generate demo comparison table
+                  const models = demoData.models;
+                  const tasks = demoData.tasks;
+                  
+                  for (const task of tasks) {
+                    const row: any = { task };
+                    for (const model of models) {
+                      // Generate realistic-looking scores between 0.65 and 0.95
+                      const baseScore = 0.65 + Math.random() * 0.30;
+                      const modelBoost = model.includes("large") ? 0.05 : 0;
+                      row[model] = (baseScore + modelBoost).toFixed(3);
+                    }
+                    demoData.comparison_table.push(row);
+                  }
+                  
+                  setComparisonResults(demoData);
+                }}
+                variant="outline"
+                className="w-full mt-2"
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                Load Demo Data
               </Button>
             </CardContent>
           </Card>
@@ -646,16 +767,24 @@ export default function MTEBBenchmarkPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {comparisonResults.comparison_table.map((row, index) => (
-                        <tr key={index}>
-                          <td className="border p-2 font-medium">{row.task}</td>
-                          {selectedModels.map((model) => (
-                            <td key={model} className="border p-2 text-right">
-                              {row[model] !== 'N/A' ? parseFloat(row[model]).toFixed(3) : 'N/A'}
-                            </td>
-                          ))}
+                      {comparisonResults.comparison_table && comparisonResults.comparison_table.length > 0 ? (
+                        comparisonResults.comparison_table.map((row, index) => (
+                          <tr key={index}>
+                            <td className="border p-2 font-medium">{row.task}</td>
+                            {selectedModels.map((model) => (
+                              <td key={model} className="border p-2 text-right">
+                                {row[model] !== 'N/A' ? parseFloat(row[model]).toFixed(3) : 'N/A'}
+                              </td>
+                            ))}
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={selectedModels.length + 1} className="border p-4 text-center text-muted-foreground">
+                            No comparison data available
+                          </td>
                         </tr>
-                      ))}
+                      )}
                     </tbody>
                   </table>
                 </div>

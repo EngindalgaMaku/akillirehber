@@ -69,14 +69,49 @@ export default function SemanticSimilarityPage() {
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedEmbeddingProvider, setSelectedEmbeddingProvider] = useState<string>("");
-  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string>("");
-  const [selectedLlmProvider, setSelectedLlmProvider] = useState<string>("");
-  const [selectedLlmModel, setSelectedLlmModel] = useState<string>("");
+  const [selectedEmbeddingProvider, setSelectedEmbeddingProvider] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_embedding_provider') || "";
+    }
+    return "";
+  });
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_embedding_model') || "";
+    }
+    return "";
+  });
+  const [selectedLlmProvider, setSelectedLlmProvider] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_llm_provider') || "";
+    }
+    return "";
+  });
+  const [selectedLlmModel, setSelectedLlmModel] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_llm_model') || "";
+    }
+    return "";
+  });
   // Reranker state
-  const [selectedRerankerProvider, setSelectedRerankerProvider] = useState<string>("");
-  const [selectedRerankerModel, setSelectedRerankerModel] = useState<string>("");
-  const [isRerankerEnabled, setIsRerankerEnabled] = useState<boolean>(false);
+  const [selectedRerankerProvider, setSelectedRerankerProvider] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_reranker_provider') || "";
+    }
+    return "";
+  });
+  const [selectedRerankerModel, setSelectedRerankerModel] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_reranker_model') || "";
+    }
+    return "";
+  });
+  const [isRerankerEnabled, setIsRerankerEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_reranker_enabled') === 'true';
+    }
+    return false;
+  });
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Quick Test State
@@ -166,6 +201,41 @@ export default function SemanticSimilarityPage() {
   useEffect(() => {
     if (!isSettingsOpen) return;
   }, [isSettingsOpen]);
+
+  // Save settings to localStorage when they change
+  useEffect(() => {
+    if (selectedEmbeddingModel) {
+      localStorage.setItem('semantic_similarity_embedding_model', selectedEmbeddingModel);
+    }
+  }, [selectedEmbeddingModel]);
+
+  useEffect(() => {
+    if (selectedLlmProvider) {
+      localStorage.setItem('semantic_similarity_llm_provider', selectedLlmProvider);
+    }
+  }, [selectedLlmProvider]);
+
+  useEffect(() => {
+    if (selectedLlmModel) {
+      localStorage.setItem('semantic_similarity_llm_model', selectedLlmModel);
+    }
+  }, [selectedLlmModel]);
+
+  useEffect(() => {
+    if (selectedRerankerProvider) {
+      localStorage.setItem('semantic_similarity_reranker_provider', selectedRerankerProvider);
+    }
+  }, [selectedRerankerProvider]);
+
+  useEffect(() => {
+    if (selectedRerankerModel) {
+      localStorage.setItem('semantic_similarity_reranker_model', selectedRerankerModel);
+    }
+  }, [selectedRerankerModel]);
+
+  useEffect(() => {
+    localStorage.setItem('semantic_similarity_reranker_enabled', isRerankerEnabled.toString());
+  }, [isRerankerEnabled]);
 
   useEffect(() => {
     if (selectedCourseId) {
@@ -410,11 +480,21 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
     setIsDatasetsLoading(true);
     try {
-      const data = await api.getTestDatasets(selectedCourseId);
-      setTestDatasets(data.datasets);
+      // Use RAGAS test sets instead of old test_datasets
+      const testSets = await api.getTestSets(selectedCourseId);
+      // Convert test sets to dataset format for compatibility
+      const datasets = testSets.map(ts => ({
+        id: ts.id,
+        name: ts.name,
+        description: ts.description,
+        course_id: ts.course_id,
+        question_count: ts.question_count,
+        created_at: ts.created_at,
+      }));
+      setTestDatasets(datasets);
     } catch (error) {
-      console.log("Failed to load test datasets:", error);
-      toast.error("Test veri setleri yüklenirken hata oluştu");
+      console.log("Failed to load test sets:", error);
+      toast.error("Test setleri yüklenirken hata oluştu");
     } finally {
       setIsDatasetsLoading(false);
     }
@@ -520,9 +600,9 @@ export default function SemanticSimilarityPage() {
               const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
               const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
               const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
-              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
-              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -535,9 +615,9 @@ export default function SemanticSimilarityPage() {
                   avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
                   avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
                   avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
-                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
-                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
-                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || '',
                 llm_model_used: data.llm_model_used || undefined
@@ -579,7 +659,11 @@ export default function SemanticSimilarityPage() {
               loadBatchTestSessions();
             }
           } catch (jsonError) {
-            console.error('Failed to parse SSE JSON:', jsonError, 'Line:', line);
+            // Log parse errors but don't crash - incomplete chunks will be completed in next iteration
+            console.warn('SSE parse warning (will retry with next chunk):', {
+              line: line.substring(0, 100) + (line.length > 100 ? '...' : ''),
+              error: jsonError instanceof Error ? jsonError.message : String(jsonError)
+            });
           }
         }
       }
@@ -763,7 +847,12 @@ export default function SemanticSimilarityPage() {
 
       // Eğer RAGAS test set formatındaysa (questions array içinde), onu çıkar
       if (parsedData.questions && Array.isArray(parsedData.questions)) {
-        testCases = parsedData.questions;
+        testCases = parsedData.questions.map((q: any) => ({
+          question: q.question,
+          ground_truth: q.ground_truth,
+          alternative_ground_truths: q.alternative_ground_truths,
+          bloom_level: q.question_metadata?.bloom_level || null,
+        }));
         // RAGAS'tan gelen name'i otomatik group name olarak ayarla
         if (parsedData.name && !saveGroupName) {
           setSaveGroupName(parsedData.name);
@@ -905,29 +994,25 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
 
     try {
-      const dataset = await api.getTestDataset(parseInt(datasetId));
-      setBatchTestJson(JSON.stringify(dataset.test_cases, null, 2));
+      // Use RAGAS test set instead of old test_dataset
+      const testSet = await api.getTestSet(parseInt(datasetId));
+      
+      // Convert test set questions to test cases format and sort alphabetically
+      const testCases = testSet.questions
+        .sort((a, b) => a.question.localeCompare(b.question, 'tr-TR'))
+        .map(q => ({
+          question: q.question,
+          ground_truth: q.ground_truth,
+          alternative_ground_truths: q.alternative_ground_truths,
+          expected_contexts: q.expected_contexts,
+        }));
+      
+      setBatchTestJson(JSON.stringify(testCases, null, 2));
       setSelectedDataset(datasetId);
-      toast.success(`"${dataset.name}" veri seti yüklendi`);
+      toast.success(`"${testSet.name}" test seti yüklendi (${testCases.length} soru)`);
     } catch (error) {
-      console.error("Load dataset error:", error);
-      toast.error(error instanceof Error ? error.message : "Veri seti yüklenemedi");
-    }
-  };
-
-  const handleDeleteDataset = async (datasetId: number) => {
-    if (!confirm("Bu veri setini silmek istediğinizden emin misiniz?")) return;
-
-    try {
-      await api.deleteTestDataset(datasetId);
-      toast.success("Veri seti silindi");
-      loadTestDatasets();
-      if (selectedDataset === datasetId.toString()) {
-        setSelectedDataset("");
-      }
-    } catch (error) {
-      console.error("Delete dataset error:", error);
-      toast.error(error instanceof Error ? error.message : "Veri seti silinemedi");
+      console.error("Load test set error:", error);
+      toast.error(error instanceof Error ? error.message : "Test seti yüklenemedi");
     }
   };
 
@@ -1021,9 +1106,9 @@ export default function SemanticSimilarityPage() {
               const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
               const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
               const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
-              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
-              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1036,9 +1121,9 @@ export default function SemanticSimilarityPage() {
                   avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
                   avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
                   avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
-                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
-                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
-                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
@@ -1048,9 +1133,9 @@ export default function SemanticSimilarityPage() {
               const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
               const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
               const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
-              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
-              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
 
               const finalResult: SemanticSimilarityBatchTestResponse = {
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1063,9 +1148,9 @@ export default function SemanticSimilarityPage() {
                   avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
                   avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
                   avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
-                  avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
-                  avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
-                  avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
@@ -1080,7 +1165,11 @@ export default function SemanticSimilarityPage() {
               throw new Error('Test başarısız');
             }
           } catch (jsonError) {
-            console.error('Failed to parse SSE JSON:', jsonError, 'Line:', line);
+            // Log parse errors but don't crash - incomplete chunks will be completed in next iteration
+            console.warn('SSE parse warning (will retry with next chunk):', {
+              line: line.substring(0, 100) + (line.length > 100 ? '...' : ''),
+              error: jsonError instanceof Error ? jsonError.message : String(jsonError)
+            });
           }
         }
       }
@@ -1179,6 +1268,7 @@ export default function SemanticSimilarityPage() {
             ground_truth: result.ground_truth,
             alternative_ground_truths: undefined,
             generated_answer: result.generated_answer,
+            bloom_level: result.bloom_level || undefined,
             similarity_score: result.similarity_score,
             best_match_ground_truth: result.best_match_ground_truth,
             all_scores: undefined,
@@ -1939,14 +2029,8 @@ export default function SemanticSimilarityPage() {
                             {testDatasets.map((dataset) => (
                               <div key={dataset.id} className="flex items-center justify-between text-xs">
                                 <span className="text-cyan-700">
-                                  • {dataset.name} ({dataset.total_test_cases} test)
+                                  • {dataset.name} ({dataset.question_count} soru)
                                 </span>
-                                <button
-                                  onClick={() => handleDeleteDataset(dataset.id)}
-                                  className="text-red-600 hover:text-red-800"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
                               </div>
                             ))}
                           </div>
@@ -2512,6 +2596,13 @@ export default function SemanticSimilarityPage() {
                         <div className="flex items-start justify-between">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
+                              {result.bloom_level && (
+                                <span className="px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full font-medium">
+                                  {result.bloom_level === 'remembering' && '🧠 Hatırlama'}
+                                  {result.bloom_level === 'understanding_applying' && '🔧 Anlama/Uygulama'}
+                                  {result.bloom_level === 'analyzing_evaluating' && '⭐ Analiz/Değerlendirme'}
+                                </span>
+                              )}
                               {result.group_name && (
                                 <span className="px-2 py-0.5 text-xs bg-teal-100 text-teal-700 rounded-full font-medium">
                                   {result.group_name}

@@ -11,8 +11,50 @@ interface ExportPDFOptions {
   groupName: string;
 }
 
+// Bloom level display names
+const BLOOM_LABELS: Record<string, string> = {
+  remembering: "🧠 Hatırlama",
+  understanding_applying: "🔧 Anlama/Uygulama",
+  analyzing_evaluating: "⭐ Analiz/Değerlendirme",
+  unknown: "❓ Bilinmeyen",
+};
+
+// Calculate bloom-level statistics
+const calculateBloomStats = (results: SemanticSimilarityResult[]) => {
+  const bloomGroups: Record<string, SemanticSimilarityResult[]> = {};
+  
+  results.forEach(r => {
+    const level = r.bloom_level || 'unknown';
+    if (!bloomGroups[level]) {
+      bloomGroups[level] = [];
+    }
+    bloomGroups[level].push(r);
+  });
+
+  const bloomStats: Record<string, any> = {};
+  
+  Object.entries(bloomGroups).forEach(([level, items]) => {
+    const rouge1Scores = items.filter(r => r.rouge1 != null).map(r => r.rouge1!);
+    const rouge2Scores = items.filter(r => r.rouge2 != null).map(r => r.rouge2!);
+    const rougelScores = items.filter(r => r.rougel != null).map(r => r.rougel!);
+    const bertScores = items.filter(r => r.original_bertscore_f1 != null).map(r => r.original_bertscore_f1!);
+    
+    bloomStats[level] = {
+      count: items.length,
+      avg_rouge1: rouge1Scores.length > 0 ? rouge1Scores.reduce((a, b) => a + b, 0) / rouge1Scores.length : null,
+      avg_rouge2: rouge2Scores.length > 0 ? rouge2Scores.reduce((a, b) => a + b, 0) / rouge2Scores.length : null,
+      avg_rougel: rougelScores.length > 0 ? rougelScores.reduce((a, b) => a + b, 0) / rougelScores.length : null,
+      avg_bertscore: bertScores.length > 0 ? bertScores.reduce((a, b) => a + b, 0) / bertScores.length : null,
+    };
+  });
+  
+  return bloomStats;
+};
+
 export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
   const { results, aggregate, courseName, groupName } = options;
+  
+  const bloomStats = calculateBloomStats(results);
 
   const getMetricClass = (val: number) => 
     val >= 0.8 ? 'metric-good' : val >= 0.6 ? 'metric-medium' : 'metric-bad';
@@ -95,12 +137,48 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
         ` : ''}
       </div>
 
+      ${Object.keys(bloomStats).length > 0 ? `
+        <h2>🎯 Bloom Kategorilerine Göre İstatistikler</h2>
+        ${Object.entries(bloomStats).map(([level, stats]: [string, any]) => `
+          <div style="margin: 20px 0; padding: 15px; background: #f8fafc; border-left: 4px solid #0d9488; border-radius: 4px;">
+            <h3 style="margin: 0 0 10px 0; color: #0f766e;">${BLOOM_LABELS[level] || level} (${stats.count} soru)</h3>
+            <div class="stats">
+              ${stats.avg_rouge1 != null ? `
+                <div class="stat-card">
+                  <div class="stat-label">Ort. ROUGE-1</div>
+                  <div class="stat-value">${(stats.avg_rouge1 * 100).toFixed(1)}%</div>
+                </div>
+              ` : ''}
+              ${stats.avg_rouge2 != null ? `
+                <div class="stat-card">
+                  <div class="stat-label">Ort. ROUGE-2</div>
+                  <div class="stat-value">${(stats.avg_rouge2 * 100).toFixed(1)}%</div>
+                </div>
+              ` : ''}
+              ${stats.avg_rougel != null ? `
+                <div class="stat-card">
+                  <div class="stat-label">Ort. ROUGE-L</div>
+                  <div class="stat-value">${(stats.avg_rougel * 100).toFixed(1)}%</div>
+                </div>
+              ` : ''}
+              ${stats.avg_bertscore != null ? `
+                <div class="stat-card">
+                  <div class="stat-label">Ort. BERTScore F1</div>
+                  <div class="stat-value">${(stats.avg_bertscore * 100).toFixed(1)}%</div>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        `).join('')}
+      ` : ''}
+
       <h2>📋 Detaylı Sonuçlar</h2>
       <table>
         <thead>
           <tr>
             <th style="width: 40px;">No</th>
             <th>Soru</th>
+            <th style="width: 100px;">Bloom Seviyesi</th>
             <th style="width: 70px;">ROUGE-1</th>
             <th style="width: 70px;">ROUGE-2</th>
             <th style="width: 70px;">ROUGE-L</th>
@@ -119,6 +197,7 @@ export const generateSemanticSimilarityPDF = (options: ExportPDFOptions) => {
                 <span style="color: #059669; font-size: 10px;"><strong>Doğru Cevap:</strong> ${r.ground_truth.substring(0, 100)}${r.ground_truth.length > 100 ? '...' : ''}</span><br/>
                 <span style="color: #0891b2; font-size: 10px;"><strong>Üretilen:</strong> ${r.generated_answer.substring(0, 100)}${r.generated_answer.length > 100 ? '...' : ''}</span>
               </td>
+              <td style="font-size: 10px; font-weight: bold; color: #0f766e;">${r.bloom_level ? BLOOM_LABELS[r.bloom_level] || r.bloom_level : '-'}</td>
               <td class="${r.rouge1 != null ? getMetricClass(r.rouge1) : ''}">${r.rouge1 != null ? (r.rouge1 * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.rouge2 != null ? getMetricClass(r.rouge2) : ''}">${r.rouge2 != null ? (r.rouge2 * 100).toFixed(1) + '%' : '-'}</td>
               <td class="${r.rougel != null ? getMetricClass(r.rougel) : ''}">${r.rougel != null ? (r.rougel * 100).toFixed(1) + '%' : '-'}</td>

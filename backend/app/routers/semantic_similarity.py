@@ -521,6 +521,7 @@ def _process_test_case(
                     "question": test_case.question,
                     "ground_truth": test_case.ground_truth,
                     "generated_answer": generated_answer,
+                    "bloom_level": test_case.bloom_level if hasattr(test_case, 'bloom_level') else None,
                     "similarity_score": metrics['similarity_score'],
                     "best_match_ground_truth":
                         metrics['best_match_ground_truth'],
@@ -634,6 +635,7 @@ async def save_result(
         ground_truth=data.ground_truth,
         alternative_ground_truths=data.alternative_ground_truths,
         generated_answer=data.generated_answer,
+        bloom_level=data.bloom_level,
         similarity_score=data.similarity_score,
         best_match_ground_truth=data.best_match_ground_truth,
         all_scores=all_scores_dicts,
@@ -667,6 +669,7 @@ async def save_result(
         ground_truth=result.ground_truth,
         alternative_ground_truths=result.alternative_ground_truths,
         generated_answer=result.generated_answer,
+        bloom_level=result.bloom_level,
         similarity_score=result.similarity_score,
         best_match_ground_truth=result.best_match_ground_truth,
         all_scores=result.all_scores,
@@ -1476,9 +1479,11 @@ async def create_batch_test_session(
     # Get course settings for embedding model
     course_settings = get_or_create_settings(db, data.course_id)
 
-    # Auto-generate group name with timestamp
+    # Auto-generate unique group name with timestamp and random ID
+    import uuid
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    group_name = f"Batch Test {timestamp}"
+    unique_id = str(uuid.uuid4())[:8]  # First 8 chars of UUID
+    group_name = f"Batch Test {timestamp}_{unique_id}"
 
     logger.info(
         "Creating batch test session - course_id: %s, user_id: %s, "
@@ -1917,6 +1922,7 @@ async def resume_batch_test_session(
                                 test_case.alternative_ground_truths
                             ),
                             generated_answer=generated_answer,
+                            bloom_level=test_case.bloom_level if hasattr(test_case, 'bloom_level') else None,
                             similarity_score=metrics['similarity_score'],
                             best_match_ground_truth=metrics[
                                 'best_match_ground_truth'

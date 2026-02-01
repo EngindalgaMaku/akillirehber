@@ -135,9 +135,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - CLAUDEGG_API_KEY=${CLAUDEGG_API_KEY:-}
       - APICLAUDEGG_API_KEY=${APICLAUDEGG_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - COHERE_API_KEY=${COHERE_API_KEY:-}
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
-      # Optional: Force specific provider (groq, openrouter, openai, claudegg, apiclaudegg, cohere)
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      # Optional: Force specific provider (groq, openrouter, openai, claudegg, apiclaudegg, deepseek, cohere, alibaba, zai)
       - RAGAS_PROVIDER=${RAGAS_PROVIDER:-}
       # Optional: Override default model
       - RAGAS_MODEL=${RAGAS_MODEL:-}

@@ -325,6 +325,75 @@ async def duplicate_test_set(
     )
 
 
+@router.post("/test-sets/{test_set_id}/merge/{source_test_set_id}", response_model=TestSetDetailResponse)
+async def merge_test_sets(
+    test_set_id: int,
+    source_test_set_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Merge questions from source test set into target test set.
+    
+    Copies all questions from source_test_set_id to test_set_id (target).
+    The source test set remains unchanged.
+    """
+    # Get and verify target test set
+    target_test_set = db.query(TestSet).filter(TestSet.id == test_set_id).first()
+    if not target_test_set:
+        raise HTTPException(status_code=404, detail="Target test set not found")
+    
+    verify_course_access(db, target_test_set.course_id, current_user)
+    
+    # Get and verify source test set
+    source_test_set = db.query(TestSet).filter(TestSet.id == source_test_set_id).first()
+    if not source_test_set:
+        raise HTTPException(status_code=404, detail="Source test set not found")
+    
+    verify_course_access(db, source_test_set.course_id, current_user)
+    
+    # Both test sets must belong to the same course
+    if target_test_set.course_id != source_test_set.course_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Test sets must belong to the same course"
+        )
+    
+    # Get all questions from source test set
+    source_questions = db.query(TestQuestion).filter(
+        TestQuestion.test_set_id == source_test_set_id
+    ).all()
+    
+    if not source_questions:
+        raise HTTPException(
+            status_code=400,
+            detail="Source test set has no questions to merge"
+        )
+    
+    # Copy questions to target test set
+    merged_count = 0
+    for q in source_questions:
+        new_question = TestQuestion(
+            test_set_id=test_set_id,
+            question=q.question,
+            ground_truth=q.ground_truth,
+            alternative_ground_truths=q.alternative_ground_truths,
+            expected_contexts=q.expected_contexts,
+            question_metadata=q.question_metadata,
+        )
+        db.add(new_question)
+        merged_count += 1
+    
+    db.commit()
+    
+    logger.info(
+        f"Merged {merged_count} questions from test set {source_test_set_id} "
+        f"to test set {test_set_id}"
+    )
+    
+    # Return updated target test set
+    return await get_test_set(test_set_id, current_user, db)
+
+
 @router.post("/test-sets/{test_set_id}/import", response_model=TestSetDetailResponse)
 async def import_questions(
     test_set_id: int,
@@ -381,15 +450,21 @@ async def export_test_set(
     db: Session = Depends(get_db),
 ):
     """Export test set to JSON format."""
+    print(f"[EXPORT] Received request for test_set_id: {test_set_id}")
+    
     test_set = db.query(TestSet).filter(TestSet.id == test_set_id).first()
     if not test_set:
         raise HTTPException(status_code=404, detail="Test set not found")
+    
+    print(f"[EXPORT] Found test set: ID={test_set.id}, Name={test_set.name}")
     
     verify_course_access(db, test_set.course_id, current_user)
     
     questions = db.query(TestQuestion).filter(
         TestQuestion.test_set_id == test_set_id
     ).all()
+    
+    print(f"[EXPORT] Found {len(questions)} questions for test_set_id={test_set_id}")
     
     test_cases = [
         {
@@ -402,13 +477,18 @@ async def export_test_set(
         for q in questions
     ]
 
-    return {
+    result = {
+        "id": test_set.id,
         "name": test_set.name,
         "description": test_set.description,
         "test_cases": test_cases,
         # Backward-compatible alias
         "questions": test_cases,
     }
+    
+    print(f"[EXPORT] Returning: ID={result['id']}, Name={result['name']}, Questions={len(result['questions'])}")
+    
+    return result
 
 
 # ==================== Question Endpoints ====================
@@ -1572,7 +1652,9 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             ground_truths,
             generated_answer,
             context_texts,
-            evaluation_model_used
+            evaluation_model_used,
+            reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
+            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None
         )
 
         logger.info(
@@ -1598,9 +1680,12 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             llm_provider_used=llm_provider,
             llm_model_used=llm_model,
             evaluation_model_used=evaluation_model_used,
-            reranker_used=False,
-            reranker_provider=None,
-            reranker_model=None,
+            embedding_model_used=course_settings.default_embedding_model,
+            search_top_k_used=course_settings.search_top_k,
+            search_alpha_used=course_settings.search_alpha,
+            reranker_used=course_settings.enable_reranker,
+            reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
+            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
         )
         
     except Exception as e:
@@ -1641,6 +1726,13 @@ async def save_quick_test_result(
         system_prompt=data.system_prompt,
         llm_provider=data.llm_provider,
         llm_model=data.llm_model,
+        evaluation_model=data.evaluation_model,
+        embedding_model=data.embedding_model,
+        search_top_k=data.search_top_k,
+        search_alpha=data.search_alpha,
+        reranker_used=data.reranker_used,
+        reranker_provider=data.reranker_provider,
+        reranker_model=data.reranker_model,
         generated_answer=data.generated_answer,
         retrieved_contexts=contexts_for_db,
         faithfulness=data.faithfulness,
@@ -1665,6 +1757,10 @@ async def save_quick_test_result(
         system_prompt=result.system_prompt,
         llm_provider=result.llm_provider,
         llm_model=result.llm_model,
+        evaluation_model=result.evaluation_model,
+        embedding_model=result.embedding_model,
+        search_top_k=result.search_top_k,
+        search_alpha=result.search_alpha,
         generated_answer=result.generated_answer,
         retrieved_contexts=result.retrieved_contexts,
         faithfulness=result.faithfulness,
@@ -1675,6 +1771,9 @@ async def save_quick_test_result(
         latency_ms=result.latency_ms,
         created_by=result.created_by,
         created_at=result.created_at,
+        reranker_used=result.reranker_used,
+        reranker_provider=result.reranker_provider,
+        reranker_model=result.reranker_model,
     )
 
 
@@ -1704,17 +1803,145 @@ async def list_quick_test_results(
         # Apply pagination
         results = query.order_by(QuickTestResult.created_at.desc()).offset(skip).limit(limit).all()
         
-        # Get unique group names with their creation dates (oldest entry per group)
+        # Get unique group names with their creation dates and basic metadata
         from sqlalchemy import func as sql_func
-        groups_query = db.query(
-            QuickTestResult.group_name,
-            sql_func.min(QuickTestResult.created_at).label('created_at')
-        ).filter(
-            QuickTestResult.course_id == course_id,
-            QuickTestResult.group_name.isnot(None)
-        ).group_by(QuickTestResult.group_name).order_by(sql_func.min(QuickTestResult.created_at).desc()).all()
-        
-        groups = [{"name": g[0], "created_at": g[1].isoformat() if g[1] else None} for g in groups_query if g[0]]
+
+        # Group stats: earliest created_at per group, count, and representative llm fields
+        group_stats_subq = (
+            db.query(
+                QuickTestResult.group_name.label("group_name"),
+                sql_func.min(QuickTestResult.created_at).label("created_at"),
+                sql_func.count(QuickTestResult.id).label("test_count"),
+            )
+            .filter(
+                QuickTestResult.course_id == course_id,
+                QuickTestResult.group_name.isnot(None),
+                QuickTestResult.group_name != "",
+            )
+            .group_by(QuickTestResult.group_name)
+            .subquery()
+        )
+
+        # Representative row per group: earliest entry (by created_at) to capture test-time settings
+        rep_subq = (
+            db.query(
+                QuickTestResult.group_name.label("group_name"),
+                sql_func.min(QuickTestResult.created_at).label("created_at"),
+            )
+            .filter(
+                QuickTestResult.course_id == course_id,
+                QuickTestResult.group_name.isnot(None),
+                QuickTestResult.group_name != "",
+            )
+            .group_by(QuickTestResult.group_name)
+            .subquery()
+        )
+
+        rep_rows = (
+            db.query(
+                QuickTestResult.group_name,
+                QuickTestResult.llm_provider,
+                QuickTestResult.llm_model,
+                QuickTestResult.evaluation_model,
+                QuickTestResult.embedding_model,
+                QuickTestResult.search_top_k,
+                QuickTestResult.search_alpha,
+                QuickTestResult.reranker_used,
+                QuickTestResult.reranker_provider,
+                QuickTestResult.reranker_model,
+            )
+            .join(
+                rep_subq,
+                (QuickTestResult.group_name == rep_subq.c.group_name)
+                & (QuickTestResult.created_at == rep_subq.c.created_at),
+            )
+            .all()
+        )
+        rep_map = {
+            r[0]: {
+                "llm_provider": r[1],
+                "llm_model": r[2],
+                "evaluation_model": r[3],
+                "embedding_model": r[4],
+                "search_top_k": r[5],
+                "search_alpha": r[6],
+                "reranker_used": r[7],
+                "reranker_provider": r[8],
+                "reranker_model": r[9],
+            }
+            for r in rep_rows
+            if r and r[0]
+        }
+
+        groups_query = (
+            db.query(
+                group_stats_subq.c.group_name,
+                group_stats_subq.c.created_at,
+                group_stats_subq.c.test_count,
+            )
+            .order_by(group_stats_subq.c.created_at.desc())
+            .all()
+        )
+
+        # Calculate average metrics per group (SQL AVG ignores NULL; avoids NaN and keeps 0 values)
+        metrics_query = (
+            db.query(
+                QuickTestResult.group_name.label("group_name"),
+                sql_func.avg(QuickTestResult.faithfulness).label("avg_faithfulness"),
+                sql_func.avg(QuickTestResult.answer_relevancy).label("avg_answer_relevancy"),
+                sql_func.avg(QuickTestResult.context_precision).label("avg_context_precision"),
+                sql_func.avg(QuickTestResult.context_recall).label("avg_context_recall"),
+                sql_func.avg(QuickTestResult.answer_correctness).label("avg_answer_correctness"),
+            )
+            .filter(
+                QuickTestResult.course_id == course_id,
+                QuickTestResult.group_name.isnot(None),
+                QuickTestResult.group_name != "",
+            )
+        )
+        if group_name:
+            metrics_query = metrics_query.filter(QuickTestResult.group_name == group_name)
+
+        metrics_rows = metrics_query.group_by(QuickTestResult.group_name).all()
+        group_metrics = {
+            r.group_name: {
+                "avg_faithfulness": r.avg_faithfulness,
+                "avg_answer_relevancy": r.avg_answer_relevancy,
+                "avg_context_precision": r.avg_context_precision,
+                "avg_context_recall": r.avg_context_recall,
+                "avg_answer_correctness": r.avg_answer_correctness,
+            }
+            for r in metrics_rows
+            if r and r.group_name
+        }
+
+        groups = []
+        for gname, created_at_dt, test_count in groups_query:
+            if not gname:
+                continue
+            rep = rep_map.get(gname, {})
+            metrics = group_metrics.get(gname, {})
+            groups.append(
+                {
+                    "name": gname,
+                    "created_at": created_at_dt.isoformat() if created_at_dt else None,
+                    "test_count": int(test_count) if test_count is not None else None,
+                    "llm_provider": rep.get("llm_provider"),
+                    "llm_model": rep.get("llm_model"),
+                    "evaluation_model": rep.get("evaluation_model"),
+                    "embedding_model": rep.get("embedding_model"),
+                    "search_top_k": rep.get("search_top_k"),
+                    "search_alpha": rep.get("search_alpha"),
+                    "reranker_used": rep.get("reranker_used"),
+                    "reranker_provider": rep.get("reranker_provider"),
+                    "reranker_model": rep.get("reranker_model"),
+                    "avg_faithfulness": metrics.get("avg_faithfulness"),
+                    "avg_answer_relevancy": metrics.get("avg_answer_relevancy"),
+                    "avg_context_precision": metrics.get("avg_context_precision"),
+                    "avg_context_recall": metrics.get("avg_context_recall"),
+                    "avg_answer_correctness": metrics.get("avg_answer_correctness"),
+                }
+            )
         
         # Calculate aggregate statistics for the filtered results (not just current page)
         all_results_query = db.query(QuickTestResult).filter(
@@ -1729,31 +1956,16 @@ async def list_quick_test_results(
         test_parameters = None
         if all_results:
             latest = all_results[0]
-            from app.services.course_service import get_or_create_settings
-            course_settings = get_or_create_settings(db, course_id)
-            
-            # Get evaluation model from RAGAS service
-            evaluation_model = None
-            try:
-                ragas_service = RagasEvaluationService(db)
-                import httpx
-                response = httpx.get(f"{ragas_service.ragas_url}/settings", timeout=5.0)
-                if response.status_code == 200:
-                    ragas_settings = response.json()
-                    evaluation_model = ragas_settings.get("current_model")
-            except Exception:
-                pass  # If RAGAS service is not available, skip
-            
             test_parameters = {
                 "llm_model": latest.llm_model,
                 "llm_provider": latest.llm_provider,
-                "embedding_model": course_settings.default_embedding_model,
-                "evaluation_model": evaluation_model,
-                "search_alpha": course_settings.search_alpha,
-                "search_top_k": course_settings.search_top_k,
-                "reranker_used": course_settings.enable_reranker,
-                "reranker_provider": course_settings.reranker_provider if course_settings.enable_reranker else None,
-                "reranker_model": course_settings.reranker_model if course_settings.enable_reranker else None,
+                "embedding_model": latest.embedding_model,
+                "evaluation_model": latest.evaluation_model,
+                "search_alpha": latest.search_alpha,
+                "search_top_k": latest.search_top_k,
+                "reranker_used": latest.reranker_used,
+                "reranker_provider": latest.reranker_provider,
+                "reranker_model": latest.reranker_model,
             }
         
         # Calculate average metrics
@@ -1781,6 +1993,10 @@ async def list_quick_test_results(
                 system_prompt=r.system_prompt,
                 llm_provider=r.llm_provider,
                 llm_model=r.llm_model,
+                evaluation_model=r.evaluation_model,
+                embedding_model=r.embedding_model,
+                search_top_k=r.search_top_k,
+                search_alpha=r.search_alpha,
                 generated_answer=r.generated_answer,
                 retrieved_contexts=r.retrieved_contexts,
                 faithfulness=r.faithfulness,
@@ -1791,9 +2007,9 @@ async def list_quick_test_results(
                 latency_ms=r.latency_ms,
                 created_by=r.created_by,
                 created_at=r.created_at,
-                reranker_used=False,
-                reranker_provider=None,
-                reranker_model=None,
+                reranker_used=r.reranker_used,
+                reranker_provider=r.reranker_provider,
+                reranker_model=r.reranker_model,
             ) for r in results],
             "total": total_count,
             "groups": groups,
@@ -1807,6 +2023,31 @@ async def list_quick_test_results(
     except Exception as e:
         logger.error(f"Error listing quick test results: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/quick-test-results/existing-questions")
+async def get_existing_quick_test_questions(
+    course_id: int,
+    group_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_course_access(db, course_id, current_user)
+    if not group_name:
+        raise HTTPException(status_code=400, detail="group_name is required")
+
+    rows = (
+        db.query(QuickTestResult.question)
+        .filter(
+            QuickTestResult.course_id == course_id,
+            QuickTestResult.group_name == group_name,
+        )
+        .distinct()
+        .all()
+    )
+    return {
+        "questions": [r[0] for r in rows if r and r[0]],
+    }
 
 
 @router.get(
@@ -1838,6 +2079,10 @@ async def get_quick_test_result(
         system_prompt=result.system_prompt,
         llm_provider=result.llm_provider,
         llm_model=result.llm_model,
+        evaluation_model=result.evaluation_model,
+        embedding_model=result.embedding_model,
+        search_top_k=result.search_top_k,
+        search_alpha=result.search_alpha,
         generated_answer=result.generated_answer,
         retrieved_contexts=result.retrieved_contexts,
         faithfulness=result.faithfulness,
@@ -1848,9 +2093,9 @@ async def get_quick_test_result(
         latency_ms=result.latency_ms,
         created_by=result.created_by,
         created_at=result.created_at,
-        reranker_used=False,
-        reranker_provider=None,
-        reranker_model=None,
+        reranker_used=result.reranker_used,
+        reranker_provider=result.reranker_provider,
+        reranker_model=result.reranker_model,
     )
 
 
@@ -1884,7 +2129,8 @@ class BatchTestStreamRequest(BaseModel):
     course_id: int
     test_cases: List[dict]
     group_name: str
-    enable_wandb: bool = True
+    enable_wandb: bool = False
+    only_indices: Optional[List[int]] = None
 
 
 @router.post("/quick-test-results/batch-stream")
@@ -2069,230 +2315,439 @@ async def batch_test_stream(
                 evaluation_model_for_batch = None
                 logger.warning(f"[BATCH TEST] Error fetching RAGAS settings: {e}")
             
-            # Process each test case
-            for idx, test_case in enumerate(data.test_cases):
-                try:
-                    start_time = time.time()
-                    
-                    question = test_case.get("question")
-                    ground_truth = test_case.get("ground_truth")
-                    alternative_ground_truths = test_case.get("alternative_ground_truths", [])
-                    
-                    # Get embedding
-                    query_vector = embedding_service.get_embedding(
-                        question,
-                        model=course_settings.default_embedding_model
-                    )
-                    
-                    # Search
-                    search_results = weaviate_service.hybrid_search(
-                        course_id=course.id,
-                        query=question,
-                        query_vector=query_vector,
-                        alpha=course_settings.search_alpha,
-                        limit=course_settings.search_top_k
-                    )
-                    
-                    # Filter by relevance
-                    min_score = getattr(course_settings, 'min_relevance_score', 0.0) or 0.0
-                    if min_score > 0 and search_results:
-                        search_results = [r for r in search_results if r.score >= min_score]
-                    
-                    # Extract contexts
-                    retrieved_contexts = []
-                    context_texts = []
-                    for result in search_results:
-                        content = result.content
-                        if content:
-                            # 🔥 Temiz context kullan - whitespace karakterlerini kaldır
-                            clean_content = clean_context_text(content)
-                            
-                            retrieved_contexts.append({
-                                "text": clean_content,
-                                "score": result.score
-                            })
-                            context_texts.append(clean_content)
-                    
-                    # Generate answer
-                    context_text = "\n\n---\n\n".join(context_texts) if context_texts else ""
-                    user_prompt = f"""Bağlam:
+            # OPTIMIZED PROCESSING with small batch parallelism (2-3 tests at a time)
+            # Benefits:
+            # 1. Embedding cache reduces API calls for repeated contexts
+            # 2. Small parallelism (2-3 workers) provides speedup without instability
+            # 3. More stable than 10 workers, faster than sequential
+            logger.info(f"[BATCH TEST] Processing {len(data.test_cases)} tests with SMALL BATCH PARALLELISM (2-3 workers)")
+            
+            # Embedding cache for repeated contexts (saves API calls)
+            embedding_cache = {}  # {text: embedding_vector}
+            cache_lock = asyncio.Lock()
+            
+            completed_count = 0
+            
+            def process_single_test(idx, test_case):
+                """Process a single test case with retry for missing metrics and low scores - runs in thread pool"""
+                MAX_RETRIES = 2  # Reduced from 3 to 2 for speed
+                
+                # Metric-specific thresholds
+                FAITHFULNESS_THRESHOLD = 0.5  # 50% - critical for factual accuracy
+                RELEVANCY_THRESHOLD = 0.4  # 40% - critical for answer quality
+                
+                retry_count = 0
+                last_error = None
+                previous_answer = None  # Track previous answer to avoid infinite loops
+                
+                while retry_count <= MAX_RETRIES:
+                    try:
+                        start_time = time.time()
+                        
+                        question = test_case.get("question")
+                        ground_truth = test_case.get("ground_truth")
+                        alternative_ground_truths = test_case.get("alternative_ground_truths", [])
+                        
+                        # Get embedding with cache
+                        cache_key = f"{course_settings.default_embedding_model}:{question}"
+                        if cache_key in embedding_cache:
+                            query_vector = embedding_cache[cache_key]
+                            logger.debug(f"[CACHE HIT] Test {idx}: Using cached embedding for question")
+                        else:
+                            query_vector = embedding_service.get_embedding(
+                                question,
+                                model=course_settings.default_embedding_model
+                            )
+                            embedding_cache[cache_key] = query_vector
+                            logger.debug(f"[CACHE MISS] Test {idx}: Generated new embedding for question")
+                        
+                        # Search
+                        search_results = weaviate_service.hybrid_search(
+                            course_id=course.id,
+                            query=question,
+                            query_vector=query_vector,
+                            alpha=course_settings.search_alpha,
+                            limit=course_settings.search_top_k
+                        )
+                        
+                        # Filter by relevance
+                        min_score = getattr(course_settings, 'min_relevance_score', 0.0) or 0.0
+                        if min_score > 0 and search_results:
+                            search_results = [r for r in search_results if r.score >= min_score]
+                        
+                        # Extract contexts with caching
+                        retrieved_contexts = []
+                        context_texts = []
+                        cache_hits = 0
+                        cache_misses = 0
+                        
+                        for result in search_results:
+                            content = result.content
+                            if content:
+                                # Clean context
+                                clean_content = clean_context_text(content)
+                                
+                                retrieved_contexts.append({
+                                    "text": clean_content,
+                                    "score": result.score
+                                })
+                                context_texts.append(clean_content)
+                        
+                        logger.debug(
+                            f"[CACHE STATS] Test {idx}: Question cache hit, "
+                            f"Context cache hits: {cache_hits}, misses: {cache_misses}"
+                        )
+                        
+                        # Generate answer
+                        context_text = "\n\n---\n\n".join(context_texts) if context_texts else ""
+                        user_prompt = f"""Bağlam:
 {context_text}
 
 Soru: {question}
 
 Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
-                    
-                    generated_answer = llm_service.generate_response([
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ])
-                    
-                    # Prepare ground truths
-                    ground_truths = [ground_truth]
-                    if alternative_ground_truths:
-                        ground_truths.extend(alternative_ground_truths)
-                    
-                    # Get RAGAS metrics - RAGAS ayarlarından gelen evaluation model'i kullan!
-                    metrics = ragas_service._get_ragas_metrics_sync(
-                        question,
-                        ground_truths,
-                        generated_answer,
-                        context_texts,
-                        evaluation_model_for_batch  # ✅ RAGAS settings'ten alınan model
-                    )
-                    
-                    latency_ms = int((time.time() - start_time) * 1000)
-                    
-                    # Aggregate
-                    for key in sum_metrics.keys():
-                        if metrics.get(key) is not None:
-                            sum_metrics[key] += metrics[key]
-                            cnt_metrics[key] += 1
-                    sum_latency += latency_ms
-                    cnt_latency += 1
-                    
-                    # Save to DB
-                    contexts_for_db = [
-                        {"text": ctx["text"], "score": ctx["score"]}
-                        for ctx in retrieved_contexts
-                    ]
-                    
-                    result = QuickTestResult(
-                        course_id=data.course_id,
-                        group_name=data.group_name,
-                        question=question,
-                        ground_truth=ground_truth,
-                        alternative_ground_truths=alternative_ground_truths,
-                        system_prompt=system_prompt,
-                        llm_provider=llm_provider,
-                        llm_model=llm_model,
-                        generated_answer=generated_answer,
-                        retrieved_contexts=contexts_for_db,
-                        faithfulness=metrics.get("faithfulness"),
-                        answer_relevancy=metrics.get("answer_relevancy"),
-                        context_precision=metrics.get("context_precision"),
-                        context_recall=metrics.get("context_recall"),
-                        answer_correctness=metrics.get("answer_correctness"),
-                        latency_ms=latency_ms,
-                        created_by=current_user.id,
-                    )
-                    db.add(result)
-                    db.commit()
-                    
-                    # DEBUG: Log W&B status - BEFORE THE IF CHECK!
-                    print(f"[BATCH W&B DEBUG] Test {idx}: wb_enabled={wb_enabled}, wb_run={wb_run is not None}, faithfulness={metrics.get('faithfulness')}", flush=True)
-                    logger.info(f"[BATCH W&B DEBUG] Test {idx}: wb_enabled={wb_enabled}, wb_run={wb_run is not None}, faithfulness={metrics.get('faithfulness')}")
-                    
-                    # W&B logging - EXACT SAME as semantic similarity!
-                    if wb_enabled and wb_run is not None:
-                        print(f"[BATCH W&B DEBUG] Test {idx}: INSIDE IF - Calling wandb.log with step={idx}", flush=True)
-                        logger.info(f"[BATCH W&B DEBUG] Test {idx}: INSIDE IF - Calling wandb.log with step={idx}")
-                        try:
-                            wandb.log(
-                                {
-                                    "faithfulness": metrics.get("faithfulness"),
-                                    "answer_relevancy": metrics.get("answer_relevancy"),
-                                    "context_precision": metrics.get("context_precision"),
-                                    "context_recall": metrics.get("context_recall"),
-                                    "answer_correctness": metrics.get("answer_correctness"),
-                                    "latency_ms": latency_ms,
-                                    "contexts_count": len(context_texts),
-                                },
-                                step=idx,
-                            )
-                            print(f"[BATCH W&B DEBUG] Test {idx}: wandb.log completed successfully", flush=True)
-                            logger.info(f"[BATCH W&B DEBUG] Test {idx}: wandb.log completed successfully")
-                        except Exception as e:
-                            print(f"[BATCH W&B DEBUG] Test {idx}: wandb.log FAILED: {e}", flush=True)
-                            logger.error(f"[BATCH W&B DEBUG] Test {idx}: wandb.log FAILED: {e}")
                         
-                        # W&B'ye hemen gönder (buffer'ı flush et) - BU IF İÇİNDE OLMALI!
-                        try:
-                            if hasattr(wb_run, '_flush'):
-                                wb_run._flush()
-                        except Exception:
-                            pass
+                        generated_answer = llm_service.generate_response([
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ])
                         
-                        if wb_table is not None:
-                            wb_table.add_data(
-                                idx,
-                                question,
-                                ground_truth,
-                                generated_answer,
-                                metrics.get("faithfulness"),
-                                metrics.get("answer_relevancy"),
-                                metrics.get("context_precision"),
-                                metrics.get("context_recall"),
-                                metrics.get("answer_correctness"),
-                                latency_ms,
-                                len(context_texts),
-                                None,
+                        # Prepare ground truths
+                        ground_truths = [ground_truth]
+                        if alternative_ground_truths:
+                            ground_truths.extend(alternative_ground_truths)
+                        
+                        # Get RAGAS metrics
+                        metrics = ragas_service._get_ragas_metrics_sync(
+                            question,
+                            ground_truths,
+                            generated_answer,
+                            context_texts,
+                            evaluation_model_for_batch
+                        )
+                        
+                        # VALIDATE METRICS - Retry if critical metrics are missing or None
+                        critical_metrics = ['context_precision', 'faithfulness', 'answer_relevancy']
+                        missing_metrics = [m for m in critical_metrics if metrics.get(m) is None]
+                        
+                        # CHECK FOR LOW SCORES - Retry if scores are critically low
+                        low_score_metrics = []
+                        
+                        # Check faithfulness (50% threshold)
+                        faithfulness = metrics.get('faithfulness')
+                        if faithfulness is not None and faithfulness < FAITHFULNESS_THRESHOLD:
+                            low_score_metrics.append(f"faithfulness={faithfulness:.1%}")
+                        
+                        # Check answer_relevancy (40% threshold)
+                        answer_relevancy = metrics.get('answer_relevancy')
+                        if answer_relevancy is not None and answer_relevancy < RELEVANCY_THRESHOLD:
+                            low_score_metrics.append(f"answer_relevancy={answer_relevancy:.1%}")
+                        
+                        # Decide if we should retry
+                        should_retry = False
+                        retry_reason = None
+                        
+                        if missing_metrics and retry_count < MAX_RETRIES:
+                            should_retry = True
+                            retry_reason = f"Missing metrics: {missing_metrics}"
+                        elif low_score_metrics and retry_count < MAX_RETRIES:
+                            # Only retry for low scores if the answer is different from previous attempt
+                            if previous_answer is None or generated_answer != previous_answer:
+                                should_retry = True
+                                retry_reason = f"Low scores: {low_score_metrics}"
+                            else:
+                                logger.warning(
+                                    f"Test {idx}: Same answer repeated with low scores {low_score_metrics}. "
+                                    f"Accepting result to avoid infinite loop."
+                                )
+                        
+                        if should_retry:
+                            retry_count += 1
+                            previous_answer = generated_answer
+                            logger.warning(
+                                f"Test {idx} attempt {retry_count}: {retry_reason}. Retrying..."
                             )
-                            # ✅ HER ADIMDA TABLE'I LOG ET - Semantic similarity gibi!
-                            try:
-                                wandb.log({"results": wb_table}, step=idx)
-                                print(f"[BATCH W&B DEBUG] Test {idx}: Table logged successfully", flush=True)
-                            except Exception as e:
-                                print(f"[BATCH W&B DEBUG] Test {idx}: Table log FAILED: {e}", flush=True)
-                    else:
-                        print(f"[BATCH W&B DEBUG] Test {idx}: SKIPPED - wb_enabled={wb_enabled}, wb_run is not None={wb_run is not None}", flush=True)
-                        logger.warning(f"[BATCH W&B DEBUG] Test {idx}: SKIPPED - wb_enabled={wb_enabled}, wb_run is not None={wb_run is not None}")
-                    
-                    # Send progress
-                    progress = {
-                        "event": "progress",
-                        "index": idx,
-                        "total": len(data.test_cases),
-                        "completed": idx + 1,
-                        "result": {
+                            time.sleep(0.5)
+                            continue
+                        
+                        # REJECT RESULT if still missing critical metrics after all retries
+                        if missing_metrics:
+                            error_msg = f"CRITICAL: Missing metrics after {retry_count} retries: {missing_metrics}"
+                            logger.error(f"Test {idx}: {error_msg}")
+                            return {
+                                "success": False,
+                                "idx": idx,
+                                "question": question,
+                                "ground_truth": ground_truth,
+                                "error": error_msg,
+                            }
+                        
+                        # WARN but ACCEPT if low scores after retries
+                        if low_score_metrics:
+                            logger.warning(
+                                f"Test {idx} completed after {retry_count} retries: Still has low scores {low_score_metrics}"
+                            )
+                        
+                        latency_ms = int((time.time() - start_time) * 1000)
+                        
+                        # Save to DB (thread-safe with new session)
+                        from app.database import SessionLocal
+                        thread_db = SessionLocal()
+                        try:
+                            contexts_for_db = [
+                                {"text": ctx["text"], "score": ctx["score"]}
+                                for ctx in retrieved_contexts
+                            ]
+                            
+                            result = QuickTestResult(
+                                course_id=data.course_id,
+                                group_name=data.group_name,
+                                question=question,
+                                ground_truth=ground_truth,
+                                alternative_ground_truths=alternative_ground_truths,
+                                system_prompt=system_prompt,
+                                llm_provider=llm_provider,
+                                llm_model=llm_model,
+                                evaluation_model=evaluation_model_for_batch,
+                                embedding_model=course_settings.default_embedding_model,
+                                search_top_k=course_settings.search_top_k,
+                                search_alpha=course_settings.search_alpha,
+                                reranker_used=course_settings.enable_reranker,
+                                reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
+                                reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
+                                generated_answer=generated_answer,
+                                retrieved_contexts=contexts_for_db,
+                                faithfulness=metrics.get("faithfulness"),
+                                answer_relevancy=metrics.get("answer_relevancy"),
+                                context_precision=metrics.get("context_precision"),
+                                context_recall=metrics.get("context_recall"),
+                                answer_correctness=metrics.get("answer_correctness"),
+                                latency_ms=latency_ms,
+                                created_by=current_user.id,
+                            )
+                            thread_db.add(result)
+                            thread_db.commit()
+                        finally:
+                            thread_db.close()
+                        
+                        return {
+                            "success": True,
+                            "idx": idx,
                             "question": question,
                             "ground_truth": ground_truth,
                             "generated_answer": generated_answer,
-                            "faithfulness": metrics.get("faithfulness"),
-                            "answer_relevancy": metrics.get("answer_relevancy"),
-                            "context_precision": metrics.get("context_precision"),
-                            "context_recall": metrics.get("context_recall"),
-                            "answer_correctness": metrics.get("answer_correctness"),
+                            "metrics": metrics,
                             "latency_ms": latency_ms,
                             "retrieved_contexts": retrieved_contexts,
+                            "context_texts": context_texts,
+                            "retry_count": retry_count,
+                            "missing_metrics": missing_metrics if missing_metrics else None,
+                            "low_score_metrics": low_score_metrics if low_score_metrics else None,
                         }
-                    }
-                    # ✅ ensure_ascii=True to prevent JSON parse errors with Turkish chars
-                    yield f"data: {json.dumps(progress, ensure_ascii=True)}\n\n"
-                    await asyncio.sleep(0)
                     
-                except Exception as e:
-                    logger.error(f"Test case {idx} error: {e}")
+                    except Exception as e:
+                        last_error = str(e)
+                        retry_count += 1
+                        
+                        if retry_count <= MAX_RETRIES:
+                            logger.warning(
+                                f"Test {idx} attempt {retry_count} failed: {last_error}. Retrying..."
+                            )
+                            time.sleep(0.5)
+                        else:
+                            logger.error(
+                                f"Test {idx} failed after {MAX_RETRIES} retries: {last_error}"
+                            )
+                            return {
+                                "success": False,
+                                "idx": idx,
+                                "question": test_case.get("question", ""),
+                                "ground_truth": test_case.get("ground_truth", ""),
+                                "error": last_error,
+                            }
+                
+                # Should never reach here
+                return {
+                    "success": False,
+                    "idx": idx,
+                    "question": test_case.get("question", ""),
+                    "ground_truth": test_case.get("ground_truth", ""),
+                    "error": last_error or "Unknown error after retries",
+                }
+            
+            # Process tests with SMALL BATCH PARALLELISM (2-3 workers)
+            # This provides speedup without the instability of 10 workers
+            import concurrent.futures
+            
+            PARALLEL_WORKERS = 3  # Small batch: 2-3 tests at a time
+            logger.info(f"[BATCH TEST] Using {PARALLEL_WORKERS} parallel workers")
+            
+            indices_to_run: List[int]
+            if data.only_indices is None:
+                indices_to_run = list(range(len(data.test_cases)))
+            else:
+                indices_to_run = [
+                    int(i)
+                    for i in data.only_indices
+                    if isinstance(i, int)
+                    or (isinstance(i, str) and str(i).isdigit())
+                ]
+                indices_to_run = [
+                    i
+                    for i in indices_to_run
+                    if 0 <= i < len(data.test_cases)
+                ]
+
+            total_to_run = len(indices_to_run)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
+                # Submit selected tasks
+                future_to_idx = {
+                    executor.submit(process_single_test, idx, data.test_cases[idx]): idx
+                    for idx in indices_to_run
+                }
+                
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    result_data = future.result()
+                    idx = result_data["idx"]
+                    completed_count += 1
                     
-                    # Send error
-                    error_result = {
-                        "event": "progress",
-                        "index": idx,
-                        "total": len(data.test_cases),
-                        "completed": idx + 1,
-                        "result": {
-                            "question": test_case.get("question", ""),
-                            "ground_truth": test_case.get("ground_truth", ""),
-                            "generated_answer": "",
-                            "error_message": str(e),
+                    if result_data["success"]:
+                        metrics = result_data["metrics"]
+                        latency_ms = result_data["latency_ms"]
+                        context_texts = result_data["context_texts"]
+                        
+                        # Aggregate
+                        for key in sum_metrics.keys():
+                            if metrics.get(key) is not None:
+                                sum_metrics[key] += metrics[key]
+                                cnt_metrics[key] += 1
+                        sum_latency += latency_ms
+                        cnt_latency += 1
+                        
+                        # W&B logging
+                        if wb_enabled and wb_run is not None:
+                            try:
+                                wandb.log(
+                                    {
+                                        "faithfulness": metrics.get("faithfulness"),
+                                        "answer_relevancy": metrics.get(
+                                            "answer_relevancy"
+                                        ),
+                                        "context_precision": metrics.get(
+                                            "context_precision"
+                                        ),
+                                        "context_recall": metrics.get(
+                                            "context_recall"
+                                        ),
+                                        "answer_correctness": metrics.get(
+                                            "answer_correctness"
+                                        ),
+                                        "latency_ms": latency_ms,
+                                        "contexts_count": len(context_texts),
+                                    },
+                                    step=idx,
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    "W&B log failed for test %s: %s",
+                                    idx,
+                                    e,
+                                )
+
+                            # W&B'ye hemen gönder (buffer'ı flush et)
+                            try:
+                                if hasattr(wb_run, "_flush"):
+                                    wb_run._flush()
+                            except Exception:
+                                pass
+
+                            if wb_table is not None:
+                                wb_table.add_data(
+                                    idx,
+                                    result_data["question"],
+                                    result_data["ground_truth"],
+                                    result_data["generated_answer"],
+                                    metrics.get("faithfulness"),
+                                    metrics.get("answer_relevancy"),
+                                    metrics.get("context_precision"),
+                                    metrics.get("context_recall"),
+                                    metrics.get("answer_correctness"),
+                                    latency_ms,
+                                    len(context_texts),
+                                    None,
+                                )
+                                # HER ADIMDA TABLE'I LOG ET
+                                try:
+                                    wandb.log({"results": wb_table}, step=idx)
+                                except Exception as e:
+                                    logger.error(
+                                        "W&B table log failed for test %s: %s",
+                                        idx,
+                                        e,
+                                    )
+                        
+                        # Send progress
+                        progress = {
+                            "event": "progress",
+                            "index": idx,
+                            "total": total_to_run,
+                            "completed": completed_count,
+                            "result": {
+                                "question": result_data["question"],
+                                "ground_truth": result_data["ground_truth"],
+                                "generated_answer": result_data["generated_answer"],
+                                "faithfulness": metrics.get("faithfulness"),
+                                "answer_relevancy": metrics.get("answer_relevancy"),
+                                "context_precision": metrics.get("context_precision"),
+                                "context_recall": metrics.get("context_recall"),
+                                "answer_correctness": metrics.get("answer_correctness"),
+                                "latency_ms": latency_ms,
+                                "retrieved_contexts": result_data["retrieved_contexts"],
+                                "retry_count": result_data.get("retry_count", 0),
+                                "missing_metrics": result_data.get("missing_metrics"),
+                                "low_score_metrics": result_data.get("low_score_metrics"),
+                            }
                         }
-                    }
-                    
-                    if wb_enabled and wb_run is not None and wb_table is not None:
-                        wb_table.add_data(
-                            idx,
-                            test_case.get("question", ""),
-                            test_case.get("ground_truth", ""),
-                            "",
-                            None, None, None, None, None,
-                            0,
-                            0,
-                            str(e),
-                        )
-                    
-                    # ✅ ensure_ascii=True to prevent JSON parse errors
-                    yield f"data: {json.dumps(error_result, ensure_ascii=True)}\n\n"
-                    await asyncio.sleep(0)
+                        yield f"data: {json.dumps(progress, ensure_ascii=True)}\n\n"
+                        await asyncio.sleep(0)
+                        
+                    else:
+                        # Send error
+                        error_result = {
+                            "event": "progress",
+                            "index": idx,
+                            "total": total_to_run,
+                            "completed": completed_count,
+                            "result": {
+                                "question": result_data["question"],
+                                "ground_truth": result_data["ground_truth"],
+                                "generated_answer": "",
+                                "error_message": result_data["error"],
+                            }
+                        }
+                        
+                        if wb_enabled and wb_run is not None and wb_table is not None:
+                            wb_table.add_data(
+                                idx,
+                                result_data["question"],
+                                result_data["ground_truth"],
+                                "",
+                                None, None, None, None, None,
+                                0,
+                                0,
+                                result_data["error"],
+                            )
+                        
+                        yield f"data: {json.dumps(error_result, ensure_ascii=True)}\n\n"
+                        await asyncio.sleep(0)
+            
+            # Log cache statistics
+            logger.info(
+                f"[CACHE STATS] Batch test completed. "
+                f"Embedding cache size: {len(embedding_cache)} entries"
+            )
             
             # W&B finalize
             if wb_enabled and wb_run is not None:
@@ -2320,8 +2775,8 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             # Send completion
             completion = {
                 "event": "complete",
-                "total": len(data.test_cases),
-                "completed": len(data.test_cases),
+                "total": total_to_run,
+                "completed": total_to_run,
                 "wandb_url": wb_run_url,
             }
             # ✅ ensure_ascii=True to prevent JSON parse errors

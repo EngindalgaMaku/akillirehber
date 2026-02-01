@@ -10,9 +10,9 @@ services:
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=debug
-      # Disable production worker settings for development
-      - WORKERS=1
-      - THREADS=1
+      # Development worker settings - increased for parallel processing
+      - WORKERS=2  # Increased from 1 to 2 for better concurrency
+      - THREADS=4  # Increased from 1 to 4 for parallel RAGAS/semantic tests
       # Numba cache directory for UMAP (required by Giskard)
       - NUMBA_CACHE_DIR=/tmp/numba_cache
     volumes:
