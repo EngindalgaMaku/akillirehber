@@ -179,3 +179,8 @@ static/uploads/
 
 # Dataset folder (separate repository)
 veriseti/
+
+# Local artifacts
+backups/
+docs/
+grafikler/
