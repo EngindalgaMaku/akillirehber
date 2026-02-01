@@ -25,6 +25,12 @@ AkıllıRehber, eğitim kurumları için geliştirilmiş, yapay zeka destekli ak
 - **ROUGE-N**: N-gram tabanlı benzerlik
 - **BERTScore**: Semantik benzerlik
 
+### 📦 Veri Seti
+
+RAGAS ve ROUGE/BERTScore testlerinde kullanılan Bloom veri seti ekip tarafından hazırlanmıştır:
+
+https://github.com/EngindalgaMaku/Bilisim-Teknolojileri-Bloom-Dataset
+
 ## 🏗️ Mimari
 
 ```
