@@ -101,6 +101,13 @@ export default function TestSetEditorPage() {
   const [selectedResultId, setSelectedResultId] = useState<number | null>(null);
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
 
+  // Duplicate detection state
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+  const [isFindingDuplicates, setIsFindingDuplicates] = useState(false);
+  const [duplicateGroups, setDuplicateGroups] = useState<any[]>([]);
+  const [similarityThreshold, setSimilarityThreshold] = useState(0.85);
+  const [selectedDuplicates, setSelectedDuplicates] = useState<Set<number>>(new Set());
+
   const toggleQuestionSelection = (questionId: number) => {
     const newSelected = new Set(selectedQuestions);
     if (newSelected.has(questionId)) {
@@ -407,6 +414,46 @@ export default function TestSetEditorPage() {
     }
   }, [testSet]);
 
+  const handleFindDuplicates = async () => {
+    if (!testSet) return;
+    
+    setIsFindingDuplicates(true);
+    setDuplicateGroups([]);
+    setSelectedDuplicates(new Set());
+    
+    try {
+      const result = await api.findDuplicateQuestions(testSet.id, similarityThreshold);
+      setDuplicateGroups(result.duplicate_groups);
+      
+      if (result.duplicate_groups.length === 0) {
+        toast.info("Benzer soru bulunamadı");
+      } else {
+        toast.success(`${result.duplicate_groups.length} benzer soru grubu bulundu`);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Benzer sorular bulunamadı");
+    } finally {
+      setIsFindingDuplicates(false);
+    }
+  };
+
+  const handleDeleteDuplicates = async () => {
+    if (!testSet || selectedDuplicates.size === 0) return;
+    
+    if (!confirm(`${selectedDuplicates.size} soruyu silmek istediğinizden emin misiniz?`)) return;
+    
+    try {
+      await api.deleteMultipleQuestions(testSet.id, Array.from(selectedDuplicates));
+      toast.success(`${selectedDuplicates.size} soru silindi`);
+      setIsDuplicateModalOpen(false);
+      setDuplicateGroups([]);
+      setSelectedDuplicates(new Set());
+      loadTestSet();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Silme işlemi başarısız");
+    }
+  };
+
   useEffect(() => {
     if (isMergeOpen && testSet) {
       loadAvailableTestSets();
@@ -506,6 +553,14 @@ export default function TestSetEditorPage() {
           <Button variant="outline" size="sm" onClick={() => setIsMergeOpen(true)}>
             🔀 Birleştir
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setIsDuplicateModalOpen(true)}>
+            🔍 Benzer Sorular
+          </Button>
+          <Link href="/dashboard/ragas/test-sets/generate">
+            <Button variant="outline" size="sm">
+              ✨ Soru Üret
+            </Button>
+          </Link>
           <Button variant="outline" size="sm" onClick={() => setIsImportOpen(true)}>
             <Upload className="w-4 h-4 mr-1" /> İçe Aktar
           </Button>
@@ -1170,6 +1225,187 @@ export default function TestSetEditorPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicate Detection Dialog */}
+      <Dialog open={isDuplicateModalOpen} onOpenChange={setIsDuplicateModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Benzer Soruları Bul ve Sil</DialogTitle>
+            <DialogDescription>
+              Cosine similarity kullanarak benzer soruları tespit edin ve temizleyin.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="flex-1 overflow-y-auto space-y-4 py-4">
+            {/* Threshold Selector */}
+            <div className="space-y-2 p-4 bg-slate-50 rounded-lg">
+              <Label>Benzerlik Eşiği: {(similarityThreshold * 100).toFixed(0)}%</Label>
+              <input
+                type="range"
+                min="0.7"
+                max="0.95"
+                step="0.05"
+                value={similarityThreshold}
+                onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
+                className="w-full"
+              />
+              <p className="text-xs text-slate-500">
+                Daha yüksek değer = daha benzer sorular bulunur
+              </p>
+              <Button
+                onClick={handleFindDuplicates}
+                disabled={isFindingDuplicates}
+                className="w-full mt-2"
+              >
+                {isFindingDuplicates ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Aranıyor...</>
+                ) : (
+                  <>🔍 Benzer Soruları Bul</>
+                )}
+              </Button>
+            </div>
+
+            {/* Results */}
+            {duplicateGroups.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <div>
+                    <p className="font-medium text-blue-900">
+                      {duplicateGroups.length} benzer soru grubu bulundu
+                    </p>
+                    <p className="text-sm text-blue-700">
+                      Toplam {duplicateGroups.reduce((sum, g) => sum + g.questions.length - 1, 0)} tekrar eden soru
+                    </p>
+                  </div>
+                  {selectedDuplicates.size > 0 && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleDeleteDuplicates}
+                    >
+                      <Trash2 className="w-4 h-4 mr-1" />
+                      {selectedDuplicates.size} Soruyu Sil
+                    </Button>
+                  )}
+                </div>
+
+                {duplicateGroups.map((group, groupIdx) => (
+                  <div key={groupIdx} className="p-4 bg-white rounded-lg border border-slate-200">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-slate-700">
+                          Grup {groupIdx + 1}
+                        </span>
+                        <span className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full font-medium">
+                          {(group.similarity_score * 100).toFixed(1)}% benzer
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          {group.questions.length} soru
+                        </span>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          // Select all except first (keep one)
+                          const newSelected = new Set(selectedDuplicates);
+                          group.questions.slice(1).forEach((q: any) => {
+                            if (newSelected.has(q.id)) {
+                              newSelected.delete(q.id);
+                            } else {
+                              newSelected.add(q.id);
+                            }
+                          });
+                          setSelectedDuplicates(newSelected);
+                        }}
+                        className="text-xs"
+                      >
+                        {group.questions.slice(1).every((q: any) => selectedDuplicates.has(q.id))
+                          ? "Seçimi Kaldır"
+                          : "Tekrarları Seç"}
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {group.questions.map((q: any, qIdx: number) => (
+                        <div
+                          key={q.id}
+                          className={`p-3 rounded border ${
+                            qIdx === 0
+                              ? "bg-green-50 border-green-200"
+                              : selectedDuplicates.has(q.id)
+                              ? "bg-red-50 border-red-300"
+                              : "bg-slate-50 border-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            {qIdx > 0 && (
+                              <input
+                                type="checkbox"
+                                checked={selectedDuplicates.has(q.id)}
+                                onChange={() => {
+                                  const newSelected = new Set(selectedDuplicates);
+                                  if (newSelected.has(q.id)) {
+                                    newSelected.delete(q.id);
+                                  } else {
+                                    newSelected.add(q.id);
+                                  }
+                                  setSelectedDuplicates(newSelected);
+                                }}
+                                className="mt-1 w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-500"
+                              />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                {qIdx === 0 && (
+                                  <span className="text-xs px-2 py-0.5 bg-green-600 text-white rounded-full font-medium">
+                                    ✓ Tutulacak
+                                  </span>
+                                )}
+                                {qIdx > 0 && selectedDuplicates.has(q.id) && (
+                                  <span className="text-xs px-2 py-0.5 bg-red-600 text-white rounded-full font-medium">
+                                    ✕ Silinecek
+                                  </span>
+                                )}
+                                <span className="text-xs text-slate-400">ID: {q.id}</span>
+                              </div>
+                              <p className="text-sm font-medium text-slate-900 mb-1">
+                                {q.question}
+                              </p>
+                              <p className="text-xs text-slate-600 bg-white p-2 rounded border border-slate-200">
+                                {q.ground_truth}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {duplicateGroups.length === 0 && !isFindingDuplicates && (
+              <div className="p-8 text-center text-slate-500">
+                <p>Benzer soruları bulmak için yukarıdaki butona tıklayın</p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="flex-shrink-0 pt-4 border-t">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsDuplicateModalOpen(false);
+                setDuplicateGroups([]);
+                setSelectedDuplicates(new Set());
+              }}
+            >
+              Kapat
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

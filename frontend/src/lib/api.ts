@@ -895,6 +895,25 @@ class ApiClient {
     return this.request(`/api/ragas/test-sets/${testSetId}/export`);
   }
 
+  async findDuplicateQuestions(testSetId: number, similarityThreshold: number = 0.85): Promise<FindDuplicatesResponse> {
+    return this.request<FindDuplicatesResponse>("/api/ragas/test-sets/find-duplicates", {
+      method: "POST",
+      body: JSON.stringify({
+        test_set_id: testSetId,
+        similarity_threshold: similarityThreshold,
+      }),
+    });
+  }
+
+  async deleteMultipleQuestions(testSetId: number, questionIds: number[]): Promise<{ deleted_count: number; question_ids: number[] }> {
+    return this.request(`/api/ragas/test-sets/${testSetId}/delete-questions`, {
+      method: "POST",
+      body: JSON.stringify({
+        question_ids: questionIds,
+      }),
+    });
+  }
+
   async generateTestSetQuestions(
     testSetId: number,
     data: { num_questions?: number; persona?: string }
@@ -1833,6 +1852,23 @@ export interface TestSet {
 
 export interface TestSetDetail extends TestSet {
   questions: TestQuestion[];
+}
+
+export interface DuplicateGroup {
+  similarity_score: number;
+  questions: Array<{
+    id: number;
+    question: string;
+    ground_truth: string;
+  }>;
+}
+
+export interface FindDuplicatesResponse {
+  test_set_id: number;
+  test_set_name: string;
+  total_questions: number;
+  duplicate_groups: DuplicateGroup[];
+  total_duplicates: number;
 }
 
 export interface EvaluationConfig {

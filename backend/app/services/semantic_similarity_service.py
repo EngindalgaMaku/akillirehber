@@ -312,7 +312,8 @@ class SemanticSimilarityService:
     def compute_bertscore(
         self,
         generated_answer: str,
-        ground_truth: str
+        ground_truth: str,
+        embedding_model: str = "openai/text-embedding-3-small"
     ) -> Optional[Dict[str, float]]:
         """Compute BERTScore using embeddings.
 
@@ -322,6 +323,7 @@ class SemanticSimilarityService:
         Args:
             generated_answer: The generated answer to evaluate
             ground_truth: The reference ground truth answer
+            embedding_model: Embedding model to use (defaults to OpenAI)
 
         Returns:
             Dict with precision, recall, f1 scores, or None if unavailable
@@ -337,11 +339,11 @@ class SemanticSimilarityService:
             # This is faster and doesn't require HF API
             emb1 = self.embedding_service.get_embedding(
                 generated_answer,
-                model="openai/text-embedding-3-small"
+                model=embedding_model
             )
             emb2 = self.embedding_service.get_embedding(
                 ground_truth,
-                model="openai/text-embedding-3-small"
+                model=embedding_model
             )
 
             if not emb1 or not emb2:
@@ -465,7 +467,8 @@ class SemanticSimilarityService:
             # Compute BERTScore against best match via HF API
             bertscore = self.compute_bertscore(
                 generated_answer,
-                best_match
+                best_match,
+                embedding_model
             )
             if bertscore:
                 result['bertscore_precision'] = bertscore['precision']

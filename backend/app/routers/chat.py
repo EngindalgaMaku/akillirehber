@@ -196,13 +196,18 @@ async def chat_with_course(
 
     # Get query embedding using course's embedding model
     embedding_service = get_embedding_service()
+    
+    # DEBUG: Log the embedding model being used
+    print(f"[CHAT DEBUG] Using embedding model: {settings.default_embedding_model}")
+    print(f"[CHAT DEBUG] Course ID: {course_id}")
+    
     query_vector = embedding_service.get_embedding(
         request.message,
         model=settings.default_embedding_model
     )
     
     # Debug log for query vector
-    print(f"Query vector length: {len(query_vector) if query_vector else 0}")
+    print(f"[CHAT DEBUG] Query vector length: {len(query_vector) if query_vector else 0}")
 
     # Search for relevant chunks using course settings
     weaviate_service = get_weaviate_service()

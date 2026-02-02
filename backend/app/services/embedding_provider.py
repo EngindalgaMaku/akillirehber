@@ -283,6 +283,614 @@ class OpenAIProvider(EmbeddingProvider):
         return "openai"
 
 
+class CohereProvider(EmbeddingProvider):
+    """Cohere embedding provider.
+    
+    Uses Cohere's API for embeddings.
+    """
+    
+    DEFAULT_MODEL = "embed-english-v3.0"
+    BATCH_SIZE = 96  # Cohere supports up to 96 texts per batch
+    
+    # Pricing per 1M tokens (approximate)
+    PRICING = {
+        "embed-english-v3.0": 0.10,
+        "embed-multilingual-v3.0": 0.10,
+        "embed-english-light-v3.0": 0.10,
+        "embed-multilingual-light-v3.0": 0.10,
+    }
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Cohere provider.
+        
+        Args:
+            api_key: Cohere API key. If not provided, reads from
+                     COHERE_API_KEY environment variable.
+        """
+        self._api_key = api_key or os.environ.get("COHERE_API_KEY")
+        self._client = None
+    
+    def _ensure_client(self):
+        """Initialize the Cohere client."""
+        if self._client is None:
+            if not self._api_key:
+                raise EmbeddingProviderError(
+                    "COHERE_API_KEY not configured",
+                    provider=self.name
+                )
+            try:
+                import cohere
+                self._client = cohere.Client(api_key=self._api_key)
+            except ImportError as exc:
+                raise EmbeddingProviderError(
+                    "cohere package required. Install with: pip install cohere",
+                    provider=self.name
+                ) from exc
+    
+    def get_embeddings(
+        self,
+        texts: List[str],
+        model: Optional[str] = None
+    ) -> List[List[float]]:
+        """Get embeddings via Cohere API."""
+        self._ensure_client()
+        
+        model = model or self.DEFAULT_MODEL
+        # Remove cohere/ prefix if present
+        if model.startswith("cohere/"):
+            model = model.replace("cohere/", "")
+        
+        # Filter empty texts
+        non_empty_texts = [t.strip() for t in texts if t and t.strip()]
+        if not non_empty_texts:
+            return []
+        
+        try:
+            response = self._client.embed(
+                texts=non_empty_texts,
+                model=model,
+                input_type="search_document"
+            )
+            
+            if not hasattr(response, 'embeddings') or not response.embeddings:
+                raise EmbeddingProviderError(
+                    "No embedding data received from Cohere API",
+                    provider=self.name,
+                    details={"model": model, "text_count": len(non_empty_texts)}
+                )
+            
+            return response.embeddings
+            
+        except Exception as e:
+            if isinstance(e, EmbeddingProviderError):
+                raise
+            raise EmbeddingProviderError(
+                f"Cohere embedding failed: {str(e)}",
+                provider=self.name,
+                details={"model": model, "text_count": len(non_empty_texts)}
+            ) from e
+    
+    def is_available(self) -> bool:
+        """Check if Cohere is configured."""
+        return bool(self._api_key or os.environ.get("COHERE_API_KEY"))
+    
+    def get_cost_estimate(self, text_count: int, avg_tokens: int = 100) -> float:
+        """Estimate cost for Cohere embeddings."""
+        total_tokens = text_count * avg_tokens
+        price_per_token = self.PRICING.get(self.DEFAULT_MODEL, 0.10) / 1_000_000
+        return total_tokens * price_per_token
+    
+    @property
+    def name(self) -> str:
+        return "cohere"
+
+
+class JinaProvider(EmbeddingProvider):
+    """Jina AI embedding provider.
+    
+    Uses Jina AI's API for embeddings.
+    """
+    
+    BASE_URL = "https://api.jina.ai/v1"
+    DEFAULT_MODEL = "jina-embeddings-v3"
+    BATCH_SIZE = 100  # Jina supports up to 100 texts per batch
+    
+    # Pricing per 1M tokens (approximate)
+    PRICING = {
+        "jina-embeddings-v3": 0.02,
+        "jina-embeddings-v2-base-en": 0.02,
+        "jina-clip-v1": 0.02,
+    }
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Jina provider.
+        
+        Args:
+            api_key: Jina API key. If not provided, reads from
+                     JINA_AI_API_KEY environment variable.
+        """
+        self._api_key = api_key or os.environ.get("JINA_AI_API_KEY")
+    
+    def get_embeddings(
+        self,
+        texts: List[str],
+        model: Optional[str] = None
+    ) -> List[List[float]]:
+        """Get embeddings via Jina AI API."""
+        if not self._api_key:
+            raise EmbeddingProviderError(
+                "JINA_AI_API_KEY not configured",
+                provider=self.name
+            )
+        
+        model = model or self.DEFAULT_MODEL
+        # Remove jina/ prefix if present
+        if model.startswith("jina/"):
+            model = model.replace("jina/", "")
+        
+        # Filter empty texts
+        non_empty_texts = [t.strip() for t in texts if t and t.strip()]
+        if not non_empty_texts:
+            return []
+        
+        try:
+            import requests
+            
+            headers = {
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            }
+            
+            data = {
+                "input": non_empty_texts,
+                "model": model,
+            }
+            
+            response = requests.post(
+                f"{self.BASE_URL}/embeddings",
+                headers=headers,
+                json=data,
+                timeout=30,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            embeddings = result.get("data") or []
+            
+            if not embeddings:
+                raise EmbeddingProviderError(
+                    "No embedding data received from Jina AI API",
+                    provider=self.name,
+                    details={"model": model, "text_count": len(non_empty_texts)}
+                )
+            
+            return [item.get("embedding") for item in embeddings]
+            
+        except ImportError as exc:
+            raise EmbeddingProviderError(
+                "requests package required. Install with: pip install requests",
+                provider=self.name
+            ) from exc
+        except Exception as e:
+            if isinstance(e, EmbeddingProviderError):
+                raise
+            raise EmbeddingProviderError(
+                f"Jina embedding failed: {str(e)}",
+                provider=self.name,
+                details={"model": model, "text_count": len(non_empty_texts)}
+            ) from e
+    
+    def is_available(self) -> bool:
+        """Check if Jina is configured."""
+        return bool(self._api_key or os.environ.get("JINA_AI_API_KEY"))
+    
+    def get_cost_estimate(self, text_count: int, avg_tokens: int = 100) -> float:
+        """Estimate cost for Jina embeddings."""
+        total_tokens = text_count * avg_tokens
+        price_per_token = self.PRICING.get(self.DEFAULT_MODEL, 0.02) / 1_000_000
+        return total_tokens * price_per_token
+    
+    @property
+    def name(self) -> str:
+        return "jina"
+
+
+class AlibabaProvider(EmbeddingProvider):
+    """Alibaba DashScope embedding provider.
+    
+    Uses Alibaba Cloud's DashScope API for embeddings.
+    """
+    
+    BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    DEFAULT_MODEL = "text-embedding-v3"
+    BATCH_SIZE = 10  # Conservative batch size
+    
+    # Pricing per 1M tokens (approximate)
+    PRICING = {
+        "text-embedding-v3": 0.07,
+        "text-embedding-v2": 0.07,
+    }
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Alibaba provider.
+        
+        Args:
+            api_key: DashScope API key. If not provided, reads from
+                     DASHSCOPE_API_KEY environment variable.
+        """
+        self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY")
+        self._client = None
+    
+    def _ensure_client(self):
+        """Initialize the OpenAI client for DashScope."""
+        if self._client is None:
+            if not self._api_key:
+                raise EmbeddingProviderError(
+                    "DASHSCOPE_API_KEY not configured",
+                    provider=self.name
+                )
+            try:
+                from openai import OpenAI
+                self._client = OpenAI(
+                    api_key=self._api_key,
+                    base_url=self.BASE_URL
+                )
+            except ImportError as exc:
+                raise EmbeddingProviderError(
+                    "openai package required. Install with: pip install openai",
+                    provider=self.name
+                ) from exc
+    
+    def get_embeddings(
+        self,
+        texts: List[str],
+        model: Optional[str] = None
+    ) -> List[List[float]]:
+        """Get embeddings via Alibaba DashScope API."""
+        self._ensure_client()
+        
+        model = model or self.DEFAULT_MODEL
+        # Remove alibaba/ prefix if present
+        if model.startswith("alibaba/"):
+            model = model.replace("alibaba/", "")
+        
+        # Filter empty texts
+        non_empty_texts = [t for t in texts if t and t.strip()]
+        if not non_empty_texts:
+            return []
+        
+        try:
+            response = self._client.embeddings.create(
+                model=model,
+                input=non_empty_texts
+            )
+            if not getattr(response, "data", None):
+                raise EmbeddingProviderError(
+                    "No embedding data received",
+                    provider=self.name,
+                    details={"model": model, "text_count": len(non_empty_texts)},
+                )
+            return [item.embedding for item in response.data]
+        except Exception as e:
+            raise EmbeddingProviderError(
+                f"Alibaba embedding failed: {str(e)}",
+                provider=self.name,
+                details={"model": model, "text_count": len(non_empty_texts)}
+            ) from e
+    
+    def is_available(self) -> bool:
+        """Check if Alibaba is configured."""
+        return bool(self._api_key or os.environ.get("DASHSCOPE_API_KEY"))
+    
+    def get_cost_estimate(self, text_count: int, avg_tokens: int = 100) -> float:
+        """Estimate cost for Alibaba embeddings."""
+        total_tokens = text_count * avg_tokens
+        price_per_token = self.PRICING.get(self.DEFAULT_MODEL, 0.07) / 1_000_000
+        return total_tokens * price_per_token
+    
+    @property
+    def name(self) -> str:
+        return "alibaba"
+
+
+class OllamaProvider(EmbeddingProvider):
+    """Ollama local embedding provider.
+    
+    Uses local Ollama instance for embeddings.
+    """
+    
+    BASE_URL = "http://host.docker.internal:11434"
+    DEFAULT_MODEL = "nomic-embed-text"
+    BATCH_SIZE = 10  # Conservative batch size
+    
+    # Model dimensions for consistency
+    MODEL_DIMENSIONS = {
+        "bge-m3": 1024,
+        "nomic-embed-text": 768,
+        "mxbai-embed-large": 1024,
+        "all-minilm": 384,
+    }
+    
+    def __init__(self, base_url: Optional[str] = None):
+        """Initialize Ollama provider.
+        
+        Args:
+            base_url: Ollama API base URL. If not provided, uses default.
+        """
+        self._base_url = base_url or os.environ.get("OLLAMA_BASE_URL", self.BASE_URL)
+    
+    def get_embeddings(
+        self,
+        texts: List[str],
+        model: Optional[str] = None
+    ) -> List[List[float]]:
+        """Get embeddings via Ollama API."""
+        model = model or self.DEFAULT_MODEL
+        # Remove ollama/ prefix if present
+        if model.startswith("ollama/"):
+            model = model.replace("ollama/", "")
+        
+        # Filter empty texts
+        non_empty_texts = [t.strip() for t in texts if t and t.strip()]
+        if not non_empty_texts:
+            return []
+        
+        try:
+            import requests
+            
+            headers = {
+                "Content-Type": "application/json",
+            }
+            
+            embeddings = []
+            max_retries = 3
+            base_delay = 2
+            
+            for text in non_empty_texts:
+                # Truncate text to avoid issues
+                max_chars = int(os.environ.get("OLLAMA_EMBED_MAX_CHARS", "8000"))
+                truncated_text = text[:max_chars]
+                
+                data = {
+                    "model": model,
+                    "prompt": truncated_text,
+                }
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.post(
+                            f"{self._base_url}/api/embeddings",
+                            headers=headers,
+                            json=data,
+                            timeout=60,
+                        )
+                        
+                        if response.status_code == 429:
+                            if attempt < max_retries - 1:
+                                delay = base_delay * (2 ** attempt)
+                                logger.warning(
+                                    f"Ollama rate limit hit, retrying in {delay}s (attempt {attempt + 1}/{max_retries})"
+                                )
+                                time.sleep(delay)
+                                continue
+                            else:
+                                raise EmbeddingProviderError(
+                                    "Ollama rate limit exceeded. Please try again later.",
+                                    provider=self.name,
+                                    details={"model": model, "text_count": len(non_empty_texts)}
+                                )
+                        
+                        response.raise_for_status()
+                        result = response.json()
+                        
+                        if "embedding" not in result:
+                            raise EmbeddingProviderError(
+                                "No embedding data received from Ollama API",
+                                provider=self.name,
+                                details={"model": model}
+                            )
+                        
+                        embeddings.append(result["embedding"])
+                        break
+                        
+                    except requests.exceptions.RequestException as e:
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            logger.warning(
+                                f"Ollama request failed, retrying in {delay}s (attempt {attempt + 1}/{max_retries}): {e}"
+                            )
+                            time.sleep(delay)
+                            continue
+                        else:
+                            raise EmbeddingProviderError(
+                                f"Ollama embedding failed: {str(e)}",
+                                provider=self.name,
+                                details={"model": model, "text_count": len(non_empty_texts)}
+                            ) from e
+            
+            return embeddings
+                        
+        except ImportError as exc:
+            raise EmbeddingProviderError(
+                "requests package required. Install with: pip install requests",
+                provider=self.name
+            ) from exc
+        except Exception as e:
+            if isinstance(e, EmbeddingProviderError):
+                raise
+            raise EmbeddingProviderError(
+                f"Ollama embedding failed: {str(e)}",
+                provider=self.name,
+                details={"model": model, "text_count": len(non_empty_texts)}
+            ) from e
+    
+    def is_available(self) -> bool:
+        """Check if Ollama is available."""
+        try:
+            import requests
+            response = requests.get(f"{self._base_url}/api/tags", timeout=5)
+            return response.status_code == 200
+        except Exception:
+            return False
+    
+    def get_cost_estimate(self, text_count: int, avg_tokens: int = 100) -> float:
+        """Estimate cost for Ollama embeddings (free for local)."""
+        return 0.0
+    
+    @property
+    def name(self) -> str:
+        return "ollama"
+
+
+class VoyageProvider(EmbeddingProvider):
+    """Voyage AI embedding provider.
+    
+    Uses Voyage AI's API for high-quality embeddings.
+    """
+    
+    BASE_URL = "https://api.voyageai.com/v1"
+    DEFAULT_MODEL = "voyage-3-large"
+    BATCH_SIZE = 10  # Conservative batch size to avoid rate limits
+    
+    # Pricing per 1M tokens (approximate)
+    PRICING = {
+        "voyage-4-large": 0.12,
+        "voyage-3-large": 0.12,
+        "voyage-3-lite": 0.06,
+        "voyage-3": 0.12,
+    }
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Voyage provider.
+        
+        Args:
+            api_key: Voyage API key. If not provided, reads from
+                     VOYAGE_API_KEY environment variable.
+        """
+        self._api_key = api_key or os.environ.get("VOYAGE_API_KEY")
+    
+    def get_embeddings(
+        self,
+        texts: List[str],
+        model: Optional[str] = None
+    ) -> List[List[float]]:
+        """Get embeddings via Voyage API."""
+        if not self._api_key:
+            raise EmbeddingProviderError(
+                "VOYAGE_API_KEY not configured",
+                provider=self.name
+            )
+        
+        model = model or self.DEFAULT_MODEL
+        # Remove voyage/ prefix if present
+        if model.startswith("voyage/"):
+            model = model.replace("voyage/", "")
+        
+        # Filter empty texts
+        non_empty_texts = [t.strip() for t in texts if t and t.strip()]
+        if not non_empty_texts:
+            return []
+        
+        try:
+            import requests
+            import random
+            
+            headers = {
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            }
+            
+            data = {
+                "input": non_empty_texts,
+                "model": model,
+                "input_type": "document",
+            }
+            
+            # Enhanced retry logic for rate limiting
+            max_retries = 8
+            base_delay = 5
+            
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        f"{self.BASE_URL}/embeddings",
+                        headers=headers,
+                        json=data,
+                        timeout=30,
+                    )
+                    
+                    if response.status_code == 429:
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt) + random.uniform(1.0, 3.0)
+                            logger.warning(
+                                f"VoyageAI rate limit hit, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
+                            )
+                            time.sleep(delay)
+                            continue
+                        else:
+                            raise EmbeddingProviderError(
+                                "VoyageAI rate limit exceeded. Please try again later.",
+                                provider=self.name,
+                                details={"model": model, "text_count": len(non_empty_texts)}
+                            )
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    embeddings = result.get("data") or []
+                    
+                    if not embeddings:
+                        raise EmbeddingProviderError(
+                            "No embedding data received from Voyage API",
+                            provider=self.name,
+                            details={"model": model, "text_count": len(non_empty_texts)}
+                        )
+                    
+                    return [item.get("embedding") for item in embeddings]
+                    
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) + random.uniform(1.0, 3.0)
+                        logger.warning(
+                            f"VoyageAI request failed, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries}): {e}"
+                        )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        raise EmbeddingProviderError(
+                            f"Voyage embedding failed: {str(e)}",
+                            provider=self.name,
+                            details={"model": model, "text_count": len(non_empty_texts)}
+                        ) from e
+                        
+        except ImportError as exc:
+            raise EmbeddingProviderError(
+                "requests package required. Install with: pip install requests",
+                provider=self.name
+            ) from exc
+        except Exception as e:
+            if isinstance(e, EmbeddingProviderError):
+                raise
+            raise EmbeddingProviderError(
+                f"Voyage embedding failed: {str(e)}",
+                provider=self.name,
+                details={"model": model, "text_count": len(non_empty_texts)}
+            ) from e
+    
+    def is_available(self) -> bool:
+        """Check if Voyage is configured."""
+        return bool(self._api_key or os.environ.get("VOYAGE_API_KEY"))
+    
+    def get_cost_estimate(self, text_count: int, avg_tokens: int = 100) -> float:
+        """Estimate cost for Voyage embeddings."""
+        total_tokens = text_count * avg_tokens
+        price_per_token = self.PRICING.get(self.DEFAULT_MODEL, 0.12) / 1_000_000
+        return total_tokens * price_per_token
+    
+    @property
+    def name(self) -> str:
+        return "voyage"
+
+
 class EmbeddingProviderManager:
     """Manage multiple embedding providers with fallback and retry logic.
     
@@ -319,6 +927,16 @@ class EmbeddingProviderManager:
             providers.append(OpenRouterProvider())
         elif self.config.primary_provider == "openai":
             providers.append(OpenAIProvider())
+        elif self.config.primary_provider == "voyage":
+            providers.append(VoyageProvider())
+        elif self.config.primary_provider == "ollama":
+            providers.append(OllamaProvider())
+        elif self.config.primary_provider == "cohere":
+            providers.append(CohereProvider())
+        elif self.config.primary_provider == "jina":
+            providers.append(JinaProvider())
+        elif self.config.primary_provider == "alibaba":
+            providers.append(AlibabaProvider())
         
         # Add fallback providers
         for fallback in self.config.fallback_providers:
@@ -330,6 +948,26 @@ class EmbeddingProviderManager:
                 isinstance(p, OpenAIProvider) for p in providers
             ):
                 providers.append(OpenAIProvider())
+            elif fallback == "voyage" and not any(
+                isinstance(p, VoyageProvider) for p in providers
+            ):
+                providers.append(VoyageProvider())
+            elif fallback == "ollama" and not any(
+                isinstance(p, OllamaProvider) for p in providers
+            ):
+                providers.append(OllamaProvider())
+            elif fallback == "cohere" and not any(
+                isinstance(p, CohereProvider) for p in providers
+            ):
+                providers.append(CohereProvider())
+            elif fallback == "jina" and not any(
+                isinstance(p, JinaProvider) for p in providers
+            ):
+                providers.append(JinaProvider())
+            elif fallback == "alibaba" and not any(
+                isinstance(p, AlibabaProvider) for p in providers
+            ):
+                providers.append(AlibabaProvider())
         
         return providers
     
@@ -341,6 +979,45 @@ class EmbeddingProviderManager:
     def get_available_providers(self) -> List[EmbeddingProvider]:
         """Get list of currently available providers."""
         return [p for p in self._providers if p.is_available()]
+    
+    def _get_providers_for_model(self, model: Optional[str]) -> List[EmbeddingProvider]:
+        """Get providers in optimal order for the given model.
+        
+        Args:
+            model: Model identifier (e.g., "voyage/voyage-4-large")
+            
+        Returns:
+            List of providers to try, in order of preference
+        """
+        if not model:
+            return self._providers
+        
+        # Determine the best provider for this model
+        preferred_provider = None
+        
+        if model.startswith("voyage/") or model.startswith("voyage-"):
+            preferred_provider = VoyageProvider
+        elif model.startswith("cohere/"):
+            preferred_provider = CohereProvider
+        elif model.startswith("jina/"):
+            preferred_provider = JinaProvider
+        elif model.startswith("alibaba/"):
+            preferred_provider = AlibabaProvider
+        elif model.startswith("ollama/"):
+            preferred_provider = OllamaProvider
+        elif model.startswith("openai/"):
+            # OpenAI models can be served by both OpenAI and OpenRouter
+            # Prefer OpenAI if available, fallback to OpenRouter
+            preferred_provider = OpenAIProvider
+        
+        if not preferred_provider:
+            return self._providers
+        
+        # Reorder providers: preferred first, then others
+        preferred = [p for p in self._providers if isinstance(p, preferred_provider)]
+        others = [p for p in self._providers if not isinstance(p, preferred_provider)]
+        
+        return preferred + others
     
     def get_embeddings(
         self,
@@ -369,9 +1046,15 @@ class EmbeddingProviderManager:
         if not non_empty_texts:
             return []
         
+        # Smart provider selection based on model prefix
+        providers_to_try = self._get_providers_for_model(model)
+        
+        logger.info(f"[EMBEDDING DEBUG] Requested model: {model}")
+        logger.info(f"[EMBEDDING DEBUG] Providers to try: {[p.name for p in providers_to_try]}")
+        
         last_error = None
         
-        for provider in self._providers:
+        for provider in providers_to_try:
             if not provider.is_available():
                 logger.debug(f"Provider {provider.name} not available, skipping")
                 continue
@@ -385,6 +1068,7 @@ class EmbeddingProviderManager:
             
             try:
                 normalized_model = self._normalize_model_for_provider(provider, model)
+                logger.info(f"[EMBEDDING DEBUG] Trying provider: {provider.name} with model: {normalized_model}")
                 embeddings = self._get_embeddings_with_retry(
                     provider, non_empty_texts, normalized_model
                 )
@@ -428,6 +1112,36 @@ class EmbeddingProviderManager:
         if isinstance(provider, OpenRouterProvider):
             if "/" not in model:
                 return f"openai/{model}"
+            return model
+
+        if isinstance(provider, VoyageProvider):
+            # Remove voyage/ prefix if present
+            if model.startswith("voyage/"):
+                return model.replace("voyage/", "")
+            return model
+
+        if isinstance(provider, CohereProvider):
+            # Remove cohere/ prefix if present
+            if model.startswith("cohere/"):
+                return model.replace("cohere/", "")
+            return model
+
+        if isinstance(provider, JinaProvider):
+            # Remove jina/ prefix if present
+            if model.startswith("jina/"):
+                return model.replace("jina/", "")
+            return model
+
+        if isinstance(provider, AlibabaProvider):
+            # Remove alibaba/ prefix if present
+            if model.startswith("alibaba/"):
+                return model.replace("alibaba/", "")
+            return model
+
+        if isinstance(provider, OllamaProvider):
+            # Remove ollama/ prefix if present
+            if model.startswith("ollama/"):
+                return model.replace("ollama/", "")
             return model
 
         return model

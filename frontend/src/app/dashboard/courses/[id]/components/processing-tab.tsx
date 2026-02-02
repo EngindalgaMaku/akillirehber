@@ -56,6 +56,10 @@ const EMBEDDING_MODELS = [
   { value: "alibaba/text-embedding-v4", label: "Alibaba text-embedding-v4 (1024 dim)" },
   { value: "cohere/embed-multilingual-v3.0", label: "Cohere embed-multilingual-v3.0 (1024 dim)" },
   { value: "cohere/embed-multilingual-light-v3.0", label: "Cohere embed-multilingual-light-v3.0 (384 dim)" },
+  { value: "jina/jina-embeddings-v3", label: "Jina jina-embeddings-v3 (1024 dim)" },
+  { value: "voyage/voyage-4-large", label: "Voyage voyage-4-large (1536 dim)" },
+  { value: "voyage/voyage-3-large", label: "Voyage voyage-3-large (1024 dim)" },
+  { value: "voyage/voyage-3-lite", label: "Voyage voyage-3-lite (512 dim)" },
   { value: "qwen/qwen3-embedding-8b", label: "Qwen qwen3-embedding-8b (1024 dim)" },
 ];
 

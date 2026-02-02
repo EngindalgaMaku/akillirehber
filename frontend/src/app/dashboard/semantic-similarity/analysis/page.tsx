@@ -99,7 +99,9 @@ export default function SemanticSimilarityAnalysisPage() {
   
   // Analysis State
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
-  const [availableGroups, setAvailableGroups] = useState<{name: string; created_at: string | null}[]>([]);
+  const [availableGroups, setAvailableGroups] = useState<
+    { name: string; created_at: string | null; question_count: number }[]
+  >([]);
   const [groupComparisons, setGroupComparisons] = useState<GroupComparison[]>([]);
   const [questionComparisons, setQuestionComparisons] = useState<QuestionComparison[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -180,7 +182,20 @@ export default function SemanticSimilarityAnalysisPage() {
         0,
         10000  // Get all groups for pagination
       );
-      setAvailableGroups(data.groups.filter(g => g && g.name && g.name.trim() !== ""));
+      const counts: Record<string, number> = {};
+      for (const r of data.results) {
+        const name = (r.group_name || "").trim();
+        if (!name) continue;
+        counts[name] = (counts[name] || 0) + 1;
+      }
+
+      const groups = data.groups
+        .filter((g) => g && g.name && g.name.trim() !== "")
+        .map((g) => ({
+          ...g,
+          question_count: counts[g.name] || 0,
+        }));
+      setAvailableGroups(groups);
     } catch {
       console.log("Failed to load groups");
     }
@@ -719,6 +734,9 @@ export default function SemanticSimilarityAnalysisPage() {
                                     day: 'numeric'
                                   })
                                 : 'Tarih yok'}
+                            </span>
+                            <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded-full">
+                              {group.question_count} soru
                             </span>
                             <div className="flex items-center gap-2">
                               <button

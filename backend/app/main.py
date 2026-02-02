@@ -23,6 +23,7 @@ from app.routers import (
     giskard,
     llm_models,
     ragas,
+    ragas_duplicate_detection,
     semantic_similarity,
     system,
     system_settings,
@@ -76,6 +77,7 @@ app.include_router(chunking.router)
 app.include_router(embeddings.router)
 app.include_router(chat.router)
 app.include_router(ragas.router)
+app.include_router(ragas_duplicate_detection.router)
 app.include_router(semantic_similarity.router)
 app.include_router(giskard.router)
 app.include_router(system.router)

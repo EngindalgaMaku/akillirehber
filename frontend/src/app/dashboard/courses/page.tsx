@@ -72,6 +72,7 @@ export default function CoursesPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [newCourse, setNewCourse] = useState({ name: "", description: "" });
+  const [showInactive, setShowInactive] = useState(true); // Show inactive courses by default
 
   useEffect(() => {
     loadCourses();
@@ -116,6 +117,13 @@ export default function CoursesPage() {
       year: "numeric",
     });
   };
+
+  // Filter courses based on showInactive toggle
+  const filteredCourses = showInactive 
+    ? courses 
+    : courses.filter(c => c.is_active);
+
+  const isTeacherOrAdmin = user?.role === "teacher" || user?.role === "admin";
 
   if (!user) return null;
 
@@ -226,7 +234,28 @@ export default function CoursesPage() {
 
       {/* Stats Bar */}
       {!isLoading && courses.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="space-y-4">
+          {/* Filter Toggle for Teachers/Admins */}
+          {isTeacherOrAdmin && (
+            <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
+                  <FileText className="w-5 h-5 text-slate-600" />
+                </div>
+                <div>
+                  <p className="font-medium text-slate-900">Pasif Dersleri Göster</p>
+                  <p className="text-sm text-slate-500">Aktif olmayan dersleri listede göster</p>
+                </div>
+              </div>
+              <Switch
+                checked={showInactive}
+                onCheckedChange={setShowInactive}
+                className="data-[state=checked]:bg-indigo-600"
+              />
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div
             className="bg-white rounded-xl border border-slate-200 p-4
             flex items-center gap-4 shadow-sm"
@@ -239,9 +268,11 @@ export default function CoursesPage() {
             </div>
             <div>
               <p className="text-2xl font-bold text-slate-900">
-                {courses.length}
+                {filteredCourses.length}
               </p>
-              <p className="text-sm text-slate-500">Toplam Ders</p>
+              <p className="text-sm text-slate-500">
+                {showInactive ? "Toplam Ders" : "Aktif Ders"}
+              </p>
             </div>
           </div>
           <div
@@ -258,7 +289,7 @@ export default function CoursesPage() {
               <p className="text-2xl font-bold text-slate-900">
                 {courses.filter((c) => c.is_active).length}
               </p>
-              <p className="text-sm text-slate-500">Aktif Ders</p>
+              <p className="text-sm text-slate-500">Aktif</p>
             </div>
           </div>
           <div
@@ -266,26 +297,19 @@ export default function CoursesPage() {
             flex items-center gap-4 shadow-sm"
           >
             <div
-              className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600
-              flex items-center justify-center shadow-lg shadow-orange-500/20"
+              className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-500 to-slate-600
+              flex items-center justify-center shadow-lg shadow-slate-500/20"
             >
-              <Calendar className="w-6 h-6 text-white" />
+              <FileText className="w-6 h-6 text-white" />
             </div>
             <div>
               <p className="text-2xl font-bold text-slate-900">
-                {courses.length > 0
-                  ? formatDate(
-                      courses.sort(
-                        (a, b) =>
-                          new Date(b.created_at).getTime() -
-                          new Date(a.created_at).getTime()
-                      )[0].created_at
-                    )
-                  : "-"}
+                {courses.filter((c) => !c.is_active).length}
               </p>
-              <p className="text-sm text-slate-500">Son Eklenen</p>
+              <p className="text-sm text-slate-500">Pasif</p>
             </div>
           </div>
+        </div>
         </div>
       )}
 
@@ -336,8 +360,10 @@ export default function CoursesPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {courses.map((course, index) => {
+          {filteredCourses.map((course, index) => {
             const colorScheme = getColorScheme(index);
+            const isInactive = !course.is_active;
+            
             return (
               <Link
                 key={course.id}
@@ -345,14 +371,16 @@ export default function CoursesPage() {
                 className="group block"
               >
                 <div
-                  className="bg-white rounded-2xl border border-slate-200
-                  overflow-hidden shadow-sm hover:shadow-xl
-                  transition-all duration-300 hover:-translate-y-1"
+                  className={`bg-white rounded-2xl border overflow-hidden shadow-sm hover:shadow-xl
+                  transition-all duration-300 hover:-translate-y-1 ${
+                    isInactive ? 'border-slate-300 opacity-75' : 'border-slate-200'
+                  }`}
                 >
                   {/* Card Header with Gradient */}
                   <div
-                    className={`h-32 bg-gradient-to-br ${colorScheme.bg}
-                    relative overflow-hidden`}
+                    className={`h-32 bg-gradient-to-br ${colorScheme.bg} ${
+                      isInactive ? 'opacity-60' : ''
+                    } relative overflow-hidden`}
                   >
                     {/* Decorative Elements */}
                     <div
@@ -388,13 +416,24 @@ export default function CoursesPage() {
 
                   {/* Card Content */}
                   <div className="p-5">
-                    <h3
-                      className="font-semibold text-lg text-slate-900 mb-2
-                      group-hover:text-indigo-600 transition-colors line-clamp-1"
-                    >
-                      {course.name}
-                    </h3>
-                    <p className="text-slate-500 text-sm mb-4 line-clamp-2 min-h-[40px]">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <h3
+                        className={`font-semibold text-lg mb-0
+                        group-hover:text-indigo-600 transition-colors line-clamp-1 ${
+                          isInactive ? 'text-slate-600' : 'text-slate-900'
+                        }`}
+                      >
+                        {course.name}
+                      </h3>
+                      {isInactive && (
+                        <span className="px-2 py-0.5 bg-slate-200 text-slate-600 text-xs font-medium rounded-full shrink-0">
+                          Pasif
+                        </span>
+                      )}
+                    </div>
+                    <p className={`text-sm mb-4 line-clamp-2 min-h-[40px] ${
+                      isInactive ? 'text-slate-400' : 'text-slate-500'
+                    }`}>
                       {course.description || "Açıklama eklenmemiş"}
                     </p>
 
@@ -418,14 +457,11 @@ export default function CoursesPage() {
                             checked={course.is_active}
                             onCheckedChange={async (checked) => {
                               try {
-                                const updated = await api.updateCourse(course.id, {
+                                await api.updateCourse(course.id, {
                                   is_active: checked,
                                 });
-                                setCourses(
-                                  courses.map((c) =>
-                                    c.id === course.id ? { ...c, is_active: updated.is_active } : c
-                                  )
-                                );
+                                // Reload courses to get fresh data
+                                await loadCourses();
                                 toast.success(
                                   checked
                                     ? "Ders aktif edildi"

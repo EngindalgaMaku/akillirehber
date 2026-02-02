@@ -515,13 +515,43 @@ class SemanticChunker(BaseChunker):
                 EmbeddingProviderConfig,
                 EmbeddingProviderManager,
                 OpenRouterProvider,
+                VoyageProvider,
+                OllamaProvider,
+                CohereProvider,
+                JinaProvider,
+                AlibabaProvider,
             )
             from app.services.embedding_cache import EmbeddingCache
             
             # Create providers with fallback order
             providers = []
             
-            # Try OpenRouter first (primary)
+            # Try Voyage first if available
+            voyage = VoyageProvider()
+            if voyage.is_available():
+                providers.append(voyage)
+            
+            # Try Ollama if available (local, fast)
+            ollama = OllamaProvider()
+            if ollama.is_available():
+                providers.append(ollama)
+            
+            # Try Cohere if available
+            cohere = CohereProvider()
+            if cohere.is_available():
+                providers.append(cohere)
+            
+            # Try Jina if available
+            jina = JinaProvider()
+            if jina.is_available():
+                providers.append(jina)
+            
+            # Try Alibaba if available
+            alibaba = AlibabaProvider()
+            if alibaba.is_available():
+                providers.append(alibaba)
+            
+            # Try OpenRouter as fallback
             openrouter = OpenRouterProvider()
             if openrouter.is_available():
                 providers.append(openrouter)
@@ -529,7 +559,8 @@ class SemanticChunker(BaseChunker):
             if not providers:
                 raise ValueError(
                     "No embedding providers available. "
-                    "Set OPENROUTER_API_KEY or OPENAI_API_KEY."
+                    "Set VOYAGE_API_KEY, COHERE_API_KEY, JINA_AI_API_KEY, "
+                    "DASHSCOPE_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY or run Ollama locally."
                 )
             
             config = EmbeddingProviderConfig(
@@ -765,6 +796,142 @@ class SemanticChunker(BaseChunker):
         
         return breakpoints
 
+    def _merge_small_chunks_semantic(
+        self,
+        chunks: List[Chunk],
+        min_size: int,
+        max_size: int,
+        model: str = None
+    ) -> List[Chunk]:
+        """Merge small chunks and split large chunks while preserving semantic boundaries.
+        
+        For semantic chunking, we:
+        1. Merge very small chunks (< min_size)
+        2. Split large chunks (> max_size) at SEMANTIC boundaries (lowest similarity)
+        3. Never split sentences in the middle
+        4. Preserve the semantic structure as much as possible
+        """
+        if not chunks:
+            return chunks
+        
+        merged = []
+        current_content = ""
+        current_start = 0
+        
+        for chunk in chunks:
+            # If chunk is larger than max_size, SPLIT IT at semantic boundaries
+            if len(chunk.content) > max_size:
+                # Save current accumulated chunk if exists
+                if current_content:
+                    merged.append(Chunk(
+                        index=len(merged),
+                        content=current_content.strip(),
+                        start_position=current_start,
+                        end_position=current_start + len(current_content),
+                        char_count=len(current_content),
+                        has_overlap=False
+                    ))
+                    current_content = ""
+                
+                # Split the large chunk at semantic boundaries
+                logger.info(
+                    f"Chunk {chunk.index} exceeds max_size ({len(chunk.content)} > {max_size}), "
+                    f"splitting at semantic boundaries..."
+                )
+                
+                # Use semantic split if model is available
+                if model:
+                    sub_chunks = self._split_large_chunk_semantic(
+                        chunk.content,
+                        chunk.start_position,
+                        max_size,
+                        model
+                    )
+                else:
+                    # Fallback to sentence-based split
+                    sub_chunks = self._split_large_chunk(
+                        chunk.content,
+                        chunk.start_position,
+                        max_size
+                    )
+                
+                merged.extend(sub_chunks)
+                continue
+            
+            if not current_content:
+                current_content = chunk.content
+                current_start = chunk.start_position
+                continue
+            
+            # Try to merge if current is too small
+            if len(current_content) < min_size:
+                combined = current_content + " " + chunk.content
+                if len(combined) <= max_size:
+                    current_content = combined
+                    continue
+                else:
+                    # Can't merge, save current even if small
+                    merged.append(Chunk(
+                        index=len(merged),
+                        content=current_content.strip(),
+                        start_position=current_start,
+                        end_position=current_start + len(current_content),
+                        char_count=len(current_content),
+                        has_overlap=False
+                    ))
+                    current_content = chunk.content
+                    current_start = chunk.start_position
+                    continue
+            
+            # Try to merge next chunk if it's too small
+            if len(chunk.content) < min_size:
+                combined = current_content + " " + chunk.content
+                if len(combined) <= max_size:
+                    current_content = combined
+                    continue
+            
+            # Both chunks are acceptable size, save current and start new
+            merged.append(Chunk(
+                index=len(merged),
+                content=current_content.strip(),
+                start_position=current_start,
+                end_position=current_start + len(current_content),
+                char_count=len(current_content),
+                has_overlap=False
+            ))
+            current_content = chunk.content
+            current_start = chunk.start_position
+        
+        # Handle last chunk - check max_size
+        if current_content:
+            if len(current_content) > max_size:
+                # Split if too large, using semantic split if possible
+                if model:
+                    sub_chunks = self._split_large_chunk_semantic(
+                        current_content,
+                        current_start,
+                        max_size,
+                        model
+                    )
+                else:
+                    sub_chunks = self._split_large_chunk(
+                        current_content,
+                        current_start,
+                        max_size
+                    )
+                merged.extend(sub_chunks)
+            else:
+                merged.append(Chunk(
+                    index=len(merged),
+                    content=current_content.strip(),
+                    start_position=current_start,
+                    end_position=current_start + len(current_content),
+                    char_count=len(current_content),
+                    has_overlap=False
+                ))
+        
+        return merged
+
     def _merge_small_chunks(
         self,
         chunks: List[Chunk],
@@ -800,19 +967,33 @@ class SemanticChunker(BaseChunker):
                 current_start = chunk.start_position
                 continue
             
-            # If current chunk is too small, merge
+            # If current chunk is too small, try to merge
             if len(current_content) < min_size:
                 combined = current_content + " " + chunk.content
                 if len(combined) <= max_size:
                     current_content = combined
                     continue
+                else:
+                    # Combined would be too large, save current even if small
+                    merged.append(Chunk(
+                        index=len(merged),
+                        content=current_content.strip(),
+                        start_position=current_start,
+                        end_position=current_start + len(current_content),
+                        char_count=len(current_content),
+                        has_overlap=False
+                    ))
+                    current_content = chunk.content
+                    current_start = chunk.start_position
+                    continue
             
-            # If next chunk is too small, merge it
+            # If next chunk is too small, try to merge it
             if len(chunk.content) < min_size:
                 combined = current_content + " " + chunk.content
                 if len(combined) <= max_size:
                     current_content = combined
                     continue
+                # If can't merge, save current and start new
             
             # Save current and start new
             merged.append(Chunk(
@@ -826,17 +1007,159 @@ class SemanticChunker(BaseChunker):
             current_content = chunk.content
             current_start = chunk.start_position
         
+        # Handle last chunk - IMPORTANT: Check max_size before adding
         if current_content:
-            merged.append(Chunk(
-                index=len(merged),
-                content=current_content.strip(),
-                start_position=current_start,
-                end_position=current_start + len(current_content),
-                char_count=len(current_content),
-                has_overlap=False
-            ))
+            # If last chunk is too large, split it
+            if len(current_content) > max_size:
+                final_chunks = self._split_large_chunk(
+                    current_content,
+                    current_start,
+                    max_size
+                )
+                for fc in final_chunks:
+                    fc.index = len(merged)
+                    merged.append(fc)
+            else:
+                merged.append(Chunk(
+                    index=len(merged),
+                    content=current_content.strip(),
+                    start_position=current_start,
+                    end_position=current_start + len(current_content),
+                    char_count=len(current_content),
+                    has_overlap=False
+                ))
         
         return merged
+
+    def _split_large_chunk_semantic(
+        self,
+        content: str,
+        start_position: int,
+        max_size: int,
+        model: str = None
+    ) -> List[Chunk]:
+        """Split a large chunk at the best semantic boundary.
+        
+        For semantic chunking, we want to split at sentence boundaries
+        where the semantic similarity is LOWEST (natural topic change).
+        
+        CRITICAL: This function MUST ensure NO chunk exceeds max_size.
+        
+        Args:
+            content: The chunk content to split
+            start_position: Starting position in original text
+            max_size: Maximum chunk size
+            model: Embedding model for semantic analysis
+            
+        Returns:
+            List of smaller chunks split at semantic boundaries
+        """
+        # Split into sentences
+        sentences = self._split_into_sentences(content)
+        
+        # If only one sentence or can't split semantically, use simple split
+        if len(sentences) <= 1:
+            return self._split_large_chunk(content, start_position, max_size)
+        
+        # Build chunks by accumulating sentences, NEVER exceeding max_size
+        chunks = []
+        current_sentences = []
+        current_size = 0
+        current_start = start_position
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            sentence_size = len(sentence)
+            
+            # If single sentence is too large, split it by words
+            if sentence_size > max_size:
+                # Save current chunk if exists
+                if current_sentences:
+                    chunk_content = " ".join(current_sentences)
+                    chunks.append(Chunk(
+                        index=len(chunks),
+                        content=chunk_content,
+                        start_position=current_start,
+                        end_position=current_start + len(chunk_content),
+                        char_count=len(chunk_content),
+                        has_overlap=False
+                    ))
+                    current_start += len(chunk_content) + 1
+                    current_sentences = []
+                    current_size = 0
+                
+                # Split the large sentence by words
+                word_chunks = self._split_by_size(sentence, current_start, max_size)
+                chunks.extend(word_chunks)
+                current_start = word_chunks[-1].end_position + 1 if word_chunks else current_start
+                continue
+            
+            # Calculate size if we add this sentence
+            separator_len = 1 if current_sentences else 0
+            new_size = current_size + separator_len + sentence_size
+            
+            # If adding this sentence would exceed max_size
+            if current_sentences and new_size > max_size:
+                # Save current chunk
+                chunk_content = " ".join(current_sentences)
+                chunks.append(Chunk(
+                    index=len(chunks),
+                    content=chunk_content,
+                    start_position=current_start,
+                    end_position=current_start + len(chunk_content),
+                    char_count=len(chunk_content),
+                    has_overlap=False
+                ))
+                current_start += len(chunk_content) + 1
+                
+                # Start new chunk with this sentence
+                current_sentences = [sentence]
+                current_size = sentence_size
+            else:
+                # Add sentence to current chunk
+                current_sentences.append(sentence)
+                current_size = new_size
+        
+        # Add remaining sentences
+        if current_sentences:
+            chunk_content = " ".join(current_sentences)
+            # Final safety check
+            if len(chunk_content) > max_size:
+                logger.warning(f"Final chunk still too large ({len(chunk_content)} > {max_size}), splitting by words")
+                word_chunks = self._split_by_size(chunk_content, current_start, max_size)
+                chunks.extend(word_chunks)
+            else:
+                chunks.append(Chunk(
+                    index=len(chunks),
+                    content=chunk_content,
+                    start_position=current_start,
+                    end_position=current_start + len(chunk_content),
+                    char_count=len(chunk_content),
+                    has_overlap=False
+                ))
+        
+        # Final validation: ensure NO chunk exceeds max_size
+        validated_chunks = []
+        for chunk in chunks:
+            if len(chunk.content) > max_size:
+                logger.error(f"Chunk still exceeds max_size: {len(chunk.content)} > {max_size}, forcing split")
+                # Force split by words
+                sub_chunks = self._split_by_size(chunk.content, chunk.start_position, max_size)
+                validated_chunks.extend(sub_chunks)
+            else:
+                validated_chunks.append(chunk)
+        
+        return validated_chunks if validated_chunks else [Chunk(
+            index=0,
+            content=content[:max_size],
+            start_position=start_position,
+            end_position=start_position + min(len(content), max_size),
+            char_count=min(len(content), max_size),
+            has_overlap=False
+        )]
 
     def _split_large_chunk(
         self,
@@ -844,7 +1167,11 @@ class SemanticChunker(BaseChunker):
         start_position: int,
         max_size: int
     ) -> List[Chunk]:
-        """Split a large chunk into smaller pieces at sentence boundaries."""
+        """Split a large chunk into smaller pieces at sentence boundaries.
+        
+        CRITICAL: This function MUST ensure NO chunk exceeds max_size.
+        Sentences are NEVER split in the middle - we keep them complete.
+        """
         # Try to split at sentence boundaries
         sentences = self._split_into_sentences(content)
         
@@ -853,7 +1180,8 @@ class SemanticChunker(BaseChunker):
             return self._split_by_size(content, start_position, max_size)
         
         chunks = []
-        current_content = ""
+        current_sentences = []
+        current_size = 0
         current_start = start_position
         
         for sentence in sentences:
@@ -861,40 +1189,92 @@ class SemanticChunker(BaseChunker):
             if not sentence:
                 continue
             
-            separator = " " if current_content else ""
-            potential = current_content + separator + sentence
+            sentence_size = len(sentence)
             
-            if len(potential) > max_size and current_content:
+            # If single sentence is too large, split it by words
+            if sentence_size > max_size:
+                # Save current chunk if exists
+                if current_sentences:
+                    chunk_content = " ".join(current_sentences)
+                    chunks.append(Chunk(
+                        index=len(chunks),
+                        content=chunk_content,
+                        start_position=current_start,
+                        end_position=current_start + len(chunk_content),
+                        char_count=len(chunk_content),
+                        has_overlap=False
+                    ))
+                    current_start += len(chunk_content) + 1
+                    current_sentences = []
+                    current_size = 0
+                
+                # Split the large sentence by words
+                logger.warning(f"Sentence too large ({sentence_size} > {max_size}), splitting by words")
+                word_chunks = self._split_by_size(sentence, current_start, max_size)
+                chunks.extend(word_chunks)
+                current_start = word_chunks[-1].end_position + 1 if word_chunks else current_start
+                continue
+            
+            # Calculate size if we add this sentence
+            separator_len = 1 if current_sentences else 0
+            new_size = current_size + separator_len + sentence_size
+            
+            # If adding this sentence would exceed max_size
+            if current_sentences and new_size > max_size:
                 # Save current chunk
+                chunk_content = " ".join(current_sentences)
                 chunks.append(Chunk(
                     index=len(chunks),
-                    content=current_content.strip(),
+                    content=chunk_content,
                     start_position=current_start,
-                    end_position=current_start + len(current_content),
-                    char_count=len(current_content),
+                    end_position=current_start + len(chunk_content),
+                    char_count=len(chunk_content),
                     has_overlap=False
                 ))
-                current_start = current_start + len(current_content) + 1
-                current_content = sentence
+                current_start += len(chunk_content) + 1
+                
+                # Start new chunk with this sentence
+                current_sentences = [sentence]
+                current_size = sentence_size
             else:
-                current_content = potential
+                # Add sentence to current chunk
+                current_sentences.append(sentence)
+                current_size = new_size
         
-        if current_content:
-            chunks.append(Chunk(
-                index=len(chunks),
-                content=current_content.strip(),
-                start_position=current_start,
-                end_position=current_start + len(current_content),
-                char_count=len(current_content),
-                has_overlap=False
-            ))
+        # Handle last chunk - check max_size
+        if current_sentences:
+            chunk_content = " ".join(current_sentences)
+            if len(chunk_content) > max_size:
+                # This shouldn't happen, but safety check
+                logger.warning(f"Final chunk too large ({len(chunk_content)} > {max_size}), splitting by words")
+                word_chunks = self._split_by_size(chunk_content, current_start, max_size)
+                chunks.extend(word_chunks)
+            else:
+                chunks.append(Chunk(
+                    index=len(chunks),
+                    content=chunk_content,
+                    start_position=current_start,
+                    end_position=current_start + len(chunk_content),
+                    char_count=len(chunk_content),
+                    has_overlap=False
+                ))
         
-        return chunks if chunks else [Chunk(
+        # Final validation
+        validated_chunks = []
+        for chunk in chunks:
+            if len(chunk.content) > max_size:
+                logger.error(f"Chunk still exceeds max_size: {len(chunk.content)} > {max_size}, forcing split")
+                sub_chunks = self._split_by_size(chunk.content, chunk.start_position, max_size)
+                validated_chunks.extend(sub_chunks)
+            else:
+                validated_chunks.append(chunk)
+        
+        return validated_chunks if validated_chunks else [Chunk(
             index=0,
-            content=content,
+            content=content[:max_size],
             start_position=start_position,
-            end_position=start_position + len(content),
-            char_count=len(content),
+            end_position=start_position + min(len(content), max_size),
+            char_count=min(len(content), max_size),
             has_overlap=False
         )]
 
@@ -904,41 +1284,204 @@ class SemanticChunker(BaseChunker):
         start_position: int,
         max_size: int
     ) -> List[Chunk]:
-        """Split content by size at word boundaries."""
+        """Split content by size at punctuation/word boundaries - NEVER split words in middle.
+        
+        Priority:
+        1. Try to split at punctuation (comma, semicolon, etc.)
+        2. If not possible, split at word boundaries
+        3. Never split a word in the middle
+        
+        This is the last resort when we can't split by sentences.
+        """
+        # First try to split by punctuation within the content
+        # Look for: comma, semicolon, colon, dash - these are natural pause points
+        punctuation_pattern = r'([,;:\-—])\s+'
+        import re
+        
+        # Split but keep the punctuation
+        parts = re.split(punctuation_pattern, content)
+        
+        # Reconstruct parts with punctuation attached
+        reconstructed = []
+        i = 0
+        while i < len(parts):
+            if i + 1 < len(parts) and parts[i + 1] in ',;:-—':
+                # Combine text with its punctuation
+                reconstructed.append(parts[i] + parts[i + 1])
+                i += 2
+            else:
+                if parts[i].strip() and parts[i] not in ',;:-—':
+                    reconstructed.append(parts[i])
+                i += 1
+        
+        # If we got meaningful parts, use them
+        if len(reconstructed) > 1:
+            chunks = []
+            current_content = ""
+            current_start = start_position
+            
+            for part in reconstructed:
+                part = part.strip()
+                if not part:
+                    continue
+                
+                separator = " " if current_content else ""
+                potential = current_content + separator + part
+                
+                if len(potential) > max_size and current_content:
+                    chunks.append(Chunk(
+                        index=len(chunks),
+                        content=current_content.strip(),
+                        start_position=current_start,
+                        end_position=current_start + len(current_content),
+                        char_count=len(current_content),
+                        has_overlap=False
+                    ))
+                    current_start = current_start + len(current_content) + 1
+                    current_content = part
+                else:
+                    current_content = potential
+            
+            if current_content:
+                if len(current_content) > max_size:
+                    # Still too large, fall through to word splitting
+                    pass
+                else:
+                    chunks.append(Chunk(
+                        index=len(chunks),
+                        content=current_content.strip(),
+                        start_position=current_start,
+                        end_position=current_start + len(current_content),
+                        char_count=len(current_content),
+                        has_overlap=False
+                    ))
+                    return chunks if chunks else self._split_by_words(content, start_position, max_size)
+            
+            if chunks:
+                return chunks
+        
+        # Fallback: split by words
+        return self._split_by_words(content, start_position, max_size)
+    
+    def _split_by_words(
+        self,
+        content: str,
+        start_position: int,
+        max_size: int
+    ) -> List[Chunk]:
+        """Split content by words - absolute last resort.
+        
+        CRITICAL: This function MUST ensure NO chunk exceeds max_size.
+        Words are kept complete - never split in the middle.
+        """
         words = content.split()
         chunks = []
-        current_content = ""
+        current_words = []
+        current_size = 0
         current_start = start_position
         
         for word in words:
-            separator = " " if current_content else ""
-            potential = current_content + separator + word
+            word_size = len(word)
             
-            if len(potential) > max_size and current_content:
+            # If single word is too large, we MUST truncate it (no choice)
+            if word_size > max_size:
+                # Save current chunk if exists
+                if current_words:
+                    chunk_content = " ".join(current_words)
+                    chunks.append(Chunk(
+                        index=len(chunks),
+                        content=chunk_content,
+                        start_position=current_start,
+                        end_position=current_start + len(chunk_content),
+                        char_count=len(chunk_content),
+                        has_overlap=False
+                    ))
+                    current_start += len(chunk_content) + 1
+                    current_words = []
+                    current_size = 0
+                
+                # Truncate the word with ellipsis
+                truncated = word[:max_size-3] + "..."
+                logger.warning(f"Word too long ({word_size} chars), truncating: {word[:50]}...")
                 chunks.append(Chunk(
                     index=len(chunks),
-                    content=current_content.strip(),
+                    content=truncated,
                     start_position=current_start,
-                    end_position=current_start + len(current_content),
-                    char_count=len(current_content),
+                    end_position=current_start + len(truncated),
+                    char_count=len(truncated),
                     has_overlap=False
                 ))
-                current_start = current_start + len(current_content) + 1
-                current_content = word
+                current_start += word_size + 1
+                continue
+            
+            # Calculate size if we add this word
+            separator_len = 1 if current_words else 0
+            new_size = current_size + separator_len + word_size
+            
+            # If adding this word would exceed max_size
+            if current_words and new_size > max_size:
+                # Save current chunk
+                chunk_content = " ".join(current_words)
+                chunks.append(Chunk(
+                    index=len(chunks),
+                    content=chunk_content,
+                    start_position=current_start,
+                    end_position=current_start + len(chunk_content),
+                    char_count=len(chunk_content),
+                    has_overlap=False
+                ))
+                current_start += len(chunk_content) + 1
+                
+                # Start new chunk with this word
+                current_words = [word]
+                current_size = word_size
             else:
-                current_content = potential
+                # Add word to current chunk
+                current_words.append(word)
+                current_size = new_size
         
-        if current_content:
+        # Handle last chunk - check max_size
+        if current_words:
+            chunk_content = " ".join(current_words)
+            if len(chunk_content) > max_size:
+                # This shouldn't happen, but safety check - truncate
+                chunk_content = chunk_content[:max_size-3] + "..."
+                logger.warning(f"Final chunk too long, truncating to {max_size} chars")
+            
             chunks.append(Chunk(
                 index=len(chunks),
-                content=current_content.strip(),
+                content=chunk_content,
                 start_position=current_start,
-                end_position=current_start + len(current_content),
-                char_count=len(current_content),
+                end_position=current_start + len(chunk_content),
+                char_count=len(chunk_content),
                 has_overlap=False
             ))
         
-        return chunks
+        # Final validation: ensure NO chunk exceeds max_size
+        validated_chunks = []
+        for chunk in chunks:
+            if len(chunk.content) > max_size:
+                logger.error(f"Chunk STILL exceeds max_size: {len(chunk.content)} > {max_size}, truncating")
+                truncated_content = chunk.content[:max_size-3] + "..."
+                validated_chunks.append(Chunk(
+                    index=chunk.index,
+                    content=truncated_content,
+                    start_position=chunk.start_position,
+                    end_position=chunk.start_position + len(truncated_content),
+                    char_count=len(truncated_content),
+                    has_overlap=chunk.has_overlap
+                ))
+            else:
+                validated_chunks.append(chunk)
+        
+        return validated_chunks if validated_chunks else [Chunk(
+            index=0,
+            content=content[:max_size-3] + "...",  # Truncate with ellipsis
+            start_position=start_position,
+            end_position=start_position + min(len(content), max_size),
+            char_count=min(len(content), max_size),
+            has_overlap=False
+        )]
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences with enhanced multi-language support.
@@ -998,13 +1541,19 @@ class SemanticChunker(BaseChunker):
     def _add_overlap_to_chunks(
         self,
         chunks: List[Chunk],
-        overlap: int
+        overlap: int,
+        max_size: int = None
     ) -> List[Chunk]:
         """Add overlap from previous chunk to each chunk.
         
         Overlap uses complete sentences from the end of previous chunk.
         The overlap parameter is a TARGET - we take complete sentences
         that fit within that target.
+        
+        Args:
+            chunks: List of chunks
+            overlap: Target overlap size in characters
+            max_size: Maximum chunk size (optional, for validation)
         """
         if not chunks or overlap <= 0:
             return chunks
@@ -1022,13 +1571,26 @@ class SemanticChunker(BaseChunker):
                 if overlap_sentences:
                     overlap_text = " ".join(overlap_sentences)
                     new_content = overlap_text + " " + chunk.content
+                    
+                    # Check if adding overlap would exceed max_size
+                    if max_size and len(new_content) > max_size:
+                        # Try with fewer sentences
+                        while overlap_sentences and len(new_content) > max_size:
+                            overlap_sentences.pop(0)  # Remove first sentence
+                            if overlap_sentences:
+                                overlap_text = " ".join(overlap_sentences)
+                                new_content = overlap_text + " " + chunk.content
+                            else:
+                                new_content = chunk.content
+                                break
+                    
                     result.append(Chunk(
                         index=i,
                         content=new_content.strip(),
-                        start_position=chunk.start_position - len(overlap_text) - 1,
+                        start_position=chunk.start_position - len(overlap_text) - 1 if overlap_sentences else chunk.start_position,
                         end_position=chunk.end_position,
                         char_count=len(new_content),
-                        has_overlap=True
+                        has_overlap=bool(overlap_sentences)
                     ))
                 else:
                     result.append(chunk)
@@ -1198,12 +1760,59 @@ class SemanticChunker(BaseChunker):
             text, sentences, breakpoints
         )
         
-        # Merge small chunks
-        chunks = self._merge_small_chunks(chunks, min_size, max_size)
+        # Merge small chunks and enforce max size
+        # For semantic chunking, be more careful to preserve sentence boundaries
+        logger.info(f"Before merge_small_chunks: {len(chunks)} chunks, min_size={min_size}, max_size={max_size}")
+        if chunks:
+            chunk_sizes = [len(c.content) for c in chunks]
+            logger.info(f"Chunk sizes before merge: min={min(chunk_sizes)}, max={max(chunk_sizes)}, avg={sum(chunk_sizes)/len(chunk_sizes):.1f}")
+        
+        # For semantic chunking, merge small chunks and split large ones at semantic boundaries
+        # Pass the model so we can do semantic analysis when splitting
+        chunks = self._merge_small_chunks_semantic(chunks, min_size, max_size, model)
+        
+        logger.info(f"After merge_small_chunks: {len(chunks)} chunks")
+        if chunks:
+            chunk_sizes = [len(c.content) for c in chunks]
+            logger.info(f"Chunk sizes after merge: min={min(chunk_sizes)}, max={max(chunk_sizes)}, avg={sum(chunk_sizes)/len(chunk_sizes):.1f}")
+            # Log any chunks that exceed max_size
+            oversized = [(i, len(c.content)) for i, c in enumerate(chunks) if len(c.content) > max_size]
+            if oversized:
+                logger.error(f"OVERSIZED CHUNKS DETECTED: {oversized}")
         
         # Add overlap if specified
         if overlap > 0:
-            chunks = self._add_overlap_to_chunks(chunks, overlap)
+            logger.info(f"Adding overlap: {overlap} characters")
+            chunks = self._add_overlap_to_chunks(chunks, overlap, max_size)
+            logger.info(f"After adding overlap: {len(chunks)} chunks")
+            if chunks:
+                overlap_count = sum(1 for c in chunks if c.has_overlap)
+                logger.info(f"Chunks with overlap: {overlap_count}/{len(chunks)}")
+        
+        # Final validation: ensure no chunk exceeds max_size after overlap
+        # For semantic chunking, use semantic split to preserve meaning
+        final_chunks = []
+        for chunk in chunks:
+            if len(chunk.content) > max_size:
+                logger.warning(
+                    f"Chunk {chunk.index} exceeds max_size after overlap: "
+                    f"{len(chunk.content)} > {max_size}, splitting at semantic boundaries..."
+                )
+                # Use semantic split to preserve meaning
+                sub_chunks = self._split_large_chunk_semantic(
+                    chunk.content,
+                    chunk.start_position,
+                    max_size,
+                    model
+                )
+                # Mark first sub-chunk as having overlap if original had it
+                if sub_chunks and chunk.has_overlap:
+                    sub_chunks[0].has_overlap = True
+                final_chunks.extend(sub_chunks)
+            else:
+                final_chunks.append(chunk)
+        
+        chunks = final_chunks
         
         # Re-index chunks
         for i, chunk in enumerate(chunks):

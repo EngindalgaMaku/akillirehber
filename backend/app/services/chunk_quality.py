@@ -102,9 +102,39 @@ class ChunkQualityAnalyzer:
                 EmbeddingProviderManager,
                 OpenRouterProvider,
                 OpenAIProvider,
+                VoyageProvider,
+                OllamaProvider,
+                CohereProvider,
+                JinaProvider,
+                AlibabaProvider,
             )
             
             providers = []
+            
+            # Try Voyage first if available
+            voyage = VoyageProvider()
+            if voyage.is_available():
+                providers.append(voyage)
+            
+            # Try Ollama if available (local, fast)
+            ollama = OllamaProvider()
+            if ollama.is_available():
+                providers.append(ollama)
+            
+            # Try Cohere if available
+            cohere = CohereProvider()
+            if cohere.is_available():
+                providers.append(cohere)
+            
+            # Try Jina if available
+            jina = JinaProvider()
+            if jina.is_available():
+                providers.append(jina)
+            
+            # Try Alibaba if available
+            alibaba = AlibabaProvider()
+            if alibaba.is_available():
+                providers.append(alibaba)
             
             openrouter = OpenRouterProvider()
             if openrouter.is_available():
@@ -117,7 +147,8 @@ class ChunkQualityAnalyzer:
             if not providers:
                 raise ValueError(
                     "No embedding providers available. "
-                    "Set OPENROUTER_API_KEY or OPENAI_API_KEY."
+                    "Set VOYAGE_API_KEY, COHERE_API_KEY, JINA_AI_API_KEY, "
+                    "DASHSCOPE_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY or run Ollama locally."
                 )
             
             config = EmbeddingProviderConfig(

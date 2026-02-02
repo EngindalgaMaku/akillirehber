@@ -79,10 +79,14 @@ async def list_courses(
     """
     List courses based on user role.
 
-    - **Teachers**: See only their own courses
+    - **Teachers**: See only their own courses (including inactive)
+    - **Admins**: See all courses (including inactive)
     - **Students**: See all active courses
     """
-    if current_user.role == UserRole.TEACHER:
+    if current_user.role == UserRole.ADMIN:
+        # Admin sees all courses (including inactive)
+        courses = db.query(Course).order_by(Course.created_at.desc()).all()
+    elif current_user.role == UserRole.TEACHER:
         courses = get_courses_by_teacher(db, current_user.id)
     else:
         courses = get_all_active_courses(db)

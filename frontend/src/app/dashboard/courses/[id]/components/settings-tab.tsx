@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useModelProviders } from "@/hooks/useModelProviders";
 import { api, CustomLLMModel, CoursePromptTemplate } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,8 +98,16 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
   const [isDeleting, setIsDeleting] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   
-  // System Prompt Collapse State
-  const [isSystemPromptExpanded, setIsSystemPromptExpanded] = useState(false);
+  // Course name editing state
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedCourseName, setEditedCourseName] = useState(courseName);
+  const [editedCourseDescription, setEditedCourseDescription] = useState("");
+  const [isSavingName, setIsSavingName] = useState(false);
+  
+  // Accordion state (only one section open at a time)
+  const [expandedSection, setExpandedSection] = useState<
+    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | null
+  >(null);
   
   // Model management state
   const [showModelManager, setShowModelManager] = useState(false);
@@ -165,6 +172,11 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
       };
       console.log("New Form Data:", newFormData);
       setFormData(newFormData);
+      
+      // Load course info
+      const courseData = await api.getCourse(courseId);
+      setEditedCourseName(courseData.name);
+      setEditedCourseDescription(courseData.description || "");
     } catch (error) {
       console.error("Settings load error:", error);
       toast.error("Ayarlar yüklenirken hata oluştu");
@@ -385,6 +397,29 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
     }
   };
 
+  const handleSaveCourseName = async () => {
+    if (!editedCourseName.trim()) {
+      toast.error("Ders adı boş olamaz");
+      return;
+    }
+    
+    setIsSavingName(true);
+    try {
+      await api.updateCourse(courseId, {
+        name: editedCourseName.trim(),
+        description: editedCourseDescription.trim() || undefined,
+      });
+      toast.success("Ders bilgileri güncellendi");
+      setIsEditingName(false);
+      // Reload page to update header
+      window.location.reload();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Güncelleme hatası");
+    } finally {
+      setIsSavingName(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
@@ -397,11 +432,107 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
 
   return (
     <div className="max-w-4xl space-y-8">
+      {/* Course Info Section - Collapsible */}
+      <div className={sectionCardStyles}>
+        <div 
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) =>
+              prev === "course_info" ? null : "course_info"
+            )
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center shadow-sm">
+                <Settings className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Ders Bilgileri</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Ders adı ve açıklamasını düzenleyin
+                </p>
+              </div>
+            </div>
+            <ChevronDown 
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                expandedSection === "course_info" ? 'rotate-180' : ''
+              }`}
+            />
+          </div>
+        </div>
+        
+        {expandedSection === "course_info" && (
+          <div className={sectionContentStyles}>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium text-slate-700">Ders Adı</Label>
+                <Input
+                  value={editedCourseName}
+                  onChange={(e) => setEditedCourseName(e.target.value)}
+                  placeholder="Ders adını girin"
+                  className="h-11 border-slate-200 focus:border-violet-300 focus:ring-violet-200"
+                  disabled={!isOwner}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-medium text-slate-700">Açıklama (Opsiyonel)</Label>
+                <Textarea
+                  value={editedCourseDescription}
+                  onChange={(e) => setEditedCourseDescription(e.target.value)}
+                  placeholder="Ders hakkında kısa bir açıklama..."
+                  className="min-h-[100px] resize-none border-slate-200 focus:border-violet-300 focus:ring-violet-200"
+                  disabled={!isOwner}
+                />
+              </div>
+
+              {isOwner && (
+                <div className="flex gap-2 pt-2">
+                  <Button
+                    onClick={handleSaveCourseName}
+                    disabled={isSavingName || !editedCourseName.trim()}
+                    className="bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800"
+                  >
+                    {isSavingName ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Kaydediliyor...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4 mr-2" />
+                        Kaydet
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setEditedCourseName(courseName);
+                      setEditedCourseDescription("");
+                      loadSettings();
+                    }}
+                    disabled={isSavingName}
+                  >
+                    İptal
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* System Prompt Section - Collapsible */}
       <div className={sectionCardStyles}>
         <div 
           className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
-          onClick={() => setIsSystemPromptExpanded(!isSystemPromptExpanded)}
+          onClick={() =>
+            setExpandedSection((prev) =>
+              prev === "system_prompt" ? null : "system_prompt"
+            )
+          }
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -417,13 +548,13 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
             </div>
             <ChevronDown 
               className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
-                isSystemPromptExpanded ? 'rotate-180' : ''
+                expandedSection === "system_prompt" ? 'rotate-180' : ''
               }`}
             />
           </div>
         </div>
         
-        {isSystemPromptExpanded && (
+        {expandedSection === "system_prompt" && (
           <div className={sectionContentStyles}>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -566,21 +697,36 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
 
       {/* Chunking Settings Section */}
       <div className={sectionCardStyles}>
-        <div className={sectionHeaderStyles}>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-sm">
-              <Scissors className="w-5 h-5 text-white" />
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) =>
+              prev === "chunking" ? null : "chunking"
+            )
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-sm">
+                <Scissors className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Chunking Ayarları</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Metin parçalama stratejisi ve boyut ayarları
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 text-lg">Chunking Ayarları</h3>
-              <p className="text-sm text-slate-500 mt-0.5">
-                Metin parçalama stratejisi ve boyut ayarları
-              </p>
-            </div>
+            <ChevronDown
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                expandedSection === "chunking" ? 'rotate-180' : ''
+              }`}
+            />
           </div>
         </div>
-        <div className={sectionContentStyles}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {expandedSection === "chunking" && (
+          <div className={sectionContentStyles}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <Label className="text-sm font-medium text-slate-700">Varsayılan Strateji</Label>
               <Select
@@ -644,26 +790,42 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
               </Select>
             </div>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Search Settings Section */}
       <div className={sectionCardStyles}>
-        <div className={sectionHeaderStyles}>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-sm">
-              <Search className="w-5 h-5 text-white" />
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) =>
+              prev === "search" ? null : "search"
+            )
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-sm">
+                <Search className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Arama Ayarları</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Hibrit arama ve sonuç filtreleme ayarları
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 text-lg">Arama Ayarları</h3>
-              <p className="text-sm text-slate-500 mt-0.5">
-                Hibrit arama ve sonuç filtreleme ayarları
-              </p>
-            </div>
+            <ChevronDown
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                expandedSection === "search" ? 'rotate-180' : ''
+              }`}
+            />
           </div>
         </div>
-        <div className={sectionContentStyles}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {expandedSection === "search" && (
+          <div className={sectionContentStyles}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <Label className="text-sm font-medium text-slate-700">
                 Hybrid Alpha (0=Kelime, 1=Vektör)
@@ -716,43 +878,59 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
               </p>
             </div>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Reranker Settings Section */}
       <div className={sectionCardStyles}>
-        <div className={sectionHeaderStyles}>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-sm">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 text-lg">Reranker Ayarları</h3>
-              <p className="text-sm text-slate-500 mt-0.5">
-                Arama sonuçlarını yeniden sıralayarak alakalılığı artırın
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className={sectionContentStyles}>
-          {/* Validation Errors */}
-          {validationErrors.length > 0 && (
-            <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
-                <div className="flex-1">
-                  <p className="font-medium text-red-900 mb-2">Doğrulama Hataları:</p>
-                  <ul className="list-disc list-inside space-y-1 text-sm text-red-800">
-                    {validationErrors.map((error, index) => (
-                      <li key={index}>{error}</li>
-                    ))}
-                  </ul>
-                </div>
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) =>
+              prev === "reranker" ? null : "reranker"
+            )
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-sm">
+                <Sparkles className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Reranker Ayarları</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Arama sonuçlarını yeniden sıralayarak alakalılığı artırın
+                </p>
               </div>
             </div>
-          )}
-          
-          <div className="space-y-6">
+            <ChevronDown
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                expandedSection === "reranker" ? 'rotate-180' : ''
+              }`}
+            />
+          </div>
+        </div>
+        {expandedSection === "reranker" && (
+          <div className={sectionContentStyles}>
+            {/* Validation Errors */}
+            {validationErrors.length > 0 && (
+              <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="font-medium text-red-900 mb-2">Doğrulama Hataları:</p>
+                    <ul className="list-disc list-inside space-y-1 text-sm text-red-800">
+                      {validationErrors.map((error, index) => (
+                        <li key={index}>{error}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <div className="space-y-6">
             {/* Enable Reranker Toggle */}
             <div className="flex items-center justify-between p-4 bg-amber-50 rounded-lg border border-amber-100">
               <div className="flex items-start gap-3 flex-1">
@@ -955,12 +1133,18 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
               </div>
             </div>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* LLM Settings Section */}
       <div className={sectionCardStyles}>
-        <div className={sectionHeaderStyles}>
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) => (prev === "llm" ? null : "llm"))
+          }
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center shadow-sm">
@@ -977,17 +1161,26 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowModelManager(true)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowModelManager(true);
+                }}
                 className="border-purple-200 text-purple-600 hover:bg-purple-50"
               >
                 <Settings className="w-4 h-4 mr-2" />
                 Model Yönetimi
               </Button>
             )}
+            <ChevronDown
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                expandedSection === "llm" ? 'rotate-180' : ''
+              }`}
+            />
           </div>
         </div>
-        <div className={sectionContentStyles}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {expandedSection === "llm" && (
+          <div className={sectionContentStyles}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <Label className="text-sm font-medium text-slate-700">LLM Provider</Label>
               <Select
@@ -1065,8 +1258,9 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
                 Maksimum yanıt uzunluğu
               </p>
             </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Save Button */}
