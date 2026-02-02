@@ -16,6 +16,7 @@ from app.routers import (
     chunking,
     courses,
     course_settings,
+    course_prompt_templates,
     document,
     documents,
     embeddings,
@@ -68,6 +69,7 @@ app.include_router(auth.router)
 app.include_router(benchmark_router)
 app.include_router(courses.router)
 app.include_router(course_settings.router)
+app.include_router(course_prompt_templates.router)
 app.include_router(documents.router)
 app.include_router(document.router)  # Legacy upload endpoint
 app.include_router(chunking.router)

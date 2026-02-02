@@ -379,7 +379,17 @@ Rules:
 4. Keep your answers clear and understandable
 5. Reference sources when necessary"""
     
-    system_prompt = settings.system_prompt if settings.system_prompt else default_system_prompt
+    active_template = getattr(settings, "active_prompt_template", None)
+    if active_template is not None and getattr(
+        active_template,
+        "content",
+        None,
+    ):
+        system_prompt = active_template.content
+    else:
+        system_prompt = (
+            settings.system_prompt if settings.system_prompt else default_system_prompt
+        )
 
     messages = [{"role": "system", "content": system_prompt}]
 

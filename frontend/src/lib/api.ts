@@ -166,6 +166,7 @@ export interface CourseSettings {
   llm_temperature: number;
   llm_max_tokens: number;
   system_prompt: string | null;
+  active_prompt_template_id?: number | null;
   system_prompt_remembering?: string | null;
   system_prompt_understanding_applying?: string | null;
   system_prompt_analyzing_evaluating?: string | null;
@@ -190,6 +191,7 @@ export interface CourseSettingsUpdate {
   llm_temperature?: number;
   llm_max_tokens?: number;
   system_prompt?: string;
+  active_prompt_template_id?: number | null;
   system_prompt_remembering?: string;
   system_prompt_understanding_applying?: string;
   system_prompt_analyzing_evaluating?: string;
@@ -197,6 +199,19 @@ export interface CourseSettingsUpdate {
   reranker_provider?: string;
   reranker_model?: string;
   reranker_top_k?: number;
+}
+
+export interface CoursePromptTemplate {
+  id: number;
+  course_id: number;
+  name: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CoursePromptTemplateListResponse {
+  templates: CoursePromptTemplate[];
 }
 
 export interface EmbedResponse {
@@ -493,6 +508,62 @@ class ApiClient {
     });
   }
 
+  async getCoursePromptTemplates(courseId: number): Promise<CoursePromptTemplateListResponse> {
+    return this.request<CoursePromptTemplateListResponse>(
+      `/api/courses/${courseId}/prompt-templates`
+    );
+  }
+
+  async createCoursePromptTemplate(
+    courseId: number,
+    data: { name: string; content: string }
+  ): Promise<CoursePromptTemplate> {
+    return this.request<CoursePromptTemplate>(
+      `/api/courses/${courseId}/prompt-templates`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  }
+
+  async updateCoursePromptTemplate(
+    courseId: number,
+    templateId: number,
+    data: { name?: string; content?: string }
+  ): Promise<CoursePromptTemplate> {
+    return this.request<CoursePromptTemplate>(
+      `/api/courses/${courseId}/prompt-templates/${templateId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    );
+  }
+
+  async deleteCoursePromptTemplate(
+    courseId: number,
+    templateId: number
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(
+      `/api/courses/${courseId}/prompt-templates/${templateId}`,
+      { method: "DELETE" }
+    );
+  }
+
+  async activateCoursePromptTemplate(
+    courseId: number,
+    templateId: number | null
+  ): Promise<{ success: boolean; active_prompt_template_id: number | null }> {
+    const params = new URLSearchParams();
+    if (templateId !== null) params.append("template_id", templateId.toString());
+    const qs = params.toString();
+    return this.request<{ success: boolean; active_prompt_template_id: number | null }>(
+      `/api/courses/${courseId}/prompt-templates/activate${qs ? `?${qs}` : ""}`,
+      { method: "POST" }
+    );
+  }
+
   async getLLMProviders(): Promise<Record<string, string[]>> {
     return this.request<Record<string, string[]>>("/api/llm-providers");
   }
@@ -777,6 +848,13 @@ class ApiClient {
   // Test Sets
   async getTestSets(courseId: number): Promise<TestSet[]> {
     return this.request<TestSet[]>(`/api/ragas/test-sets?course_id=${courseId}`);
+  }
+
+  async createTestSet(data: { course_id: number; name: string; description?: string }): Promise<TestSet> {
+    return this.request<TestSet>("/api/ragas/test-sets", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   }
 
   async getTestSet(testSetId: number): Promise<TestSetDetail> {

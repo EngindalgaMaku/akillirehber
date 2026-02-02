@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useModelProviders } from "@/hooks/useModelProviders";
-import { api, CustomLLMModel } from "@/lib/api";
+import { api, CustomLLMModel, CoursePromptTemplate } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,6 +33,7 @@ import {
   Settings,
   Sparkles,
   Info,
+  ChevronDown,
 } from "lucide-react";
 
 interface SettingsTabProps {
@@ -98,6 +99,9 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
   const [isDeleting, setIsDeleting] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   
+  // System Prompt Collapse State
+  const [isSystemPromptExpanded, setIsSystemPromptExpanded] = useState(false);
+  
   // Model management state
   const [showModelManager, setShowModelManager] = useState(false);
   const [customModels, setCustomModels] = useState<CustomLLMModel[]>([]);
@@ -108,6 +112,13 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
     display_name: "",
   });
   const [isAddingModel, setIsAddingModel] = useState(false);
+
+  // Prompt template state
+  const [promptTemplates, setPromptTemplates] = useState<CoursePromptTemplate[]>([]);
+  const [isLoadingPromptTemplates, setIsLoadingPromptTemplates] = useState(false);
+  const [newPromptTemplateName, setNewPromptTemplateName] = useState("");
+  const [isCreatingPromptTemplate, setIsCreatingPromptTemplate] = useState(false);
+  const [isDeletingPromptTemplateId, setIsDeletingPromptTemplateId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
     default_chunk_strategy: "recursive",
@@ -122,6 +133,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
     llm_temperature: 0.7,
     llm_max_tokens: 1000,
     system_prompt: "",
+    active_prompt_template_id: null as number | null,
     enable_reranker: false,
     reranker_provider: null as string | null,
     reranker_model: null as string | null,
@@ -145,6 +157,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
         llm_temperature: data.llm_temperature,
         llm_max_tokens: data.llm_max_tokens,
         system_prompt: data.system_prompt || "",
+        active_prompt_template_id: data.active_prompt_template_id ?? null,
         enable_reranker: data.enable_reranker || false,
         reranker_provider: data.reranker_provider || null,
         reranker_model: data.reranker_model || null,
@@ -163,6 +176,84 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  const loadPromptTemplates = useCallback(async () => {
+    setIsLoadingPromptTemplates(true);
+    try {
+      const res = await api.getCoursePromptTemplates(courseId);
+      setPromptTemplates(res.templates);
+    } catch {
+      toast.error("Prompt template listesi yüklenirken hata oluştu");
+    } finally {
+      setIsLoadingPromptTemplates(false);
+    }
+  }, [courseId]);
+
+  useEffect(() => {
+    loadPromptTemplates();
+  }, [loadPromptTemplates]);
+
+  const handleActivatePromptTemplate = async (templateId: number | null) => {
+    try {
+      const res = await api.activateCoursePromptTemplate(courseId, templateId);
+      setFormData((prev) => ({
+        ...prev,
+        active_prompt_template_id: res.active_prompt_template_id,
+      }));
+      toast.success("Aktif prompt template güncellendi");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "İşlem başarısız");
+    }
+  };
+
+  const handleCreatePromptTemplateFromCurrent = async () => {
+    if (!newPromptTemplateName.trim()) {
+      toast.error("Template adı zorunludur");
+      return;
+    }
+    if (!formData.system_prompt.trim()) {
+      toast.error("Sistem promptu boşken template kaydedemezsiniz");
+      return;
+    }
+
+    setIsCreatingPromptTemplate(true);
+    try {
+      const created = await api.createCoursePromptTemplate(courseId, {
+        name: newPromptTemplateName.trim(),
+        content: formData.system_prompt,
+      });
+      setNewPromptTemplateName("");
+      await loadPromptTemplates();
+      toast.success("Prompt template kaydedildi");
+
+      if (formData.active_prompt_template_id === null) {
+        await handleActivatePromptTemplate(created.id);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Template kaydedilemedi"
+      );
+    } finally {
+      setIsCreatingPromptTemplate(false);
+    }
+  };
+
+  const handleDeletePromptTemplate = async (templateId: number) => {
+    setIsDeletingPromptTemplateId(templateId);
+    try {
+      await api.deleteCoursePromptTemplate(courseId, templateId);
+      toast.success("Template silindi");
+      await loadPromptTemplates();
+
+      if (formData.active_prompt_template_id === templateId) {
+        await handleActivatePromptTemplate(null);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Silme hatası");
+    } finally {
+      setIsDeletingPromptTemplateId(null);
+    }
+  };
 
   useEffect(() => {
     const loadModels = async () => {
@@ -306,23 +397,143 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
 
   return (
     <div className="max-w-4xl space-y-8">
-      {/* System Prompt Section */}
+      {/* System Prompt Section - Collapsible */}
       <div className={sectionCardStyles}>
-        <div className={sectionHeaderStyles}>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center shadow-sm">
-              <MessageSquare className="w-5 h-5 text-white" />
+        <div 
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() => setIsSystemPromptExpanded(!isSystemPromptExpanded)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center shadow-sm">
+                <MessageSquare className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Sistem Promptu</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  AI asistanının davranışını ve kişiliğini belirleyin
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 text-lg">Sistem Promptu</h3>
-              <p className="text-sm text-slate-500 mt-0.5">
-                AI asistanının davranışını ve kişiliğini belirleyin
-              </p>
-            </div>
+            <ChevronDown 
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                isSystemPromptExpanded ? 'rotate-180' : ''
+              }`}
+            />
           </div>
         </div>
-        <div className={sectionContentStyles}>
+        
+        {isSystemPromptExpanded && (
+          <div className={sectionContentStyles}>
           <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium text-slate-700">
+                  Prompt Template (Opsiyonel)
+                </Label>
+                <Select
+                  value={
+                    formData.active_prompt_template_id !== null
+                      ? String(formData.active_prompt_template_id)
+                      : "__manual__"
+                  }
+                  onValueChange={(v) => {
+                    if (v === "__manual__") {
+                      handleActivatePromptTemplate(null);
+                      return;
+                    }
+                    const id = Number(v);
+                    if (!Number.isNaN(id)) {
+                      handleActivatePromptTemplate(id);
+                    }
+                  }}
+                  disabled={!isOwner || isLoadingPromptTemplates}
+                >
+                  <SelectTrigger className="h-11 border-slate-200 focus:border-indigo-300 focus:ring-indigo-200">
+                    <SelectValue placeholder="Template seçin" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__manual__">Manuel (Sistem promptu)</SelectItem>
+                    {promptTemplates.map((t) => (
+                      <SelectItem key={t.id} value={String(t.id)}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500 bg-slate-50 px-3 py-2 rounded-lg">
+                  Seçiliyse, sohbet/RAG bu template içeriğini kullanır.
+                </p>
+
+                {promptTemplates.length > 0 && (
+                  <div className="space-y-2">
+                    {promptTemplates.map((t) => (
+                      <div
+                        key={t.id}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-slate-800 truncate">
+                            {t.name}
+                          </div>
+                          <div className="text-xs text-slate-500 truncate">
+                            {t.content}
+                          </div>
+                        </div>
+                        {isOwner && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeletePromptTemplate(t.id)}
+                            disabled={isDeletingPromptTemplateId === t.id}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            {isDeletingPromptTemplateId === t.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {isOwner && (
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Mevcut promptu template olarak kaydet
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={newPromptTemplateName}
+                      onChange={(e) => setNewPromptTemplateName(e.target.value)}
+                      placeholder="Template adı"
+                      className="h-11 border-slate-200"
+                    />
+                    <Button
+                      type="button"
+                      onClick={handleCreatePromptTemplateFromCurrent}
+                      disabled={isCreatingPromptTemplate}
+                      className="h-11 bg-gradient-to-r from-indigo-600 to-indigo-700"
+                    >
+                      {isCreatingPromptTemplate ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        "Kaydet"
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-slate-500 bg-slate-50 px-3 py-2 rounded-lg">
+                    Template adları ders içinde benzersiz olmalı.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center justify-between">
               <Label className="text-sm font-medium text-slate-700">
                 Ders İçin Özel Sistem Promptu
@@ -350,6 +561,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
             </p>
           </div>
         </div>
+        )}
       </div>
 
       {/* Chunking Settings Section */}

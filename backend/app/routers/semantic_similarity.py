@@ -114,11 +114,23 @@ async def quick_test(
             "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
             "Türkçe ver."
         )
-        system_prompt_used = (
-            course_settings.system_prompt
-            if course_settings.system_prompt
-            else default_system_prompt
+        active_template = getattr(
+            course_settings,
+            "active_prompt_template",
+            None,
         )
+        if active_template is not None and getattr(
+            active_template,
+            "content",
+            None,
+        ):
+            system_prompt_used = active_template.content
+        else:
+            system_prompt_used = (
+                course_settings.system_prompt
+                if course_settings.system_prompt
+                else default_system_prompt
+            )
         
         if not generated_answer:
             # Use the service's generate_answer method which includes RAG
@@ -469,6 +481,11 @@ def _process_test_case(
     """Process a single test case with retry mechanism."""
     retry_count = 0
     last_error = None
+    provided_answer = bool(
+        getattr(test_case, "generated_answer", None)
+        and str(getattr(test_case, "generated_answer")).strip()
+    )
+    force_regenerate = False
     
     while retry_count <= MAX_RETRIES:
         try:
@@ -479,8 +496,10 @@ def _process_test_case(
             generated_answer = test_case.generated_answer
             retrieved_contexts = []
             
-            if not generated_answer:
-                generated_answer, retrieved_contexts, llm_model_used = (
+            if (not generated_answer) or (
+                force_regenerate and not provided_answer
+            ):
+                generated_answer, retrieved_contexts, _llm_model_used = (
                     service.generate_answer(
                         course_id=course_id,
                         question=test_case.question,
@@ -489,6 +508,7 @@ def _process_test_case(
                         embedding_model=embedding_model,
                     )
                 )
+                force_regenerate = False
             
             # Prepare reference answers
             reference_answers = [test_case.ground_truth]
@@ -505,6 +525,24 @@ def _process_test_case(
                 retrieved_contexts=retrieved_contexts,
                 lang="tr"
             )
+
+            rouge1 = metrics.get("rouge1")
+            no_info = service._is_no_info_answer(generated_answer)
+            if (
+                rouge1 is not None
+                and rouge1 < 0.40
+                and retry_count < MAX_RETRIES
+                and (not provided_answer)
+                and retrieved_contexts
+                and (not no_info)
+            ):
+                last_error = (
+                    f"Low ROUGE-1 {rouge1:.3f} < 0.40; retrying generation"
+                )
+                retry_count += 1
+                force_regenerate = True
+                time.sleep(1)
+                continue
 
             # Calculate latency for this test case
             case_latency_ms = int(
@@ -1153,15 +1191,15 @@ async def list_wandb_runs(
 
         # Sort by created_at descending (newest first)
         all_filtered_runs.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-        
+
         # Apply pagination
         total_items = len(all_filtered_runs)
         total_pages = (total_items + limit - 1) // limit
-        
+
         start_idx = (page - 1) * limit
         end_idx = start_idx + limit
         paginated_result = all_filtered_runs[start_idx:end_idx]
-        
+
         # Return paginated result
         return {
             "runs": paginated_result,
@@ -1172,7 +1210,7 @@ async def list_wandb_runs(
                 "itemsPerPage": limit,
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error fetching W&B runs: {e}")
         raise HTTPException(
@@ -1278,19 +1316,19 @@ async def update_wandb_run(
         # Only use DB sample if field is missing and not provided in request
         cfg["llm_model_used"] = sample_result.llm_model_used
         updated.append("llm_model_used")
-        
+
     if data.embedding_model_used is not None:
         cfg["embedding_model_used"] = data.embedding_model_used
         updated.append("embedding_model_used")
     elif not cfg.get("embedding_model_used") and sample_result.embedding_model_used:
         cfg["embedding_model_used"] = sample_result.embedding_model_used
         updated.append("embedding_model_used")
-    
+
     # Update other fields if provided
     if data.llm_provider is not None:
         cfg["llm_provider"] = data.llm_provider
         updated.append("llm_provider")
-        
+
     if data.total_tests is not None:
         cfg["total_tests"] = data.total_tests
         updated.append("total_tests")
@@ -1842,6 +1880,11 @@ async def resume_batch_test_session(
                 retry_count = 0
                 last_error = None
                 success = False
+                provided_answer = bool(
+                    test_case.generated_answer
+                    and str(test_case.generated_answer).strip()
+                )
+                force_regenerate = False
                 
                 while retry_count <= MAX_RETRIES and not success:
                     try:
@@ -1852,7 +1895,10 @@ async def resume_batch_test_session(
                         generated_answer = test_case.generated_answer
                         retrieved_contexts = []
                         
-                        if not generated_answer:
+                        if (
+                            (not generated_answer)
+                            or (force_regenerate and not provided_answer)
+                        ):
                             (
                                 generated_answer,
                                 retrieved_contexts,
@@ -1862,7 +1908,9 @@ async def resume_batch_test_session(
                                 question=test_case.question,
                                 llm_provider=fresh_session.llm_provider,
                                 llm_model=fresh_session.llm_model,
+                                embedding_model=embedding_model,
                             )
+                            force_regenerate = False
 
                         # Prepare reference answers
                         reference_answers = [test_case.ground_truth]
@@ -1879,6 +1927,24 @@ async def resume_batch_test_session(
                             retrieved_contexts=retrieved_contexts,
                             lang="tr"
                         )
+
+                        rouge1 = metrics.get("rouge1")
+                        no_info = service._is_no_info_answer(generated_answer)
+                        if (
+                            rouge1 is not None
+                            and rouge1 < 0.40
+                            and retry_count < MAX_RETRIES
+                            and (not provided_answer)
+                            and retrieved_contexts
+                            and (not no_info)
+                        ):
+                            last_error = (
+                                f"Low ROUGE-1 {rouge1:.3f} < 0.40; retrying"
+                            )
+                            retry_count += 1
+                            force_regenerate = True
+                            time.sleep(1)
+                            continue
 
                         # Calculate latency for this test case
                         case_latency_ms = int(
@@ -2294,7 +2360,7 @@ async def resume_batch_test_session(
                 )
                 db.commit()
                 db.flush()
-            
+
             error = {"event": "error", "error": str(e)}
             if "wb_enabled" in locals() and wb_enabled and wb_run is not None:
                 try:
@@ -2408,16 +2474,16 @@ async def save_test_dataset(
         test_cases=json.dumps(data.test_cases),
         total_test_cases=len(data.test_cases)
     )
-    
+
     db.add(dataset)
     db.commit()
     db.refresh(dataset)
-    
+
     logger.info(
         "Test dataset saved - id: %s, name: %s, course_id: %s, test_cases: %d",
         dataset.id, dataset.name, data.course_id, len(data.test_cases)
     )
-    
+
     return {
         "id": dataset.id,
         "name": dataset.name,

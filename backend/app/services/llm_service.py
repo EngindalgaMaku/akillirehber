@@ -211,26 +211,88 @@ class LLMService:
                         f"Provider: {self.provider}, Model: {self.model}"
                     )
 
-                return message.content
+                content = message.content or ""
+                if not content.strip():
+                    if attempt == max_retries:
+                        raise LLMAPIError(
+                            "LLM returned an empty response after retries. "
+                            f"Provider: {self.provider}, Model: {self.model}"
+                        )
+                    logger.warning(
+                        "LLM returned empty response (attempt %d/%d). "
+                        "Retrying in %ss...",
+                        attempt + 1,
+                        max_retries + 1,
+                        retry_delay * (attempt + 1),
+                    )
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
 
-            except LLMAPIError:
-                # Re-raise our custom errors
-                raise
+                return content
+
+            except LLMAPIError as e:
+                error_str = str(e)
+                lower = error_str.lower()
+
+                if "data policy" in lower or "privacy" in lower:
+                    raise
+
+                retryable_api_error = any(
+                    keyword in lower
+                    for keyword in [
+                        "timeout",
+                        "connection",
+                        "rate limit",
+                        "too many requests",
+                        "overloaded",
+                        "temporarily",
+                        "server error",
+                        "invalid response",
+                        "empty choices",
+                        "none message",
+                        "503",
+                        "502",
+                        "500",
+                        "429",
+                    ]
+                )
+
+                if not retryable_api_error or attempt == max_retries:
+                    raise
+
+                logger.warning(
+                    "LLM API error (attempt %d/%d): %s. Retrying in %ss...",
+                    attempt + 1,
+                    max_retries + 1,
+                    error_str,
+                    retry_delay * (attempt + 1),
+                )
+                time.sleep(retry_delay * (attempt + 1))
+                continue
             except Exception as e:
                 error_str = str(e)
 
                 # Check if error is retryable
+                lower = error_str.lower()
                 is_retryable = any(
-                    keyword in error_str.lower()
+                    keyword in lower
                     for keyword in [
-                        'timeout', 'connection', 'rate limit',
-                        'server error', '503', '502', '500'
+                        "timeout",
+                        "connection",
+                        "rate limit",
+                        "too many requests",
+                        "overloaded",
+                        "temporarily",
+                        "server error",
+                        "503",
+                        "502",
+                        "500",
+                        "429",
                     ]
                 )
 
                 # Check for OpenRouter privacy policy error (not retryable)
-                if ("data policy" in error_str.lower() or
-                        "privacy" in error_str.lower()):
+                if "data policy" in lower or "privacy" in lower:
                     error_msg = (
                         "OpenRouter gizlilik ayarları hatası: Bu model için "
                         "https://openrouter.ai/settings/privacy adresinden "
@@ -350,7 +412,10 @@ class LLMService:
                     result = response.json()
                     # Anthropic format: result["content"][0]["text"]
                     if "content" in result and len(result["content"]) > 0:
-                        return result["content"][0]["text"]
+                        text = result["content"][0].get("text", "")
+                        if text and text.strip():
+                            return text
+                        raise LLMAPIError("z.ai returned empty response")
                     else:
                         raise LLMAPIError(
                             f"Invalid response format from z.ai API. "
@@ -363,18 +428,45 @@ class LLMService:
                     )
                     raise LLMAPIError(error_msg)
 
-            except LLMAPIError:
-                # Re-raise our custom errors
-                raise
+            except LLMAPIError as e:
+                error_str = str(e)
+                lower = error_str.lower()
+
+                non_retryable_4xx = (
+                    "status 4" in lower
+                    and "429" not in lower
+                )
+
+                if non_retryable_4xx or attempt == max_retries:
+                    raise
+
+                logger.warning(
+                    "z.ai API error (attempt %d/%d): %s. Retrying in %ss...",
+                    attempt + 1,
+                    max_retries + 1,
+                    error_str,
+                    retry_delay * (attempt + 1),
+                )
+                time.sleep(retry_delay * (attempt + 1))
+                continue
             except Exception as e:
                 error_str = str(e)
 
-                # Check if error is retryable
+                lower = error_str.lower()
                 is_retryable = any(
-                    keyword in error_str.lower()
+                    keyword in lower
                     for keyword in [
-                        'timeout', 'connection', 'rate limit',
-                        'server error', '503', '502', '500'
+                        "timeout",
+                        "connection",
+                        "rate limit",
+                        "too many requests",
+                        "overloaded",
+                        "temporarily",
+                        "server error",
+                        "503",
+                        "502",
+                        "500",
+                        "429",
                     ]
                 )
 

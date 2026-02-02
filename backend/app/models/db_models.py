@@ -77,6 +77,11 @@ class Course(Base):
     teacher = relationship("User", back_populates="courses")
     documents = relationship("Document", back_populates="course", cascade="all, delete-orphan")
     settings = relationship("CourseSettings", back_populates="course", uselist=False, cascade="all, delete-orphan")
+    prompt_templates = relationship(
+        "CoursePromptTemplate",
+        back_populates="course",
+        cascade="all, delete-orphan",
+    )
     semantic_similarity_results = relationship("SemanticSimilarityResult", back_populates="course", cascade="all, delete-orphan")
     batch_test_sessions = relationship("BatchTestSession", back_populates="course", cascade="all, delete-orphan")
     test_datasets = relationship("TestDataset", back_populates="course", cascade="all, delete-orphan")
@@ -147,6 +152,12 @@ class CourseSettings(Base):
     # System prompt for course-specific AI behavior
     system_prompt = Column(Text, nullable=True)
 
+    active_prompt_template_id = Column(
+        Integer,
+        ForeignKey("course_prompt_templates.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # Bloom-specific system prompts for test generation
     system_prompt_remembering = Column(Text, nullable=True)
     system_prompt_understanding_applying = Column(Text, nullable=True)
@@ -166,9 +177,37 @@ class CourseSettings(Base):
 
     # Relationships
     course = relationship("Course", back_populates="settings")
+    active_prompt_template = relationship(
+        "CoursePromptTemplate",
+        foreign_keys=[active_prompt_template_id],
+    )
 
     def __repr__(self):
         return f"<CourseSettings(course_id={self.course_id})>"
+
+
+class CoursePromptTemplate(Base):
+    __tablename__ = "course_prompt_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(
+        Integer,
+        ForeignKey("courses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(255), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    course = relationship("Course", back_populates="prompt_templates")
+
+    def __repr__(self):
+        return (
+            f"<CoursePromptTemplate(id={self.id}, course_id={self.course_id}, "
+            f"name={self.name})>"
+        )
 
 
 class EmbeddingStatus(str, enum.Enum):

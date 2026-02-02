@@ -8,13 +8,15 @@ cosine similarity, as well as ROUGE and BERTScore metrics.
 from typing import List, Tuple, Dict, Any, Optional
 from functools import lru_cache
 import os
+import re
 import numpy as np
 from sqlalchemy.orm import Session
 import logging
 
 from app.services.embedding_service import get_embedding_service
 from app.services.llm_service import get_llm_service
-from app.services.weaviate_service import get_weaviate_service
+from app.services.weaviate_service import get_weaviate_service, SearchResult
+from app.services.rerank_service import get_rerank_service
 from app.services.embedding_cache import EmbeddingCache
 from app.models.db_models import Course
 
@@ -79,6 +81,21 @@ class SemanticSimilarityService:
         """
         self.db = db
         self.embedding_service = get_embedding_service()
+
+    def _is_no_info_answer(self, text: Optional[str]) -> bool:
+        if not text:
+            return True
+        t = text.strip().lower()
+        if not t:
+            return True
+        patterns = [
+            r"\bbilgi\s+bulunamad[ıi]\b",
+            r"\bbulunamad[ıi]\b",
+            r"\bbulunamam[ıi]şt[ıi]r\b",
+            r"\bders\s+materyallerinde\b.*\bbilgi\s+bulunamad[ıi]\b",
+            r"\bders\s+dok[üu]manlar[ıi]nda\b.*\bbilgi\s+bulunamad[ıi]\b",
+        ]
+        return any(re.search(p, t) is not None for p in patterns)
 
     def compute_similarity(
         self,
@@ -235,6 +252,7 @@ class SemanticSimilarityService:
         try:
             from transformers.utils import logging as hf_logging
             from bert_score import score as bert_score
+            import bert_score as bert_score_pkg
 
             hf_logging.set_verbosity_error()
             hf_logging.disable_progress_bar()
@@ -243,6 +261,16 @@ class SemanticSimilarityService:
                 "ORIGINAL_BERTSCORE_MODEL",
                 "bert-base-multilingual-cased",
             )
+
+            # bert-score ships rescale baseline files per (lang, model).
+            # If missing, enabling rescale emits warnings and has no effect.
+            baseline_path = os.path.join(
+                os.path.dirname(bert_score_pkg.__file__),
+                "rescale_baseline",
+                lang,
+                f"{model_type}.tsv",
+            )
+            use_rescale = os.path.exists(baseline_path)
 
             @lru_cache(maxsize=8)
             def _cached_score(
@@ -257,7 +285,7 @@ class SemanticSimilarityService:
                     lang=language,
                     model_type=model,
                     verbose=False,
-                    rescale_with_baseline=False,
+                    rescale_with_baseline=use_rescale,
                 )
                 return (
                     float(P.mean().item()),
@@ -299,6 +327,12 @@ class SemanticSimilarityService:
             Dict with precision, recall, f1 scores, or None if unavailable
         """
         try:
+            if self._is_no_info_answer(generated_answer):
+                return {
+                    'precision': 0.0,
+                    'recall': 0.0,
+                    'f1': 0.0,
+                }
             # Use our own embedding service (OpenAI or local)
             # This is faster and doesn't require HF API
             emb1 = self.embedding_service.get_embedding(
@@ -401,6 +435,24 @@ class SemanticSimilarityService:
             'original_bertscore_f1': None,
         }
 
+        if self._is_no_info_answer(generated_answer):
+            logger.info(
+                "SemanticSimilarity: no-info answer detected; "
+                "short-circuiting metrics. gen_len=%d gt_count=%d",
+                len(generated_answer or ""),
+                len(ground_truths or []),
+            )
+            result['rouge1'] = 0.0
+            result['rouge2'] = 0.0
+            result['rougel'] = 0.0
+            result['bertscore_precision'] = 0.0
+            result['bertscore_recall'] = 0.0
+            result['bertscore_f1'] = 0.0
+            result['original_bertscore_precision'] = 0.0
+            result['original_bertscore_recall'] = 0.0
+            result['original_bertscore_f1'] = 0.0
+            return result
+
         # Compute ROUGE scores against best match
         if best_match:
             rouge_scores = self.compute_rouge_scores(
@@ -478,20 +530,68 @@ class SemanticSimilarityService:
         query_embedding_model = (
             embedding_model or settings.default_embedding_model
         )
+        weaviate_service = get_weaviate_service()
+
+        def _search(q_vector: Optional[List[float]]):
+            if q_vector:
+                return weaviate_service.hybrid_search(
+                    course_id=course_id,
+                    query=question,
+                    query_vector=q_vector,
+                    alpha=settings.search_alpha,
+                    limit=settings.search_top_k,
+                )
+            return weaviate_service.keyword_search(
+                course_id=course_id,
+                query=question,
+                limit=settings.search_top_k,
+            )
+
         query_vector = self.embedding_service.get_embedding(
             question,
-            model=query_embedding_model
+            model=query_embedding_model,
         )
+        search_results = _search(query_vector)
 
-        # Search for relevant chunks using hybrid search
-        weaviate_service = get_weaviate_service()
-        search_results = weaviate_service.hybrid_search(
-            course_id=course_id,
-            query=question,
-            query_vector=query_vector,
-            alpha=settings.search_alpha,
-            limit=settings.search_top_k
-        )
+        if (
+            settings.enable_reranker
+            and settings.reranker_provider
+            and search_results
+        ):
+            try:
+                documents_for_reranking = [
+                    {
+                        "id": str(r.chunk_id),
+                        "content": r.content,
+                        "score": r.score,
+                        "document_id": r.document_id,
+                        "chunk_index": r.chunk_index,
+                    }
+                    for r in search_results
+                ]
+                rerank_service = get_rerank_service()
+                reranked_docs = rerank_service.rerank(
+                    query=question,
+                    documents=documents_for_reranking,
+                    provider=settings.reranker_provider,
+                    model=settings.reranker_model,
+                    top_k=min(
+                        settings.reranker_top_k or 10,
+                        len(documents_for_reranking),
+                    ),
+                )
+                search_results = [
+                    SearchResult(
+                        chunk_id=int(doc["id"]),
+                        document_id=doc.get("document_id", 0),
+                        content=doc.get("content", ""),
+                        chunk_index=doc.get("chunk_index", 0),
+                        score=doc.get("relevance_score", doc.get("score", 0)),
+                    )
+                    for doc in reranked_docs
+                ]
+            except Exception as e:
+                logger.warning("Reranker failed in semantic-similarity: %s", e)
 
         # Filter by minimum relevance score if configured
         min_score = settings.min_relevance_score or 0.0
@@ -499,6 +599,67 @@ class SemanticSimilarityService:
             search_results = [
                 r for r in search_results if r.score >= min_score
             ]
+
+        if (
+            not search_results
+            and query_embedding_model != settings.default_embedding_model
+        ):
+            fallback_vector = self.embedding_service.get_embedding(
+                question,
+                model=settings.default_embedding_model,
+            )
+            search_results = _search(fallback_vector)
+
+            if (
+                settings.enable_reranker
+                and settings.reranker_provider
+                and search_results
+            ):
+                try:
+                    documents_for_reranking = [
+                        {
+                            "id": str(r.chunk_id),
+                            "content": r.content,
+                            "score": r.score,
+                            "document_id": r.document_id,
+                            "chunk_index": r.chunk_index,
+                        }
+                        for r in search_results
+                    ]
+                    rerank_service = get_rerank_service()
+                    reranked_docs = rerank_service.rerank(
+                        query=question,
+                        documents=documents_for_reranking,
+                        provider=settings.reranker_provider,
+                        model=settings.reranker_model,
+                        top_k=min(
+                            settings.reranker_top_k or 10,
+                            len(documents_for_reranking),
+                        ),
+                    )
+                    search_results = [
+                        SearchResult(
+                            chunk_id=int(doc["id"]),
+                            document_id=doc.get("document_id", 0),
+                            content=doc.get("content", ""),
+                            chunk_index=doc.get("chunk_index", 0),
+                            score=doc.get(
+                                "relevance_score",
+                                doc.get("score", 0),
+                            ),
+                        )
+                        for doc in reranked_docs
+                    ]
+                except Exception as e:
+                    logger.warning(
+                        "Reranker failed in semantic-similarity: %s",
+                        e,
+                    )
+
+            if min_score > 0 and search_results:
+                search_results = [
+                    r for r in search_results if r.score >= min_score
+                ]
 
         # Build context from search results
         contexts = [result.content for result in search_results]
@@ -510,7 +671,6 @@ class SemanticSimilarityService:
                 "Bu konuyla ilgili ders materyallerinde bilgi "
                 "bulunamadı.",
                 [],
-                f"{actual_provider}/{actual_model}",
                 f"{actual_provider}/{actual_model}"
             )
 
@@ -525,9 +685,16 @@ class SemanticSimilarityService:
         )
 
         system_prompt = (
-            settings.system_prompt
-            if settings.system_prompt
-            else default_system_prompt
+            settings.active_prompt_template.content
+            if (
+                getattr(settings, "active_prompt_template", None) is not None
+                and getattr(settings.active_prompt_template, "content", None)
+            )
+            else (
+                settings.system_prompt
+                if settings.system_prompt
+                else default_system_prompt
+            )
         )
 
         messages = [

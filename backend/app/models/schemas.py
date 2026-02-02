@@ -384,6 +384,7 @@ class CourseSettingsBase(BaseModel):
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     llm_max_tokens: int = Field(default=1000, ge=100, le=4000)
     system_prompt: Optional[str] = None
+    active_prompt_template_id: Optional[int] = None
     system_prompt_remembering: Optional[str] = None
     system_prompt_understanding_applying: Optional[str] = None
     system_prompt_analyzing_evaluating: Optional[str] = None
@@ -414,6 +415,7 @@ class CourseSettingsUpdate(BaseModel):
     llm_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     llm_max_tokens: Optional[int] = Field(default=None, ge=100, le=4000)
     system_prompt: Optional[str] = Field(default=None, max_length=2000)
+    active_prompt_template_id: Optional[int] = None
     system_prompt_remembering: Optional[str] = (
         Field(
             default=None,
@@ -467,6 +469,33 @@ class CourseSettingsResponse(CourseSettingsBase):
     course_id: int
     created_at: datetime
     updated_at: datetime
+
+
+class CoursePromptTemplateBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    content: str = Field(..., min_length=1)
+
+
+class CoursePromptTemplateCreate(CoursePromptTemplateBase):
+    pass
+
+
+class CoursePromptTemplateUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    content: Optional[str] = Field(default=None, min_length=1)
+
+
+class CoursePromptTemplateResponse(CoursePromptTemplateBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    course_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CoursePromptTemplateListResponse(BaseModel):
+    templates: List[CoursePromptTemplateResponse]
 
 
 class LLMProvider(str, Enum):
@@ -971,7 +1000,8 @@ class QuickTestResultListResponse(BaseModel):
     results: List[QuickTestResultResponse]
     total: int
     groups: List[RagasGroupInfo]
-    aggregate: Optional[dict] = None  # Contains avg metrics and test_parameters
+    # Contains avg metrics and test_parameters
+    aggregate: Optional[dict] = None
 
 
 # ==================== Custom LLM Model Schemas ====================
