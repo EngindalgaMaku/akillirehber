@@ -372,13 +372,13 @@ class SemanticSimilarityService:
     ) -> Dict[str, Any]:
         """Compute all available metrics for answer evaluation.
 
-        Computes cosine similarity, ROUGE, BERTScore, Hit@1, and MRR metrics.
+        Computes cosine similarity, ROUGE, and BERTScore metrics.
 
         Args:
             generated_answer: The generated answer to evaluate
             ground_truths: List of ground truth answers
             embedding_model: Embedding model to use for cosine similarity
-            retrieved_contexts: List of retrieved chunks from RAG
+            retrieved_contexts: List of retrieved chunks from RAG (not used)
             lang: Language code (not used in lightweight implementation)
 
         Returns:
@@ -391,41 +391,12 @@ class SemanticSimilarityService:
             embedding_model
         )
 
-        # Compute Hit@1 and MRR based on retrieved contexts
-        hit_at_1 = 0.0
-        mrr = 0.0
-
-        if (retrieved_contexts and len(retrieved_contexts) > 0 and
-                ground_truths):
-            best_rank = float('inf')
-            RELEVANCE_THRESHOLD = 0.5
-
-            for ground_truth in ground_truths:
-                for rank, context in enumerate(retrieved_contexts, start=1):
-                    similarity = self.compute_similarity(
-                        context,
-                        ground_truth,
-                        embedding_model
-                    )
-
-                    if similarity >= RELEVANCE_THRESHOLD:
-                        if rank < best_rank:
-                            best_rank = rank
-                        break
-
-            if best_rank != float('inf'):
-                hit_at_1 = 1.0 if best_rank == 1 else 0.0
-                mrr = 1.0 / best_rank
-            else:
-                hit_at_1 = 0.0
-                mrr = 0.0
-
         result = {
             'similarity_score': max_score,
             'best_match_ground_truth': best_match,
             'all_scores': all_scores,
-            'hit_at_1': hit_at_1,
-            'mrr': mrr,
+            'hit_at_1': None,  # Not used
+            'mrr': None,  # Not used
             'rouge1': None,
             'rouge2': None,
             'rougel': None,

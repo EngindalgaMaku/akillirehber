@@ -394,7 +394,15 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
         )
 
         # Use evaluation_model from input if provided, otherwise use config
+        # If evaluation_model contains provider prefix (e.g., "apiclaudegg/gpt-5.1"), extract just the model name
         model_to_use = input_data.evaluation_model or llm_config["model"]
+        if model_to_use and "/" in model_to_use:
+            # Extract model name from "provider/model" format
+            model_to_use = model_to_use.split("/", 1)[1]
+            logger.info(
+                "[RAGAS DEBUG] Extracted model name from provider/model format: %s",
+                model_to_use
+            )
         
         logger.info(
             "[RAGAS DEBUG] Kullanılacak model: %s (provider: %s)",

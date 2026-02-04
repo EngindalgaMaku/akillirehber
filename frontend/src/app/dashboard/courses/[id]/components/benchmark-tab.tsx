@@ -45,6 +45,7 @@ interface BenchmarkResult {
   tasks_run: string[];
   total_time_seconds: number;
   timestamp: string;
+  wb_url?: string;
   summary: {
     overall_average: number;
     total_tasks: number;

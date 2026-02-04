@@ -129,6 +129,7 @@ class CourseSettings(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"), unique=True, nullable=False)
+    vector_store = Column(String(50), default="weaviate", nullable=False)
     
     # Chunking defaults
     default_chunk_strategy = Column(String(50), default="recursive")
@@ -722,6 +723,15 @@ class SemanticSimilarityResult(Base):
     embedding_model_used = Column(String(255), nullable=False)
     llm_model_used = Column(String(255), nullable=True)
     
+    # Search configuration used
+    search_top_k = Column(Integer, nullable=True)
+    search_alpha = Column(Float, nullable=True)
+    
+    # Reranker configuration
+    reranker_used = Column(Boolean, nullable=True, default=False)
+    reranker_provider = Column(String(50), nullable=True)
+    reranker_model = Column(String(255), nullable=True)
+    
     # Audit fields
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -763,6 +773,9 @@ class BatchTestSession(Base):
     llm_provider = Column(String(50), nullable=True)
     llm_model = Column(String(255), nullable=True)
     embedding_model_used = Column(String(255), nullable=True)
+    # Search configuration
+    search_top_k = Column(Integer, nullable=True)
+    search_alpha = Column(Float, nullable=True)
     # Reranker configuration
     reranker_used = Column(Boolean, nullable=True, default=False)
     reranker_provider = Column(String(50), nullable=True)

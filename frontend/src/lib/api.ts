@@ -174,6 +174,7 @@ export interface CourseSettings {
   reranker_provider: string | null;
   reranker_model: string | null;
   reranker_top_k: number;
+  vector_store: string; // "weaviate" or "chromadb"
   created_at: string;
   updated_at: string;
 }
@@ -199,6 +200,7 @@ export interface CourseSettingsUpdate {
   reranker_provider?: string;
   reranker_model?: string;
   reranker_top_k?: number;
+  vector_store?: string; // "weaviate" or "chromadb"
 }
 
 export interface CoursePromptTemplate {
@@ -377,7 +379,19 @@ class ApiClient {
       const error: ApiError = await response.json().catch(() => ({
         detail: "Bir hata oluştu",
       }));
-      throw new Error(error.detail);
+      
+      // Handle detail as string or object
+      let errorMessage = "Bir hata oluştu";
+      if (typeof error.detail === "string") {
+        errorMessage = error.detail;
+      } else if (error.detail && typeof error.detail === "object") {
+        // If detail is an object, try to extract message
+        errorMessage = JSON.stringify(error.detail);
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      throw new Error(errorMessage);
     }
 
     // Handle 204 No Content responses
@@ -1457,6 +1471,30 @@ class ApiClient {
     await this.request(`/api/ragas/quick-test-results/${resultId}`, { method: "DELETE" });
   }
 
+  async exportQuickTestResultsToWandB(courseId: number, groupName: string): Promise<{
+    success: boolean;
+    run_name: string;
+    run_id: string;
+    run_url: string;
+    exported_count: number;
+    aggregate_metrics: {
+      avg_faithfulness: number | null;
+      avg_answer_relevancy: number | null;
+      avg_context_precision: number | null;
+      avg_context_recall: number | null;
+      avg_answer_correctness: number | null;
+      avg_latency_ms: number | null;
+    };
+  }> {
+    return this.request(`/api/ragas/quick-test-results/wandb-export`, {
+      method: "POST",
+      body: JSON.stringify({
+        course_id: courseId,
+        group_name: groupName,
+      }),
+    });
+  }
+
   // ==================== Semantic Similarity Endpoints ====================
 
   async semanticSimilarityQuickTest(data: SemanticSimilarityQuickTestRequest): Promise<SemanticSimilarityQuickTestResponse> {
@@ -2401,6 +2439,12 @@ export interface SemanticSimilarityResult {
   // Retrieval metrics
   hit_at_1?: number;
   mrr?: number;
+  // Search and reranker parameters
+  search_top_k?: number;
+  search_alpha?: number;
+  reranker_used?: boolean;
+  reranker_provider?: string;
+  reranker_model?: string;
   created_by: number;
   created_at: string;
 }
@@ -2408,6 +2452,24 @@ export interface SemanticSimilarityResult {
 export interface SemanticSimilarityGroupInfo {
   name: string;
   created_at: string | null;
+  test_count: number;
+  avg_rouge1?: number;
+  avg_rouge2?: number;
+  avg_rougel?: number;
+  avg_bertscore_precision?: number;
+  avg_bertscore_recall?: number;
+  avg_bertscore_f1?: number;
+  avg_original_bertscore_precision?: number;
+  avg_original_bertscore_recall?: number;
+  avg_original_bertscore_f1?: number;
+  avg_latency_ms?: number;
+  llm_model?: string;
+  embedding_model?: string;
+  search_top_k?: number;
+  search_alpha?: number;
+  reranker_used?: boolean;
+  reranker_provider?: string;
+  reranker_model?: string;
 }
 
 export interface SemanticSimilarityResultListResponse {

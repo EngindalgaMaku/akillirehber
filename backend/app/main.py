@@ -3,7 +3,11 @@ RAG Educational Chatbot - FastAPI Backend
 Main application entry point with CORS configuration
 """
 
+import warnings
 from contextlib import asynccontextmanager
+
+# Suppress ResourceWarning for unclosed sockets (common in async/threading)
+warnings.filterwarnings("ignore", category=ResourceWarning)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

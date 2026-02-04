@@ -5,7 +5,8 @@ import os
 import time
 import json
 import asyncio
-from typing import Optional, List
+import uuid
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -53,6 +54,40 @@ router = APIRouter(
     prefix="/api/semantic-similarity",
     tags=["semantic-similarity"]
 )
+
+# ==================== Cancellation Manager ====================
+# Global dictionary to track active tests and their cancellation flags
+_active_tests: Dict[str, Dict] = {}
+
+def create_test_id() -> str:
+    """Generate a unique test ID."""
+    return str(uuid.uuid4())
+
+def register_test(test_id: str) -> None:
+    """Register a new test with cancellation flag."""
+    _active_tests[test_id] = {
+        "cancelled": False,
+        "start_time": datetime.now(timezone.utc)
+    }
+    logger.info(f"Test registered: {test_id}")
+
+def is_test_cancelled(test_id: str) -> bool:
+    """Check if a test has been cancelled."""
+    return _active_tests.get(test_id, {}).get("cancelled", False)
+
+def cancel_test(test_id: str) -> bool:
+    """Cancel a running test."""
+    if test_id in _active_tests:
+        _active_tests[test_id]["cancelled"] = True
+        logger.info(f"Test cancelled: {test_id}")
+        return True
+    return False
+
+def unregister_test(test_id: str) -> None:
+    """Remove test from active tests."""
+    if test_id in _active_tests:
+        del _active_tests[test_id]
+        logger.info(f"Test unregistered: {test_id}")
 
 
 class WandbExportRequest(BaseModel):
@@ -421,7 +456,12 @@ async def batch_test_stream(
                         data.llm_model,
                         embedding_model,
                         system_prompt_used,
-                        MAX_RETRIES
+                        MAX_RETRIES,
+                        data.search_top_k,
+                        data.search_alpha,
+                        data.reranker_used,
+                        data.reranker_provider,
+                        data.reranker_model
                     ): idx
                     for idx, test_case in enumerate(data.test_cases)
                 }
@@ -476,7 +516,12 @@ def _process_test_case(
     llm_model: str,
     embedding_model: str,
     system_prompt_used: str,
-    MAX_RETRIES: int
+    MAX_RETRIES: int,
+    search_top_k: int = None,
+    search_alpha: float = None,
+    reranker_used: bool = None,
+    reranker_provider: str = None,
+    reranker_model: str = None
 ) -> dict:
     """Process a single test case with retry mechanism."""
     retry_count = 0
@@ -586,6 +631,11 @@ def _process_test_case(
                     "retrieved_contexts":
                         retrieved_contexts if retrieved_contexts else None,
                     "system_prompt_used": system_prompt_used,
+                    "search_top_k": search_top_k,
+                    "search_alpha": search_alpha,
+                    "reranker_used": reranker_used,
+                    "reranker_provider": reranker_provider,
+                    "reranker_model": reranker_model,
                 },
                 "success": True
             }
@@ -693,6 +743,11 @@ async def save_result(
         embedding_model_used=data.embedding_model_used,
         llm_model_used=data.llm_model_used,
         latency_ms=data.latency_ms,
+        search_top_k=data.search_top_k,
+        search_alpha=data.search_alpha,
+        reranker_used=data.reranker_used,
+        reranker_provider=data.reranker_provider,
+        reranker_model=data.reranker_model,
         created_by=current_user.id,
     )
     db.add(result)
@@ -769,15 +824,31 @@ async def list_results(
         .all()
     )
 
-    # Get unique group names with their latest creation date,
-    # sorted by newest first
+    # Get unique group names with their statistics
     from sqlalchemy import func
 
     groups_query = db.query(
         SemanticSimilarityResult.group_name,
-        func.max(SemanticSimilarityResult.created_at).label(
-            'latest_created_at'
-        )
+        func.max(SemanticSimilarityResult.created_at).label('latest_created_at'),
+        func.count(SemanticSimilarityResult.id).label('test_count'),
+        func.avg(SemanticSimilarityResult.rouge1).label('avg_rouge1'),
+        func.avg(SemanticSimilarityResult.rouge2).label('avg_rouge2'),
+        func.avg(SemanticSimilarityResult.rougel).label('avg_rougel'),
+        func.avg(SemanticSimilarityResult.bertscore_precision).label('avg_bertscore_precision'),
+        func.avg(SemanticSimilarityResult.bertscore_recall).label('avg_bertscore_recall'),
+        func.avg(SemanticSimilarityResult.bertscore_f1).label('avg_bertscore_f1'),
+        func.avg(SemanticSimilarityResult.original_bertscore_precision).label('avg_original_bertscore_precision'),
+        func.avg(SemanticSimilarityResult.original_bertscore_recall).label('avg_original_bertscore_recall'),
+        func.avg(SemanticSimilarityResult.original_bertscore_f1).label('avg_original_bertscore_f1'),
+        func.avg(SemanticSimilarityResult.latency_ms).label('avg_latency_ms'),
+        # Get first non-null values for metadata
+        func.max(SemanticSimilarityResult.llm_model_used).label('llm_model'),
+        func.max(SemanticSimilarityResult.embedding_model_used).label('embedding_model'),
+        func.max(SemanticSimilarityResult.search_top_k).label('search_top_k'),
+        func.max(SemanticSimilarityResult.search_alpha).label('search_alpha'),
+        func.bool_or(SemanticSimilarityResult.reranker_used).label('reranker_used'),
+        func.max(SemanticSimilarityResult.reranker_provider).label('reranker_provider'),
+        func.max(SemanticSimilarityResult.reranker_model).label('reranker_model'),
     ).filter(
         SemanticSimilarityResult.course_id == course_id,
         SemanticSimilarityResult.group_name.isnot(None)
@@ -787,14 +858,40 @@ async def list_results(
         func.max(SemanticSimilarityResult.created_at).desc()
     ).all()
 
-    # Return as list of dicts with group name and creation date
-    groups = [
-        {
+    # Return as list of dicts with group statistics
+    groups = []
+    for g in groups_query:
+        if not g[0]:  # Skip if group_name is None
+            continue
+        
+        group_dict = {
             "name": g[0],
-            "created_at": g[1].isoformat() if g[1] else None
+            "created_at": g[1].isoformat() if g[1] else None,
+            "test_count": g[2] or 0,
+            "avg_rouge1": float(g[3]) if g[3] is not None else None,
+            "avg_rouge2": float(g[4]) if g[4] is not None else None,
+            "avg_rougel": float(g[5]) if g[5] is not None else None,
+            "avg_bertscore_precision": float(g[6]) if g[6] is not None else None,
+            "avg_bertscore_recall": float(g[7]) if g[7] is not None else None,
+            "avg_bertscore_f1": float(g[8]) if g[8] is not None else None,
+            "avg_original_bertscore_precision": float(g[9]) if g[9] is not None else None,
+            "avg_original_bertscore_recall": float(g[10]) if g[10] is not None else None,
+            "avg_original_bertscore_f1": float(g[11]) if g[11] is not None else None,
+            "avg_latency_ms": float(g[12]) if g[12] is not None else None,
+            "llm_model": g[13],
+            "embedding_model": g[14],
+            "search_top_k": g[15],
+            "search_alpha": float(g[16]) if g[16] is not None else None,
+            "reranker_used": g[17],
+            "reranker_provider": g[18],
+            "reranker_model": g[19],
         }
-        for g in groups_query if g[0]
-    ]
+        groups.append(group_dict)
+    
+    # DEBUG: Log groups
+    print(f"[SEMANTIC SIMILARITY DEBUG] Found {len(groups)} groups for course {course_id}")
+    if groups:
+        print(f"[SEMANTIC SIMILARITY DEBUG] First group: {groups[0]}")
 
     # Calculate aggregate statistics for ALL results (not just current page)
     all_results_query = db.query(SemanticSimilarityResult).filter(
@@ -1571,6 +1668,8 @@ async def create_batch_test_session(
         llm_provider=data.llm_provider,
         llm_model=data.llm_model,
         embedding_model_used=(data.embedding_model or course_settings.default_embedding_model),
+        search_top_k=data.search_top_k,
+        search_alpha=data.search_alpha,
         reranker_used=data.reranker_used,
         reranker_provider=data.reranker_provider,
         reranker_model=data.reranker_model,
@@ -1600,6 +1699,8 @@ async def create_batch_test_session(
         llm_provider=session.llm_provider,
         llm_model=session.llm_model,
         embedding_model_used=session.embedding_model_used,
+        search_top_k=session.search_top_k,
+        search_alpha=session.search_alpha,
         reranker_used=session.reranker_used,
         reranker_provider=session.reranker_provider,
         reranker_model=session.reranker_model,
@@ -2017,6 +2118,11 @@ async def resume_batch_test_session(
                             embedding_model_used=embedding_model,
                             llm_model_used=llm_model_used,
                             latency_ms=case_latency_ms,
+                            search_top_k=fresh_session.search_top_k,
+                            search_alpha=fresh_session.search_alpha,
+                            reranker_used=fresh_session.reranker_used,
+                            reranker_provider=fresh_session.reranker_provider,
+                            reranker_model=fresh_session.reranker_model,
                             created_by=current_user.id,
                         )
                         db.add(result)
@@ -2587,3 +2693,394 @@ async def delete_test_dataset(
     )
     
     return {"message": "Dataset deleted successfully"}
+
+
+# ==================== Cancellable Batch Test Endpoint ====================
+
+@router.post("/batch-test-stream-cancellable")
+async def batch_test_stream_cancellable(
+    data: SemanticSimilarityBatchTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream batch semantic similarity test results with cancellation support.
+    
+    This is a new endpoint that supports cancellation. The original
+    /batch-test-stream endpoint remains unchanged for backward compatibility.
+    """
+    verify_course_access(db, data.course_id, current_user)
+    course_settings = get_or_create_settings(db, data.course_id)
+
+    # Generate unique test ID
+    test_id = create_test_id()
+    register_test(test_id)
+
+    async def generate():
+        try:
+            service = SemanticSimilarityService(db)
+            embedding_model = data.embedding_model or course_settings.default_embedding_model
+            llm_model_used = None
+            
+            # Get system prompt to include in results
+            default_system_prompt = (
+                "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
+                "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
+                "Türkçe ver."
+            )
+            system_prompt_used = (
+                course_settings.system_prompt
+                if course_settings.system_prompt
+                else default_system_prompt
+            )
+            
+            total_count = len(data.test_cases)
+            completed_count = 0
+            failed_count = 0
+            MAX_RETRIES = 2
+            MAX_WORKERS = 1 if (embedding_model or "").startswith("ollama/") else 5
+
+            # Send test_id to client first
+            init_event = {
+                "event": "init",
+                "test_id": test_id,
+                "total": total_count
+            }
+            yield f"data: {json.dumps(init_event, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0)
+
+            # Process test cases in parallel using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                # Submit all test cases to executor
+                future_to_index = {
+                    executor.submit(
+                        _process_test_case_cancellable,
+                        test_id,
+                        idx,
+                        test_case,
+                        service,
+                        data.course_id,
+                        data.llm_provider,
+                        data.llm_model,
+                        embedding_model,
+                        system_prompt_used,
+                        MAX_RETRIES,
+                        data.search_top_k,
+                        data.search_alpha,
+                        data.reranker_used,
+                        data.reranker_provider,
+                        data.reranker_model
+                    ): idx
+                    for idx, test_case in enumerate(data.test_cases)
+                }
+
+                # Collect results as they complete
+                for future in as_completed(future_to_index.keys()):
+                    # Check for cancellation
+                    if is_test_cancelled(test_id):
+                        logger.info(f"Test {test_id} cancelled, stopping...")
+                        # Cancel remaining futures
+                        for f in future_to_index.keys():
+                            f.cancel()
+                        
+                        cancel_event = {
+                            "event": "cancelled",
+                            "test_id": test_id,
+                            "completed": completed_count,
+                            "total": total_count
+                        }
+                        yield f"data: {json.dumps(cancel_event, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0)
+                        break
+                    
+                    result = future.result()
+                    
+                    if result["success"]:
+                        completed_count += 1
+                    else:
+                        failed_count += 1
+                        completed_count += 1
+
+                    # Send progress event
+                    yield f"data: {json.dumps(result, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0)
+
+            # Only send completion if not cancelled
+            if not is_test_cancelled(test_id):
+                completion = {
+                    "event": "complete",
+                    "test_id": test_id,
+                    "total": total_count,
+                    "completed": completed_count,
+                    "failed": failed_count,
+                    "embedding_model_used": embedding_model,
+                    "llm_model_used": llm_model_used
+                }
+                yield f"data: {json.dumps(completion, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0)
+
+        except Exception as e:
+            logger.error("Stream error: %s", str(e))
+            error = {
+                "event": "error",
+                "test_id": test_id,
+                "error": str(e)
+            }
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0)
+        finally:
+            # Clean up
+            unregister_test(test_id)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+def _process_test_case_cancellable(
+    test_id: str,
+    idx: int,
+    test_case,
+    service,
+    course_id: int,
+    llm_provider: str,
+    llm_model: str,
+    embedding_model: str,
+    system_prompt_used: str,
+    MAX_RETRIES: int,
+    search_top_k: int = None,
+    search_alpha: float = None,
+    reranker_used: bool = None,
+    reranker_provider: str = None,
+    reranker_model: str = None
+) -> dict:
+    """Process a single test case with cancellation support."""
+    # CRITICAL: Create a new database session for this thread
+    from app.database import SessionLocal
+    db = SessionLocal()
+    
+    try:
+        # Create a new service instance with this thread's db session
+        thread_service = SemanticSimilarityService(db)
+        
+        retry_count = 0
+        last_error = None
+        provided_answer = bool(
+            getattr(test_case, "generated_answer", None)
+            and str(getattr(test_case, "generated_answer")).strip()
+        )
+        force_regenerate = False
+        
+        while retry_count <= MAX_RETRIES:
+            # Check for cancellation before processing
+            if is_test_cancelled(test_id):
+                return {
+                    "event": "progress",
+                    "index": idx,
+                    "result": {
+                        "question": test_case.question,
+                        "ground_truth": test_case.ground_truth,
+                        "generated_answer": "Test cancelled",
+                        "similarity_score": None,
+                        "error_message": "Test cancelled by user",
+                    },
+                    "success": False
+                }
+            
+            try:
+                case_start_time = time.time()
+                
+                # Generate answer if not provided
+                generated_answer = test_case.generated_answer
+                retrieved_contexts = []
+                
+                if (not generated_answer) or (force_regenerate and not provided_answer):
+                    generated_answer, retrieved_contexts, _llm_model_used = (
+                        thread_service.generate_answer(
+                            course_id=course_id,
+                            question=test_case.question,
+                            llm_provider=llm_provider,
+                            llm_model=llm_model,
+                            embedding_model=embedding_model,
+                        )
+                    )
+                    force_regenerate = False
+                
+                # Check cancellation again after potentially long operation
+                if is_test_cancelled(test_id):
+                    return {
+                        "event": "progress",
+                        "index": idx,
+                        "result": {
+                            "question": test_case.question,
+                            "ground_truth": test_case.ground_truth,
+                            "generated_answer": "Test cancelled",
+                            "similarity_score": None,
+                            "error_message": "Test cancelled by user",
+                        },
+                        "success": False
+                    }
+                
+                # Prepare reference answers
+                reference_answers = [test_case.ground_truth]
+                if test_case.alternative_ground_truths:
+                    reference_answers.extend(test_case.alternative_ground_truths)
+
+                # Compute all metrics
+                metrics = thread_service.compute_all_metrics(
+                    generated_answer,
+                    reference_answers,
+                    embedding_model,
+                    retrieved_contexts=retrieved_contexts,
+                    lang="tr"
+                )
+
+                rouge1 = metrics.get("rouge1")
+                no_info = thread_service._is_no_info_answer(generated_answer)
+                if (
+                    rouge1 is not None
+                    and rouge1 < 0.40
+                    and retry_count < MAX_RETRIES
+                    and (not provided_answer)
+                    and retrieved_contexts
+                    and (not no_info)
+                ):
+                    last_error = f"Low ROUGE-1 {rouge1:.3f} < 0.40; retrying generation"
+                    retry_count += 1
+                    force_regenerate = True
+                    time.sleep(1)
+                    continue
+
+                case_latency_ms = int((time.time() - case_start_time) * 1000)
+
+                result = {
+                    "event": "progress",
+                    "index": idx,
+                    "result": {
+                        "question": test_case.question,
+                        "ground_truth": test_case.ground_truth,
+                        "generated_answer": generated_answer,
+                        "bloom_level": test_case.bloom_level if hasattr(test_case, 'bloom_level') else None,
+                        "similarity_score": metrics['similarity_score'],
+                        "best_match_ground_truth": metrics['best_match_ground_truth'],
+                        "rouge1": metrics.get('rouge1'),
+                        "rouge2": metrics.get('rouge2'),
+                        "rougel": metrics.get('rougel'),
+                        "bertscore_precision": metrics.get('bertscore_precision'),
+                        "bertscore_recall": metrics.get('bertscore_recall'),
+                        "bertscore_f1": metrics.get('bertscore_f1'),
+                        "original_bertscore_precision": metrics.get('original_bertscore_precision'),
+                        "original_bertscore_recall": metrics.get('original_bertscore_recall'),
+                        "original_bertscore_f1": metrics.get('original_bertscore_f1'),
+                        "hit_at_1": metrics.get('hit_at_1'),
+                        "mrr": metrics.get('mrr'),
+                        "latency_ms": case_latency_ms,
+                        "retrieved_contexts": retrieved_contexts if retrieved_contexts else None,
+                        "system_prompt_used": system_prompt_used,
+                        "search_top_k": search_top_k,
+                        "search_alpha": search_alpha,
+                        "reranker_used": reranker_used,
+                        "reranker_provider": reranker_provider,
+                        "reranker_model": reranker_model,
+                    },
+                    "success": True
+                }
+                return result
+
+            except Exception as e:
+                last_error = str(e)
+                retry_count += 1
+                
+                if retry_count <= MAX_RETRIES:
+                    logger.warning(
+                        "Test case %d attempt %d failed: %s. Retrying...",
+                        idx, retry_count, last_error
+                    )
+                    time.sleep(1)
+                else:
+                    logger.error(
+                        "Test case %d failed after %d attempts: %s.",
+                        idx, MAX_RETRIES, last_error
+                    )
+                    
+                    error_result = {
+                        "event": "progress",
+                        "index": idx,
+                        "result": {
+                            "question": test_case.question,
+                            "ground_truth": test_case.ground_truth,
+                            "generated_answer": test_case.generated_answer or "N/A",
+                            "similarity_score": None,
+                            "best_match_ground_truth": None,
+                            "rouge1": None,
+                            "rouge2": None,
+                            "rougel": None,
+                            "bertscore_precision": None,
+                            "bertscore_recall": None,
+                            "bertscore_f1": None,
+                            "original_bertscore_precision": None,
+                            "original_bertscore_recall": None,
+                            "original_bertscore_f1": None,
+                            "hit_at_1": None,
+                            "mrr": None,
+                            "latency_ms": 0,
+                            "retrieved_contexts": None,
+                            "system_prompt_used": system_prompt_used,
+                            "error_message": last_error,
+                        },
+                        "success": False
+                    }
+                    return error_result
+    finally:
+        # CRITICAL: Close the database session
+        db.close()
+
+
+@router.post("/cancel-test/{test_id}")
+async def cancel_test_endpoint(
+    test_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Cancel a running semantic similarity test.
+    
+    This endpoint allows users to stop a long-running test.
+    """
+    success = cancel_test(test_id)
+    
+    if success:
+        return {
+            "success": True,
+            "message": f"Test {test_id} cancellation requested",
+            "test_id": test_id
+        }
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Test {test_id} not found or already completed"
+        )
+
+
+@router.get("/active-tests")
+async def get_active_tests(
+    current_user: User = Depends(get_current_user),
+):
+    """Get list of currently active tests.
+    
+    Useful for debugging and monitoring.
+    """
+    active = []
+    for test_id, info in _active_tests.items():
+        active.append({
+            "test_id": test_id,
+            "start_time": info["start_time"].isoformat(),
+            "cancelled": info["cancelled"]
+        })
+    
+    return {
+        "active_tests": active,
+        "count": len(active)
+    }

@@ -208,7 +208,9 @@ export default function MTEBBenchmarkPage() {
       console.log("Available rerankers set successfully");
     } catch (error) {
       console.error("Failed to fetch rerankers:", error);
-      console.error("Error details:", error.message);
+      if (error instanceof Error) {
+        console.error("Error details:", error.message);
+      }
       setAvailableRerankers([]);
     }
   };
@@ -357,7 +359,8 @@ export default function MTEBBenchmarkPage() {
       await fetchHistory(); // Refresh history
     } catch (error) {
       console.error("Comparison failed:", error);
-      alert(`Comparison failed: ${error.message}\n\nCheck the browser console for details.`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      alert(`Comparison failed: ${errorMessage}\n\nCheck the browser console for details.`);
     } finally {
       setIsLoading(false);
     }
@@ -696,7 +699,7 @@ export default function MTEBBenchmarkPage() {
               <Button 
                 onClick={() => {
                   // Load demo data to show what the UI looks like
-                  const demoData = {
+                  const demoData: any = {
                     models: selectedModels.length >= 2 ? selectedModels : ["openai/text-embedding-3-small", "openai/text-embedding-3-large"],
                     tasks: selectedTasks.length > 0 ? selectedTasks.slice(0, 5) : ["Banking77Classification.v2", "ImdbClassification.v2", "MSMARCO", "ArxivClusteringP2P.v2", "AskUbuntuDupQuestions"],
                     best_model: "openai/text-embedding-3-large",

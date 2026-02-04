@@ -9,10 +9,7 @@ import {
   SemanticSimilarityQuickTestResponse,
   SemanticSimilarityBatchTestResponse,
   SemanticSimilarityResult,
-  SemanticSimilarityResultListResponse,
-  SemanticSimilarityGroupInfo,
-  BatchTestSession,
-  BatchTestSessionListResponse
+  BatchTestSession
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -139,6 +136,10 @@ export default function SemanticSimilarityPage() {
   const [batchTestSessions, setBatchTestSessions] = useState<BatchTestSession[]>([]);
   const [isSessionsLoading, setIsSessionsLoading] = useState(false);
   const [isResumingSession, setIsResumingSession] = useState(false);
+  
+  // Cancellation State
+  const [currentTestId, setCurrentTestId] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   // Test Dataset State
   const [testDatasets, setTestDatasets] = useState<any[]>([]);
@@ -147,19 +148,6 @@ export default function SemanticSimilarityPage() {
   const [showSaveDatasetDialog, setShowSaveDatasetDialog] = useState(false);
   const [datasetName, setDatasetName] = useState("");
   const [datasetDescription, setDatasetDescription] = useState("");
-
-  // Saved Results State
-  const [isSavedResultsExpanded, setIsSavedResultsExpanded] = useState(false);
-  const [savedResults, setSavedResults] = useState<SemanticSimilarityResult[]>([]);
-  const [savedResultsGroups, setSavedResultsGroups] = useState<SemanticSimilarityGroupInfo[]>([]);
-  const [savedResultsTotal, setSavedResultsTotal] = useState(0);
-  const [savedResultsAggregate, setSavedResultsAggregate] = useState<
-    SemanticSimilarityResultListResponse["aggregate"] | null
-  >(null);
-  const [selectedGroup, setSelectedGroup] = useState<string>("");
-  const [resultsPage, setResultsPage] = useState(0);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const RESULTS_PER_PAGE = 10;
 
   // Save Dialog State
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
@@ -170,29 +158,22 @@ export default function SemanticSimilarityPage() {
   // View Result Dialog State
   const [viewingResult, setViewingResult] = useState<SemanticSimilarityResult | null>(null);
 
-  // Statistics Modal State
-  const [isStatisticsModalOpen, setIsStatisticsModalOpen] = useState(false);
-  const [statisticsModalResults, setStatisticsModalResults] = useState<SemanticSimilarityResult[]>([]);
-  const [isLoadingStatisticsResults, setIsLoadingStatisticsResults] = useState(false);
-
-  // PDF Export State
-  const [isPdfGenerating, setIsPdfGenerating] = useState(false);
-
-  // W&B Export State
-  const [isWandbExporting, setIsWandbExporting] = useState(false);
-
-  // W&B Run Management State
-  const [isWandbRunsModalOpen, setIsWandbRunsModalOpen] = useState(false);
-  const [wandbRuns, setWandbRuns] = useState<Array<{
-    id: string;
-    name: string;
-    state: string;
-    created_at: string | null;
-    config: Record<string, unknown>;
-    missing_fields: string[];
-  }>>([]);
-  const [isLoadingWandbRuns, setIsLoadingWandbRuns] = useState(false);
-  const [updatingRunIds, setUpdatingRunIds] = useState<Set<string>>(new Set());
+  // Temporary placeholders for removed features (to prevent errors)
+  const selectedGroup = "";
+  const savedResultsTotal = 0;
+  const savedResultsGroups: any[] = [];
+  const savedResultsAggregate: any = null;
+  const statisticsModalResults: any[] = [];
+  const isWandbRunsModalOpen = false;
+  const setIsWandbRunsModalOpen = () => {};
+  const isLoadingWandbRuns = false;
+  const wandbRuns: any[] = [];
+  const updatingRunIds = new Set<string>();
+  const isStatisticsModalOpen = false;
+  const setIsStatisticsModalOpen = () => {};
+  const isLoadingStatisticsResults = false;
+  const isPdfGenerating = false;
+  const isWandbExporting = false;
 
   useEffect(() => {
     loadCourses();
@@ -239,19 +220,11 @@ export default function SemanticSimilarityPage() {
 
   useEffect(() => {
     if (selectedCourseId) {
-      loadSavedResults(true);
       loadCourseSettings();
       loadBatchTestSessions();
       loadTestDatasets();
     }
   }, [selectedCourseId]);
-
-  useEffect(() => {
-    if (selectedCourseId) {
-      setResultsPage(0);
-      loadSavedResults(true);
-    }
-  }, [selectedGroup]);
 
   const exportSelectedGroupToWandb = async () => {
     if (!selectedCourseId) {
@@ -404,58 +377,6 @@ export default function SemanticSimilarityPage() {
     } finally {
       setIsSavingSettings(false);
     }
-  };
-
-  const loadSavedResults = useCallback(async (reset: boolean = true) => {
-    if (!selectedCourseId) return;
-    try {
-      let groupFilter: string | undefined;
-      if (selectedGroup === "__all__" || selectedGroup === "") {
-        groupFilter = undefined;
-      } else if (selectedGroup === "__no_group__") {
-        groupFilter = "";
-      } else {
-        groupFilter = selectedGroup;
-      }
-      const skip = reset ? 0 : resultsPage * RESULTS_PER_PAGE;
-      const data = await api.getSemanticSimilarityResults(
-        selectedCourseId,
-        groupFilter,
-        skip,
-        RESULTS_PER_PAGE
-      );
-      // Sort results alphabetically by question (Turkish locale)
-      const sortedResults = [...data.results].sort((a, b) => 
-        a.question.localeCompare(b.question, 'tr')
-      );
-      if (reset) {
-        setSavedResults(sortedResults);
-        setResultsPage(1);
-      } else {
-        setSavedResults(prev => [...prev, ...sortedResults]);
-        setResultsPage(prev => prev + 1);
-      }
-      setSavedResultsTotal(data.total);
-      setSavedResultsGroups(data.groups);
-      setSavedResultsAggregate(data.aggregate ?? null);
-    } catch (error) {
-      console.error("Failed to load saved results:", error);
-      toast.error("Sonuçlar yüklenirken hata oluştu");
-      // Reset state on error
-      if (reset) {
-        setSavedResults([]);
-        setResultsPage(1);
-        setSavedResultsTotal(0);
-        setSavedResultsGroups([]);
-        setSavedResultsAggregate(null);
-      }
-    }
-  }, [selectedCourseId, selectedGroup, resultsPage]);
-
-  const loadMoreResults = async () => {
-    setIsLoadingMore(true);
-    await loadSavedResults(false);
-    setIsLoadingMore(false);
   };
 
   const loadBatchTestSessions = async () => {
@@ -688,6 +609,40 @@ export default function SemanticSimilarityPage() {
     }
   };
 
+  const handleCancelCurrentTest = async () => {
+    if (!currentTestId) {
+      toast.error("Test henüz başlamadı veya test ID bulunamadı");
+      return;
+    }
+
+    setIsCancelling(true);
+    try {
+      const token = localStorage.getItem('akilli_rehber_token');
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/semantic-similarity/cancel-test/${currentTestId}`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Test iptal edilemedi');
+      }
+
+      const data = await response.json();
+      toast.success("Test iptal ediliyor...");
+      setCurrentTestId(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "İptal başarısız");
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const handleDeleteSession = async (sessionId: number) => {
     if (!confirm("Bu oturumu kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.")) return;
 
@@ -866,59 +821,16 @@ export default function SemanticSimilarityPage() {
         throw new Error('Oturum süresi dolmuş, lütfen tekrar giriş yapın');
       }
 
-      // Run the batch test multiple times
+      // Run the batch test multiple times using the NEW cancellable endpoint
       const allRunResults: SemanticSimilarityBatchTestResponse[] = [];
       
       for (let run = 1; run <= totalRuns; run++) {
         setCurrentRunNumber(run);
         
-        // Create a batch test session with unique name
-        const groupName = saveGroupName || `Batch Test - Run ${run}`;
-        let session;
-        try {
-          const sessionData = {
-            course_id: selectedCourseId,
-            test_cases: testCases,
-            embedding_provider: selectedEmbeddingProvider || undefined,
-            embedding_model: selectedEmbeddingModel || undefined,
-            llm_provider: selectedLlmProvider || undefined,
-            llm_model: selectedLlmModel || undefined,
-            reranker_used: isRerankerEnabled,
-            reranker_provider: isRerankerEnabled ? (selectedRerankerProvider || undefined) : undefined,
-            reranker_model: isRerankerEnabled ? (selectedRerankerModel || undefined) : undefined
-          };
-          console.log("Creating batch test session with data:", sessionData); // Debug log
-          session = await api.createBatchTestSession(sessionData);
-          
-          toast.success(`Oturum oluşturuldu: ${groupName} (${run}/${totalRuns})`);
-        } catch (error) {
-          // Check if error is about duplicate session
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("An active session with these test cases already exists")) {
-            // Find existing session and ask user if they want to resume it
-            const existingSessions = batchTestSessions.filter(s => 
-              s.status === 'in_progress' || s.status === 'failed'
-            );
-            
-            if (existingSessions.length > 0) {
-              const existingSession = existingSessions[0];
-              if (confirm(
-                `Bu test için zaten aktif bir oturum var. Mevcut oturumu devam ettirmek ister misiniz?\n\nOturum: ${existingSession.group_name}\nDurum: ${existingSession.status}\nİlerleme: ${existingSession.completed_tests}/${existingSession.total_tests}`
-              )) {
-                await runSingleBatchTest(existingSession.id, run);
-                allRunResults.push(batchTestResult!);
-                continue;
-              }
-            }
-          }
-          throw error;
-        }
+        toast.info(`Test başlatılıyor (${run}/${totalRuns})...`);
         
-        // Refresh the sessions list
-        loadBatchTestSessions();
-        
-        // Run this single batch test
-        const runResult = await runSingleBatchTest(session.id, run, testCases.length);
+        // Run this single batch test using cancellable endpoint
+        const runResult = await runCancellableBatchTest(testCases);
         allRunResults.push(runResult);
         
         // Small delay between runs
@@ -948,6 +860,7 @@ export default function SemanticSimilarityPage() {
       loadBatchTestSessions();
     } finally {
       setIsBatchTesting(false);
+      setCurrentTestId(null); // Clean up test ID
     }
   };
 
@@ -1013,6 +926,195 @@ export default function SemanticSimilarityPage() {
     } catch (error) {
       console.error("Load test set error:", error);
       toast.error(error instanceof Error ? error.message : "Test seti yüklenemedi");
+    }
+  };
+
+  const runCancellableBatchTest = async (testCases: any[]): Promise<SemanticSimilarityBatchTestResponse> => {
+    batchTestStartTimeRef.current = Date.now();
+    setBatchTestElapsedTime("00:00:00");
+    
+    // Use the NEW cancellable endpoint
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/semantic-similarity/batch-test-stream-cancellable`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('akilli_rehber_token')}`
+      },
+      body: JSON.stringify({
+        course_id: selectedCourseId,
+        test_cases: testCases,
+        embedding_provider: selectedEmbeddingProvider || undefined,
+        embedding_model: selectedEmbeddingModel || undefined,
+        llm_provider: selectedLlmProvider || undefined,
+        llm_model: selectedLlmModel || undefined,
+        search_top_k: undefined,
+        search_alpha: undefined,
+        reranker_used: isRerankerEnabled,
+        reranker_provider: isRerankerEnabled ? (selectedRerankerProvider || undefined) : undefined,
+        reranker_model: isRerankerEnabled ? (selectedRerankerModel || undefined) : undefined
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('Batch test başarısız');
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Response body is not readable');
+    }
+
+    const decoder = new TextDecoder();
+    type StreamingResult = {
+      question: string;
+      ground_truth: string;
+      generated_answer: string;
+      similarity_score: number;
+      best_match_ground_truth: string;
+      latency_ms: number;
+      retrieved_contexts?: string[];
+      rouge1?: number | null;
+      rouge2?: number | null;
+      rougel?: number | null;
+      bertscore_precision?: number | null;
+      bertscore_recall?: number | null;
+      bertscore_f1?: number | null;
+      original_bertscore_precision?: number | null;
+      original_bertscore_recall?: number | null;
+      original_bertscore_f1?: number | null;
+      hit_at_1?: number | null;
+      mrr?: number | null;
+      system_prompt_used?: string;
+      error_message?: string;
+    };
+
+    const results: StreamingResult[] = [];
+    let buffer = "";
+    let testId: string | null = null;
+    
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+
+          try {
+            const data = JSON.parse(payload);
+
+            if (data.event === 'init') {
+              // Store test_id for cancellation
+              testId = data.test_id;
+              setCurrentTestId(testId);
+              console.log('Test started with ID:', testId);
+            } else if (data.event === 'progress') {
+              results.push(data.result as StreamingResult);
+
+              if (data.result?.error_message) {
+                toast.error(
+                  `Soru ${data.index + 1} başarısız: ${data.result.error_message}`
+                );
+              }
+
+              // Calculate elapsed time
+              if (batchTestStartTimeRef.current) {
+                const elapsedMs = Date.now() - batchTestStartTimeRef.current;
+                const elapsedSeconds = Math.floor(elapsedMs / 1000);
+                const hours = Math.floor(elapsedSeconds / 3600);
+                const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+                const seconds = elapsedSeconds % 60;
+                setBatchTestElapsedTime(
+                  `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+                );
+              }
+
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+
+              setBatchTestResult({
+                results: results as SemanticSimilarityBatchTestResponse['results'],
+                aggregate: {
+                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+                  min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+                  max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
+                  total_latency_ms: 0,
+                  test_count: results.length,
+                  avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
+                  avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
+                  avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
+                },
+                embedding_model_used: selectedEmbeddingModel || '',
+                llm_model_used: selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined
+              });
+            } else if (data.event === 'complete') {
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+
+              const finalResult: SemanticSimilarityBatchTestResponse = {
+                results: results as SemanticSimilarityBatchTestResponse['results'],
+                aggregate: {
+                  avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
+                  min_similarity: Math.min(...validResults.map(r => r.similarity_score!)),
+                  max_similarity: Math.max(...validResults.map(r => r.similarity_score!)),
+                  total_latency_ms: 0,
+                  test_count: testCases.length,
+                  avg_rouge1: rouge1Results.length > 0 ? rouge1Results.reduce((sum, r) => sum + r.rouge1!, 0) / rouge1Results.length : undefined,
+                  avg_rouge2: rouge2Results.length > 0 ? rouge2Results.reduce((sum, r) => sum + r.rouge2!, 0) / rouge2Results.length : undefined,
+                  avg_rougel: rougelResults.length > 0 ? rougelResults.reduce((sum, r) => sum + r.rougel!, 0) / rougelResults.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
+                },
+                embedding_model_used: data.embedding_model_used || selectedEmbeddingModel || '',
+                llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
+              };
+              
+              toast.success(`Test tamamlandı: ${data.completed}/${data.total}`);
+              setCurrentTestId(null);
+              return finalResult;
+            } else if (data.event === 'cancelled') {
+              toast.warning(`Test iptal edildi: ${data.completed}/${data.total} tamamlandı`);
+              setCurrentTestId(null);
+              throw new Error('Test cancelled by user');
+            } else if (data.event === 'error') {
+              console.error('Test error:', data.error);
+              setCurrentTestId(null);
+              throw new Error(data.error);
+            }
+          } catch (jsonError) {
+            console.warn('SSE parse warning:', jsonError);
+          }
+        }
+      }
+      
+      // If we get here without a complete event, throw error
+      throw new Error('Test completed without final event');
+    } catch (error) {
+      console.error("Cancellable batch test error:", error);
+      setCurrentTestId(null);
+      throw error;
     }
   };
 
@@ -1217,6 +1319,9 @@ export default function SemanticSimilarityPage() {
 
     setIsSaving(true);
     try {
+      // Get course settings for search and reranker config
+      const settings = await api.getCourseSettings(selectedCourseId);
+      
       await api.saveSemanticSimilarityResult({
         course_id: selectedCourseId,
         group_name: saveGroupName || undefined,
@@ -1237,12 +1342,16 @@ export default function SemanticSimilarityPage() {
         embedding_model_used: quickTestResult.embedding_model_used,
         llm_model_used: quickTestResult.llm_model_used,
         retrieved_contexts: quickTestResult.retrieved_contexts,
-        system_prompt_used: quickTestResult.system_prompt_used
+        system_prompt_used: quickTestResult.system_prompt_used,
+        search_top_k: settings.search_top_k,
+        search_alpha: settings.search_alpha,
+        reranker_used: settings.enable_reranker,
+        reranker_provider: settings.reranker_provider,
+        reranker_model: settings.reranker_model
       });
       toast.success("Sonuç kaydedildi");
       setIsSaveDialogOpen(false);
       setSaveGroupName("");
-      loadSavedResults(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Kaydetme başarısız");
     } finally {
@@ -1255,6 +1364,9 @@ export default function SemanticSimilarityPage() {
 
     setIsSaving(true);
     try {
+      // Get course settings for search and reranker config
+      const settings = await api.getCourseSettings(selectedCourseId);
+      
       let successCount = 0;
       let failCount = 0;
 
@@ -1282,7 +1394,12 @@ export default function SemanticSimilarityPage() {
             embedding_model_used: batchTestResult.embedding_model_used || selectedEmbeddingModel || "unknown",
             llm_model_used: batchTestResult.llm_model_used,
             retrieved_contexts: result.retrieved_contexts,
-            system_prompt_used: result.system_prompt_used
+            system_prompt_used: result.system_prompt_used,
+            search_top_k: settings.search_top_k,
+            search_alpha: settings.search_alpha,
+            reranker_used: settings.enable_reranker,
+            reranker_provider: settings.reranker_provider,
+            reranker_model: settings.reranker_model
           });
           successCount++;
         } catch (error) {
@@ -1298,14 +1415,7 @@ export default function SemanticSimilarityPage() {
       }
 
       setIsSaveDialogOpen(false);
-      
-      // Eğer grup adı belirtildiyse, otomatik olarak o grubu seç
-      if (saveGroupName && saveGroupName.trim() !== "") {
-        setSelectedGroup(saveGroupName);
-      }
-      
       setSaveGroupName("");
-      loadSavedResults(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Kaydetme başarısız");
     } finally {
@@ -1319,7 +1429,6 @@ export default function SemanticSimilarityPage() {
     try {
       await api.deleteSemanticSimilarityResult(id);
       toast.success("Sonuç silindi");
-      loadSavedResults(true);
       if (viewingResult?.id === id) {
         setViewingResult(null);
       }
@@ -1552,6 +1661,14 @@ export default function SemanticSimilarityPage() {
                 variant="secondary"
                 size="sm"
                 className="bg-white/20 hover:bg-white/30 text-white border-0 backdrop-blur-sm h-10"
+                onClick={() => window.location.href = '/dashboard/semantic-similarity/results'}
+              >
+                <History className="w-4 h-4 mr-2" />Sonuçlar
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="bg-white/20 hover:bg-white/30 text-white border-0 backdrop-blur-sm h-10"
                 onClick={() => window.location.href = '/dashboard/semantic-similarity/analysis'}
               >
                 <BarChart3 className="w-4 h-4 mr-2" />Analiz
@@ -1636,19 +1753,11 @@ export default function SemanticSimilarityPage() {
                 setSelectedCourseId(courseId);
                 localStorage.setItem('semantic_similarity_selected_course_id', courseId.toString());
               }}>
-                <SelectTrigger className="w-56 bg-white/20 border-0 text-white hover:bg-white/30 backdrop-blur-sm h-10"><BookOpen className="w-4 h-4 mr-2" /><SelectValue placeholder="Ders seçin" /></SelectTrigger>
+                <SelectTrigger className="w-80 bg-white/20 border-0 text-white hover:bg-white/30 backdrop-blur-sm h-10"><BookOpen className="w-4 h-4 mr-2" /><SelectValue placeholder="Ders seçin" /></SelectTrigger>
                 <SelectContent>{courses.map((course) => (<SelectItem key={course.id} value={course.id.toString()}>{course.name}</SelectItem>))}</SelectContent>
               </Select>
             </div>
           </div>
-
-          {selectedCourseId && (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-8">
-              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20"><div className="flex items-center gap-3"><div className="p-2 bg-white/20 rounded-lg"><History className="w-5 h-5" /></div><div><p className="text-teal-200 text-sm">Kayıtlı Sonuçlar</p><p className="text-2xl font-bold">{savedResultsTotal}</p></div></div></div>
-              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20"><div className="flex items-center gap-3"><div className="p-2 bg-white/20 rounded-lg"><Target className="w-5 h-5" /></div><div><p className="text-teal-200 text-sm">Gruplar</p><p className="text-2xl font-bold">{savedResultsGroups.length}</p></div></div></div>
-              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20"><div className="flex items-center gap-3"><div className="p-2 bg-white/20 rounded-lg"><BookOpen className="w-5 h-5" /></div><div><p className="text-teal-200 text-sm">Seçili Ders</p><p className="text-lg font-bold truncate">{courses.find(c => c.id === selectedCourseId)?.name || "-"}</p></div></div></div>
-            </div>
-          )}
         </div>
       </div>
 
@@ -2059,23 +2168,41 @@ export default function SemanticSimilarityPage() {
                       </p>
                     </div>
 
-                    <Button
-                      onClick={handleBatchTest}
-                      disabled={isBatchTesting || !batchTestJson}
-                      className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 shadow-lg shadow-cyan-200"
-                    >
-                      {isBatchTesting ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Test Ediliyor...
-                        </>
-                      ) : (
-                        <>
-                          <FileJson className="w-4 h-4 mr-2" />
-                          {totalRuns > 1 ? `${totalRuns} Kez Test Başlat` : "Batch Test Başlat"}
-                        </>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={handleBatchTest}
+                        disabled={isBatchTesting || !batchTestJson}
+                        className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 shadow-lg shadow-cyan-200"
+                      >
+                        {isBatchTesting ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Test Ediliyor... ({currentRunNumber}/{totalRuns})
+                          </>
+                        ) : (
+                          <>
+                            <FileJson className="w-4 h-4 mr-2" />
+                            {totalRuns > 1 ? `${totalRuns} Kez Test Başlat` : "Batch Test Başlat"}
+                          </>
+                        )}
+                      </Button>
+                      
+                      {isBatchTesting && (
+                        <Button
+                          onClick={handleCancelCurrentTest}
+                          disabled={isCancelling}
+                          variant="destructive"
+                          className="shadow-lg"
+                          title="Testi Durdur"
+                        >
+                          {isCancelling ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </Button>
                       )}
-                    </Button>
+                    </div>
                   </div>
 
                   {/* Results Section */}
@@ -2177,6 +2304,22 @@ export default function SemanticSimilarityPage() {
                                 className="h-7 text-xs border-cyan-200 text-cyan-600 hover:bg-cyan-50"
                               >
                                 <Download className="w-3 h-3 mr-1" /> CSV İndir
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  if (!saveGroupName) {
+                                    toast.error("Önce sonuçları kaydedin ve grup adı verin");
+                                    return;
+                                  }
+                                  await exportSelectedGroupToWandb();
+                                }}
+                                disabled={!saveGroupName}
+                                className="h-7 text-xs border-purple-200 text-purple-600 hover:bg-purple-50"
+                                title="Sonuçları W&B'ye gönder"
+                              >
+                                <BarChart3 className="w-3 h-3 mr-1" /> W&B'ye Gönder
                               </Button>
                             </div>
                           </div>
@@ -2401,281 +2544,6 @@ export default function SemanticSimilarityPage() {
             )}
           </Card>
 
-          {/* Saved Results Card */}
-          <Card className="overflow-hidden border-0 shadow-lg bg-white">
-            <button
-              onClick={() => setIsSavedResultsExpanded(!isSavedResultsExpanded)}
-              className="w-full px-6 py-5 flex items-center justify-between hover:bg-slate-50 transition-all duration-200"
-            >
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-gradient-to-br from-slate-600 to-slate-800 rounded-xl shadow-lg">
-                  <History className="w-6 h-6 text-white" />
-                </div>
-                <div className="text-left">
-                  <h2 className="text-xl font-bold text-slate-900">Kaydedilen Sonuçlar</h2>
-                  <p className="text-sm text-slate-600">
-                    {savedResultsTotal} kayıtlı test sonucu
-                  </p>
-                </div>
-              </div>
-              <div
-                className={`p-2 rounded-full bg-slate-100 transition-transform duration-200 ${
-                  isSavedResultsExpanded ? "rotate-180" : ""
-                }`}
-              >
-                <ChevronDown className="w-5 h-5 text-slate-600" />
-              </div>
-            </button>
-
-            {isSavedResultsExpanded && (
-              <div className="px-6 pb-6 pt-2 border-t border-slate-100">
-                {savedResultsGroups.length > 0 && (
-                  <div className="mb-4">
-                    <Select
-                      value={selectedGroup === "" ? "__all__" : selectedGroup}
-                      onValueChange={(v) => setSelectedGroup(v === "__all__" ? "" : v)}
-                    >
-                      <SelectTrigger className="w-full max-w-md">
-                        <SelectValue placeholder="Tüm gruplar" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__all__">Tüm gruplar</SelectItem>
-                        {savedResultsGroups
-                          .filter((g) => g.name && g.name.trim() !== "")
-                          .map((g) => (
-                            <SelectItem key={g.name} value={g.name}>
-                              {g.name}
-                            </SelectItem>
-                          ))}
-                        {savedResultsGroups.some((g) => !g.name || g.name.trim() === "") && (
-                          <SelectItem value="__no_group__">Grupsuz</SelectItem>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                {/* Grup Özet İstatistikleri */}
-                {savedResultsAggregate && (
-                  <div className="mb-6 p-4 bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl border border-teal-200">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-semibold text-teal-900">
-                        {selectedGroup && selectedGroup !== "__all__" 
-                          ? `"${selectedGroup === "__no_group__" ? "Grupsuz" : selectedGroup}" Grup İstatistikleri (Tüm ${savedResultsAggregate.test_count} Test)`
-                          : `Genel İstatistikler (Tüm ${savedResultsAggregate.test_count} Test)`}
-                      </h3>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            loadAllResultsForStatistics();
-                            setIsStatisticsModalOpen(true);
-                          }}
-                          className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
-                        >
-                          <Target className="w-3 h-3 mr-1" /> İstatistik Tablosu
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={exportAllResultsToCSV}
-                          className="h-7 text-xs border-teal-300 text-teal-700 hover:bg-teal-100"
-                        >
-                          <Download className="w-3 h-3 mr-1" /> CSV İndir
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={exportToPDF}
-                          disabled={isPdfGenerating}
-                          className="h-7 text-xs border-cyan-300 text-cyan-700 hover:bg-cyan-100"
-                        >
-                          {isPdfGenerating ? (
-                            <>
-                              <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Oluşturuluyor...
-                            </>
-                          ) : (
-                            <>
-                              <FileText className="w-3 h-3 mr-1" /> PDF Rapor
-                            </>
-                          )}
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={exportSelectedGroupToWandb}
-                          disabled={
-                            isWandbExporting ||
-                            !selectedCourseId ||
-                            !selectedGroup ||
-                            selectedGroup === "__all__" ||
-                            selectedGroup === "__no_group__"
-                          }
-                          className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-100"
-                        >
-                          {isWandbExporting ? (
-                            <>
-                              <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Aktarılıyor...
-                            </>
-                          ) : (
-                            <>W&B'ye Gönder</>
-                          )}
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setIsWandbRunsModalOpen(true);
-                            loadWandbRuns();
-                          }}
-                          disabled={!selectedCourseId}
-                          className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-100"
-                        >
-                          <Settings className="w-3 h-3 mr-1" /> W&B Run'ları
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                      {savedResultsAggregate.avg_rouge1 != null && (
-                        <div className="p-3 bg-white rounded-lg border border-purple-100">
-                          <p className="text-xs text-purple-600 mb-1">Ort. ROUGE-1</p>
-                          <p className="text-xl font-bold text-purple-700">
-                            {(savedResultsAggregate.avg_rouge1 * 100).toFixed(1)}%
-                          </p>
-                        </div>
-                      )}
-                      {savedResultsAggregate.avg_rouge2 != null && (
-                        <div className="p-3 bg-white rounded-lg border border-purple-100">
-                          <p className="text-xs text-purple-600 mb-1">Ort. ROUGE-2</p>
-                          <p className="text-xl font-bold text-purple-700">
-                            {(savedResultsAggregate.avg_rouge2 * 100).toFixed(1)}%
-                          </p>
-                        </div>
-                      )}
-                      {savedResultsAggregate.avg_rougel != null && (
-                        <div className="p-3 bg-white rounded-lg border border-purple-100">
-                          <p className="text-xs text-purple-600 mb-1">Ort. ROUGE-L</p>
-                          <p className="text-xl font-bold text-purple-700">
-                            {(savedResultsAggregate.avg_rougel * 100).toFixed(1)}%
-                          </p>
-                        </div>
-                      )}
-                      {savedResultsAggregate.avg_original_bertscore_f1 != null && (
-                        <div className="p-3 bg-white rounded-lg border border-emerald-100">
-                          <p className="text-xs text-emerald-700 mb-1">Ort. BERTScore F1</p>
-                          <p className="text-xl font-bold text-emerald-800">
-                            {(savedResultsAggregate.avg_original_bertscore_f1 * 100).toFixed(1)}%
-                          </p>
-                        </div>
-                      )}
-                      <div className="p-3 bg-white rounded-lg border border-slate-100">
-                        <p className="text-xs text-slate-600 mb-1">Test Sayısı</p>
-                        <p className="text-xl font-bold text-slate-900">
-                          {savedResultsAggregate.test_count}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {savedResults.length === 0 ? (
-                  <div className="text-center py-12 text-slate-400">
-                    <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                    <p className="font-medium">Henüz kaydedilmiş sonuç yok</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {savedResults.map((result) => (
-                      <div
-                        key={result.id}
-                        className="p-4 bg-slate-50 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              {result.bloom_level && (
-                                <span className="px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full font-medium">
-                                  {result.bloom_level === 'remembering' && '🧠 Hatırlama'}
-                                  {result.bloom_level === 'understanding_applying' && '🔧 Anlama/Uygulama'}
-                                  {result.bloom_level === 'analyzing_evaluating' && '⭐ Analiz/Değerlendirme'}
-                                </span>
-                              )}
-                              {result.group_name && (
-                                <span className="px-2 py-0.5 text-xs bg-teal-100 text-teal-700 rounded-full font-medium">
-                                  {result.group_name}
-                                </span>
-                              )}
-                              <span className="text-xs text-slate-500">
-                                {new Date(result.created_at).toLocaleString("tr-TR")}
-                              </span>
-                            </div>
-                            <p className="text-sm font-medium text-slate-900 truncate">
-                              {result.question}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
-                              {result.bertscore_f1 != null && (
-                                <span className={getMetricColor(result.bertscore_f1)}>
-                                  BERTScore: {(result.bertscore_f1 * 100).toFixed(0)}%
-                                </span>
-                              )}
-                              {result.rouge1 != null && (
-                                <span className="text-purple-600">
-                                  ROUGE-1: {(result.rouge1 * 100).toFixed(0)}%
-                                </span>
-                              )}
-                              <span className="text-slate-400">{result.latency_ms}ms</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 ml-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setViewingResult(result)}
-                              className="text-slate-600 hover:text-teal-600"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteSavedResult(result.id)}
-                              className="text-slate-400 hover:text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-
-                    {savedResults.length < savedResultsTotal && (
-                      <Button
-                        variant="outline"
-                        onClick={loadMoreResults}
-                        disabled={isLoadingMore}
-                        className="w-full"
-                      >
-                        {isLoadingMore ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Yükleniyor...
-                          </>
-                        ) : (
-                          <>
-                            Daha Fazla ({savedResults.length}/{savedResultsTotal})
-                          </>
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
-
           {/* Save Dialog */}
           <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
             <DialogContent>
@@ -2699,25 +2567,6 @@ export default function SemanticSimilarityPage() {
                     placeholder="örn: Deneme 1"
                   />
                 </div>
-                {savedResultsGroups.length > 0 && (
-                  <div>
-                    <Label className="text-xs text-slate-500 mb-2">Mevcut Gruplar (Tıklayarak Seçin)</Label>
-                    <div className="max-h-32 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50">
-                      <div className="flex flex-wrap gap-1">
-                        {savedResultsGroups.map((g) => (
-                          <button
-                            key={g.name}
-                            type="button"
-                            onClick={() => setSaveGroupName(g.name)}
-                            className="px-2 py-1 text-xs bg-white hover:bg-teal-50 border border-slate-200 rounded transition-colors"
-                          >
-                            {g.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
               <DialogFooter>
                 <Button

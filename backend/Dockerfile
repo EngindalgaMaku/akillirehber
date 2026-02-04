@@ -1,6 +1,8 @@
 # Backend Dockerfile - RAG Educational Chatbot
 # Multi-stage build for optimized production image
 
+# syntax=docker/dockerfile:1.4
+
 # Stage 1: Builder
 FROM python:3.12-slim as builder
 
@@ -12,15 +14,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies with cache mount
 # First install large packages that rarely change (for better caching)
 COPY requirements-base.txt .
-# Disable hash checking to avoid version conflicts
-RUN pip wheel --no-cache-dir --use-deprecated=legacy-resolver --wheel-dir /app/wheels -r requirements-base.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --wheel-dir /app/wheels -r requirements-base.txt
 
 # Then install other packages that may change more frequently
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --wheel-dir /app/wheels -r requirements.txt
 
 # Stage 2: Production
 FROM python:3.12-slim as production
@@ -41,9 +44,10 @@ ENV NUMBA_CACHE_DIR=/tmp/numba_cache
 RUN mkdir -p /tmp/numba_cache && \
     chmod 777 /tmp/numba_cache
 
-# Copy wheels from builder and install
+# Copy wheels from builder and install with cache mount
 COPY --from=builder /app/wheels /wheels
-RUN pip install --no-cache /wheels/*
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-index --find-links=/wheels /wheels/*
 
 # Download NLTK data to a shared location
 ENV NLTK_DATA=/usr/share/nltk_data

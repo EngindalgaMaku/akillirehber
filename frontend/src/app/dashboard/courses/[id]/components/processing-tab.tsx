@@ -390,7 +390,7 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
     setProcessingProgress([]);
   };
 
-  const handleSelectAll = (checked: boolean) => {
+  const handleSelectAll = (checked: boolean | undefined) => {
     if (checked) {
       setSelectedDocIds(documents.map((d) => d.id));
     } else {
@@ -398,7 +398,7 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
     }
   };
 
-  const handleSelectDoc = (docId: number, checked: boolean) => {
+  const handleSelectDoc = (docId: number, checked: boolean | undefined) => {
     if (checked) {
       setSelectedDocIds([...selectedDocIds, docId]);
     } else {

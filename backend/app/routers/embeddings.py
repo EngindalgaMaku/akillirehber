@@ -12,10 +12,8 @@ from app.services.auth_service import get_current_teacher
 from app.services.course_service import verify_course_ownership
 from app.services.document_service import get_document_by_id, get_document_chunks
 from app.services.embedding_service import get_embedding_service
-from app.services.weaviate_service import (
-    get_weaviate_service,
-    ChunkWithEmbedding,
-)
+from app.services.vector_store_factory import get_vector_store_for_course
+from app.services.vector_store_interface import ChunkWithEmbedding
 
 router = APIRouter(prefix="/api", tags=["embeddings"])
 
@@ -88,25 +86,19 @@ async def embed_document(
                     vector=embedding
                 ))
 
-        # Store in Weaviate
-        weaviate_service = get_weaviate_service()
+        # Get vector store for this course (Weaviate or ChromaDB based on settings)
+        vector_store = get_vector_store_for_course(document.course_id, db)
+        vector_store_name = vector_store.__class__.__name__
         
-        # Force delete collection if it exists (to handle dimension mismatch)
-        collection_name = weaviate_service._get_collection_name(document.course_id)
-        client = weaviate_service._get_client()
+        print(f"Using vector store: {vector_store_name} for course {document.course_id}")
         
-        if client.collections.exists(collection_name):
-            print(f"Deleting existing collection {collection_name} to handle dimension mismatch")
-            weaviate_service.delete_by_course(document.course_id)
-            print(f"Collection {collection_name} deleted successfully")
-        
-        # Now store the embeddings
-        weaviate_service.store_chunks(
+        # Store the embeddings
+        vector_store.store_chunks(
             course_id=document.course_id,
             document_id=document_id,
             chunks=chunks_with_embeddings
         )
-        print(f"Successfully stored {len(chunks_with_embeddings)} embeddings in Weaviate")
+        print(f"Successfully stored {len(chunks_with_embeddings)} embeddings in {vector_store_name}")
 
         # Update document status
         document.embedding_status = EmbeddingStatus.COMPLETED
@@ -141,7 +133,7 @@ async def delete_document_vectors(
     db: Session = Depends(get_db),
 ):
     """
-    Delete all vectors for a document from Weaviate.
+    Delete all vectors for a document from the configured vector store.
 
     Only teachers can delete vectors from their own courses.
     """
@@ -155,9 +147,9 @@ async def delete_document_vectors(
     # Verify teacher owns the course
     verify_course_ownership(db, document.course_id, current_user)
 
-    # Delete from Weaviate
-    weaviate_service = get_weaviate_service()
-    weaviate_service.delete_by_document(document.course_id, document_id)
+    # Delete from vector store (Weaviate or ChromaDB based on settings)
+    vector_store = get_vector_store_for_course(document.course_id, db)
+    vector_store.delete_by_document(document.course_id, document_id)
 
     # Update document status
     document.embedding_status = EmbeddingStatus.PENDING
@@ -179,7 +171,7 @@ async def get_document_vector_count(
     db: Session = Depends(get_db),
 ):
     """
-    Get vector count for a document.
+    Get vector count for a document from the configured vector store.
     """
     document = get_document_by_id(db, document_id)
     if not document:
@@ -191,9 +183,9 @@ async def get_document_vector_count(
     # Verify teacher owns the course
     verify_course_ownership(db, document.course_id, current_user)
 
-    # Get count from Weaviate
-    weaviate_service = get_weaviate_service()
-    count = weaviate_service.get_document_vector_count(
+    # Get count from vector store (Weaviate or ChromaDB based on settings)
+    vector_store = get_vector_store_for_course(document.course_id, db)
+    count = vector_store.get_document_vector_count(
         document.course_id, document_id
     )
 

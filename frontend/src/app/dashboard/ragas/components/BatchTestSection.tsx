@@ -72,6 +72,8 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
 
   // Resume
   const [resumeState, setResumeState] = useState<BatchResumeState | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const MAX_RETRY_ATTEMPTS = 3;
   
   // Dataset Management
   const [testDatasets, setTestDatasets] = useState<Array<{
@@ -338,11 +340,70 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
           } else if (data.event === "complete") {
             wandbUrl = data.wandb_url;
 
-            if (resumeState) {
-              const successCount = Object.values(resumeState.resultsByIndex).filter(r => !r.error_message).length;
-              toast.success(`Tüm testler tamamlandı! ${successCount}/${resumeState.testCases.length} başarılı`, {
-                duration: 3000,
+            // Check if there are any failed tests that need retry
+            if (base) {
+              const allIndices = Array.from({ length: base.testCases.length }, (_, i) => i);
+              const completedIndices = base.completedIndices || [];
+              const missingIndices = allIndices.filter(i => !completedIndices.includes(i));
+              
+              // Also check for tests with errors
+              const failedIndices = completedIndices.filter(i => {
+                const result = base?.resultsByIndex[i];
+                return result && result.error_message;
               });
+
+              const indicesToRetry = [...new Set([...missingIndices, ...failedIndices])].sort((a, b) => a - b);
+
+              if (indicesToRetry.length > 0 && retryCount < MAX_RETRY_ATTEMPTS) {
+                const nextRetryCount = retryCount + 1;
+                setRetryCount(nextRetryCount);
+                
+                // Capture base for the setTimeout callback
+                const baseForRetry = base;
+                
+                toast.warning(
+                  `${indicesToRetry.length} test başarısız oldu. Otomatik olarak tekrar deneniyor... (Deneme ${nextRetryCount}/${MAX_RETRY_ATTEMPTS})`,
+                  { duration: 3000 }
+                );
+
+                // Automatically retry failed tests
+                setTimeout(async () => {
+                  try {
+                    await startBatchStream({
+                      testCases: baseForRetry.testCases,
+                      groupName: opts.groupName,
+                      enableWandb: opts.enableWandb,
+                      resumeBase: baseForRetry,
+                      onlyIndices: indicesToRetry,
+                    });
+                  } catch (retryError) {
+                    console.error("Auto-retry failed:", retryError);
+                    toast.error("Otomatik tekrar deneme başarısız oldu. Manuel olarak tekrar deneyin.");
+                    setRetryCount(0); // Reset retry count on error
+                  }
+                }, 2000);
+                return; // Don't show completion message yet
+              } else if (indicesToRetry.length > 0 && retryCount >= MAX_RETRY_ATTEMPTS) {
+                toast.error(
+                  `${indicesToRetry.length} test ${MAX_RETRY_ATTEMPTS} denemeden sonra hala başarısız. Manuel olarak tekrar deneyin.`,
+                  { duration: 5000 }
+                );
+              }
+
+              const successCount = Object.values(base.resultsByIndex).filter(r => !r.error_message).length;
+              const totalCount = base.testCases.length;
+              
+              if (successCount === totalCount) {
+                toast.success(`🎉 Tüm testler başarıyla tamamlandı! ${successCount}/${totalCount}`, {
+                  duration: 4000,
+                });
+              } else {
+                toast.warning(`Testler tamamlandı: ${successCount}/${totalCount} başarılı, ${totalCount - successCount} başarısız`, {
+                  duration: 4000,
+                });
+              }
+              
+              setRetryCount(0); // Reset retry count after completion
             } else {
               toast.success(`Tüm testler tamamlandı!`, { duration: 3000 });
             }
@@ -591,6 +652,7 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
 
       batchTestStartTimeRef.current = Date.now();
       setBatchTestElapsedTime("00:00:00");
+      setRetryCount(0); // Reset retry count at start
 
       const groupName = (wandbGroupName || "").trim();
       if (!groupName) {
@@ -677,6 +739,8 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
       toast.error("Grup adı bulunamadı");
       return;
     }
+
+    setRetryCount(0); // Reset retry count on manual resume
 
     const { indicesToRun, completedIndices } = await computeIndicesToRunFromDb({
       groupName,
@@ -916,19 +980,6 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                   <p className="text-xs text-slate-500 mt-1">
                     Her test sonucu otomatik olarak kaydedilir
                   </p>
-                </div>
-
-                {/* Performance Info */}
-                <div className="p-3 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200">
-                  <div className="flex items-start gap-2">
-                    <Zap className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                    <div className="text-xs text-emerald-800">
-                      <p className="font-medium mb-1">⚡ Paralel İşleme Aktif</p>
-                      <p className="text-emerald-700">
-                        Testler paralel olarak çalıştırılır. 100 soru için beklenen süre: ~10-15 dakika
-                      </p>
-                    </div>
-                  </div>
                 </div>
 
                 <Button

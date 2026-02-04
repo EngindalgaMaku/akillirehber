@@ -4,12 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Download, FileText, SquarePen, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, FileText, SquarePen, Trash2, BarChart3 } from "lucide-react";
 
 import { api, QuickTestResult } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type RagasAggregate = {
   test_count?: number;
@@ -57,6 +58,11 @@ export default function RagasGroupResultsPage() {
   const [page, setPage] = useState(1);
   const [selectedResult, setSelectedResult] = useState<QuickTestResult | null>(null);
   const [deletingResultId, setDeletingResultId] = useState<number | null>(null);
+  const [isExportingToWandB, setIsExportingToWandB] = useState(false);
+  
+  // Multi-select for statistics
+  const [selectedResultIds, setSelectedResultIds] = useState<Set<number>>(new Set());
+  const [showStatisticsModal, setShowStatisticsModal] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem("ragas_selected_course_id");
@@ -295,6 +301,98 @@ export default function RagasGroupResultsPage() {
     }
   };
 
+  const exportToWandB = async () => {
+    if (!courseId || !groupName) return;
+    
+    setIsExportingToWandB(true);
+    try {
+      const data = await api.exportQuickTestResultsToWandB(courseId, groupName);
+      
+      toast.success(
+        <div>
+          <div className="font-semibold">W&B'ye başarıyla gönderildi!</div>
+          <div className="text-xs mt-1">
+            {data.exported_count} sonuç gönderildi
+          </div>
+          {data.run_url && (
+            <a 
+              href={data.run_url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-xs underline mt-1 block"
+            >
+              W&B'de görüntüle →
+            </a>
+          )}
+        </div>
+      );
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : "W&B export başarısız");
+    } finally {
+      setIsExportingToWandB(false);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedResultIds.size === sortedResults.length) {
+      setSelectedResultIds(new Set());
+    } else {
+      setSelectedResultIds(new Set(sortedResults.map(r => r.id).filter((id): id is number => id !== undefined)));
+    }
+  };
+
+  const toggleSelectResult = (id: number) => {
+    const newSet = new Set(selectedResultIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedResultIds(newSet);
+  };
+
+  const calculateStatistics = () => {
+    const selectedResults = sortedResults.filter(r => r.id && selectedResultIds.has(r.id));
+    
+    if (selectedResults.length === 0) return null;
+
+    const metrics = {
+      faithfulness: selectedResults.map(r => r.faithfulness).filter((v): v is number => v != null),
+      answer_relevancy: selectedResults.map(r => r.answer_relevancy).filter((v): v is number => v != null),
+      context_precision: selectedResults.map(r => r.context_precision).filter((v): v is number => v != null),
+      context_recall: selectedResults.map(r => r.context_recall).filter((v): v is number => v != null),
+      answer_correctness: selectedResults.map(r => r.answer_correctness).filter((v): v is number => v != null),
+      latency_ms: selectedResults.map(r => r.latency_ms).filter((v): v is number => v != null),
+    };
+
+    const calculateStats = (values: number[]) => {
+      if (values.length === 0) return null;
+      
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
+      const stdDev = Math.sqrt(variance);
+      const sorted = [...values].sort((a, b) => a - b);
+      const median = sorted.length % 2 === 0
+        ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+        : sorted[Math.floor(sorted.length / 2)];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+
+      return { mean, stdDev, median, min, max, count: values.length };
+    };
+
+    return {
+      faithfulness: calculateStats(metrics.faithfulness),
+      answer_relevancy: calculateStats(metrics.answer_relevancy),
+      context_precision: calculateStats(metrics.context_precision),
+      context_recall: calculateStats(metrics.context_recall),
+      answer_correctness: calculateStats(metrics.answer_correctness),
+      latency_ms: calculateStats(metrics.latency_ms),
+      totalSelected: selectedResults.length,
+    };
+  };
+
   const metricBadge = (value: number | null | undefined) => {
     if (value == null) {
       return <span className="text-slate-400">-</span>;
@@ -400,12 +498,44 @@ export default function RagasGroupResultsPage() {
               </Button>
             </Link>
 
+            {selectedResultIds.size > 0 && (
+              <Button 
+                variant="outline"
+                onClick={() => setShowStatisticsModal(true)}
+                className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+              >
+                <BarChart3 className="w-4 h-4 mr-2" />
+                İstatistikler ({selectedResultIds.size})
+              </Button>
+            )}
+
             <Button variant="outline" onClick={exportToCSV} disabled={!courseId || !groupName}>
               <Download className="w-4 h-4 mr-2" /> CSV
             </Button>
 
             <Button variant="outline" onClick={exportToPdf} disabled={!courseId || !groupName}>
               <FileText className="w-4 h-4 mr-2" /> PDF
+            </Button>
+
+            <Button 
+              variant="outline" 
+              onClick={exportToWandB} 
+              disabled={!courseId || !groupName || isExportingToWandB}
+              className="bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200"
+            >
+              {isExportingToWandB ? (
+                <>
+                  <span className="animate-spin mr-2">⏳</span>
+                  W&B'ye Gönderiliyor...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                  </svg>
+                  W&B'ye Gönder
+                </>
+              )}
             </Button>
           </div>
         </div>
@@ -542,6 +672,12 @@ export default function RagasGroupResultsPage() {
             <table className="w-full text-xs">
               <thead className="bg-slate-50 sticky top-0">
                 <tr>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 w-[40px]">
+                    <Checkbox
+                      checked={selectedResultIds.size === sortedResults.length && sortedResults.length > 0}
+                      onCheckedChange={toggleSelectAll}
+                    />
+                  </th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600 w-[60px]">#</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600">Soru</th>
                   <th className="px-3 py-2 text-right font-medium text-slate-600">Faith.</th>
@@ -555,6 +691,14 @@ export default function RagasGroupResultsPage() {
               <tbody className="divide-y divide-slate-100">
                 {pageItems.map((r, idx) => (
                   <tr key={r.id ?? `${start}-${idx}`} className={idx % 2 === 0 ? "bg-white hover:bg-slate-50" : "bg-slate-50/40 hover:bg-slate-50"}>
+                    <td className="px-3 py-2">
+                      {r.id && (
+                        <Checkbox
+                          checked={selectedResultIds.has(r.id)}
+                          onCheckedChange={() => r.id && toggleSelectResult(r.id)}
+                        />
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-slate-500">{start + idx + 1}</td>
                     <td className="px-3 py-2 text-slate-800 min-w-[420px]">
                       <div className="whitespace-pre-wrap break-words">
@@ -639,6 +783,229 @@ export default function RagasGroupResultsPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Statistics Modal */}
+      <Dialog open={showStatisticsModal} onOpenChange={setShowStatisticsModal}>
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>İstatistikler - {selectedResultIds.size} Sonuç Seçildi</DialogTitle>
+          </DialogHeader>
+
+          {(() => {
+            const stats = calculateStatistics();
+            if (!stats) return <p className="text-slate-500">İstatistik hesaplanamadı</p>;
+
+            type MetricStats = { mean: number; stdDev: number; median: number; min: number; max: number; count: number; } | null;
+            const StatCard = ({ title, data }: { title: string; data: MetricStats }) => {
+              if (!data) return null;
+              
+              return (
+                <div className="p-4 rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50">
+                  <h3 className="text-sm font-semibold text-slate-900 mb-3">{title}</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-slate-500">Ortalama</div>
+                      <div className="text-lg font-bold text-blue-600">
+                        {(data.mean * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Std. Sapma</div>
+                      <div className="text-lg font-bold text-purple-600">
+                        {(data.stdDev * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Medyan</div>
+                      <div className="text-base font-semibold text-slate-700">
+                        {(data.median * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Aralık</div>
+                      <div className="text-base font-semibold text-slate-700">
+                        {(data.min * 100).toFixed(1)}% - {(data.max * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Simple bar chart */}
+                  <div className="mt-3 pt-3 border-t border-slate-200">
+                    <div className="flex items-center gap-2 text-xs">
+                      <div className="flex-1">
+                        <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all"
+                            style={{ width: `${data.mean * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                      <span className="text-slate-600 font-medium">{data.count} test</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            };
+
+            const LatencyCard = ({ data }: { data: MetricStats }) => {
+              if (!data) return null;
+              
+              return (
+                <div className="p-4 rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50">
+                  <h3 className="text-sm font-semibold text-slate-900 mb-3">Latency (ms)</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-slate-500">Ortalama</div>
+                      <div className="text-lg font-bold text-emerald-600">
+                        {Math.round(data.mean)}ms
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Std. Sapma</div>
+                      <div className="text-lg font-bold text-orange-600">
+                        {Math.round(data.stdDev)}ms
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Medyan</div>
+                      <div className="text-base font-semibold text-slate-700">
+                        {Math.round(data.median)}ms
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Aralık</div>
+                      <div className="text-base font-semibold text-slate-700">
+                        {Math.round(data.min)}ms - {Math.round(data.max)}ms
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-3 pt-3 border-t border-slate-200">
+                    <div className="flex items-center gap-2 text-xs">
+                      <div className="flex-1">
+                        <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all"
+                            style={{ width: `${Math.min((data.mean / 5000) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <span className="text-slate-600 font-medium">{data.count} test</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            };
+
+            return (
+              <div className="space-y-6">
+                {/* Summary */}
+                <div className="p-4 rounded-xl bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900">Genel Özet</h3>
+                      <p className="text-sm text-slate-600 mt-1">
+                        {stats.totalSelected} sonuç üzerinden hesaplanmıştır
+                      </p>
+                    </div>
+                    <BarChart3 className="w-12 h-12 text-blue-500 opacity-50" />
+                  </div>
+                </div>
+
+                {/* RAGAS Metrics */}
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900 mb-3">RAGAS Metrikleri</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <StatCard title="Faithfulness" data={stats.faithfulness} />
+                    <StatCard title="Answer Relevancy" data={stats.answer_relevancy} />
+                    <StatCard title="Context Precision" data={stats.context_precision} />
+                    <StatCard title="Context Recall" data={stats.context_recall} />
+                    <StatCard title="Answer Correctness" data={stats.answer_correctness} />
+                    <LatencyCard data={stats.latency_ms} />
+                  </div>
+                </div>
+
+                {/* Comparison Chart */}
+                <div className="p-4 rounded-xl border border-slate-200 bg-white">
+                  <h3 className="text-base font-semibold text-slate-900 mb-4">Metrik Karşılaştırması</h3>
+                  <div className="space-y-3">
+                    {stats.faithfulness && (
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="font-medium text-slate-700">Faithfulness</span>
+                          <span className="text-slate-600">{(stats.faithfulness.mean * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-blue-500 rounded-full transition-all"
+                            style={{ width: `${stats.faithfulness.mean * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {stats.answer_relevancy && (
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="font-medium text-slate-700">Answer Relevancy</span>
+                          <span className="text-slate-600">{(stats.answer_relevancy.mean * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-purple-500 rounded-full transition-all"
+                            style={{ width: `${stats.answer_relevancy.mean * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {stats.context_precision && (
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="font-medium text-slate-700">Context Precision</span>
+                          <span className="text-slate-600">{(stats.context_precision.mean * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-emerald-500 rounded-full transition-all"
+                            style={{ width: `${stats.context_precision.mean * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {stats.context_recall && (
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="font-medium text-slate-700">Context Recall</span>
+                          <span className="text-slate-600">{(stats.context_recall.mean * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-amber-500 rounded-full transition-all"
+                            style={{ width: `${stats.context_recall.mean * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {stats.answer_correctness && (
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="font-medium text-slate-700">Answer Correctness</span>
+                          <span className="text-slate-600">{(stats.answer_correctness.mean * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-rose-500 rounded-full transition-all"
+                            style={{ width: `${stats.answer_correctness.mean * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

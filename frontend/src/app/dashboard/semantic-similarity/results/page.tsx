@@ -2,23 +2,23 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { api, Course, RagasGroupInfo } from "@/lib/api";
+import { api, Course, SemanticSimilarityGroupInfo } from "@/lib/api";
 import { toast } from "sonner";
 import Link from "next/link";
-import { BookOpen, History, ArrowLeft, RefreshCw, SquarePen, Trash2, BarChart3 } from "lucide-react";
+import { BookOpen, History, ArrowLeft, RefreshCw, Trash2, BarChart3 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 
-export default function RagasResultsPage() {
+export default function SemanticSimilarityResultsPage() {
   const { user } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const [groups, setGroups] = useState<RagasGroupInfo[]>([]);
+  const [groups, setGroups] = useState<SemanticSimilarityGroupInfo[]>([]);
   const [isGroupsLoading, setIsGroupsLoading] = useState(false);
   const [deletingGroupName, setDeletingGroupName] = useState<string | null>(null);
 
@@ -30,21 +30,20 @@ export default function RagasResultsPage() {
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
   
-  // Multi-select for statistics
+  // Multi-select for analysis
   const [selectedGroupNames, setSelectedGroupNames] = useState<Set<string>>(new Set());
-  const [showStatisticsModal, setShowStatisticsModal] = useState(false);
   
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterLLM, setFilterLLM] = useState<string>("all");
-  const [filterEvalModel, setFilterEvalModel] = useState<string>("all");
-  const [filterReranker, setFilterReranker] = useState<string>("all");
+  const [filterLLM, setFilterLLM] = useState("all");
+  const [filterEmbedding, setFilterEmbedding] = useState("all");
+  const [filterReranker, setFilterReranker] = useState("all");
 
   const loadGroups = useCallback(async () => {
     if (!selectedCourseId) return;
     setIsGroupsLoading(true);
     try {
-      const data = await api.getQuickTestResults(selectedCourseId, undefined, 0, 1);
+      const data = await api.getSemanticSimilarityResults(selectedCourseId, undefined, 0, 1);
       setGroups(data.groups || []);
     } catch (error) {
       console.error("Failed to load groups:", error);
@@ -65,8 +64,8 @@ export default function RagasResultsPage() {
 
       setDeletingGroupName(groupName);
       try {
-        const res = await api.deleteRagasGroup(selectedCourseId, groupName);
-        toast.success(res?.message || "Grup silindi");
+        await api.deleteSemanticSimilarityGroup(selectedCourseId, groupName);
+        toast.success("Grup silindi");
         await loadGroups();
       } catch (error) {
         console.error(error);
@@ -97,15 +96,15 @@ export default function RagasResultsPage() {
       setIsRenameOpen(false);
       return;
     }
-    if (groups.some((g) => g.name === nextName)) {
+    if (groups.some((g) => g.group_name === nextName)) {
       toast.error("Bu isimde bir grup zaten var");
       return;
     }
 
     setIsRenaming(true);
     try {
-      const res = await api.renameRagasGroup(selectedCourseId, renamingGroupName, nextName);
-      toast.success(res?.message || "Grup adı güncellendi");
+      await api.renameSemanticSimilarityGroup(selectedCourseId, renamingGroupName, nextName);
+      toast.success("Grup adı güncellendi");
       setIsRenameOpen(false);
       setRenamingGroupName(null);
       await loadGroups();
@@ -135,48 +134,6 @@ export default function RagasResultsPage() {
     setSelectedGroupNames(newSet);
   }, [selectedGroupNames]);
 
-  const calculateStatistics = useCallback(() => {
-    const selectedGroups = groups.filter(g => selectedGroupNames.has(g.name));
-    
-    if (selectedGroups.length === 0) return null;
-
-    const metrics = {
-      faithfulness: selectedGroups.map(g => g.avg_faithfulness).filter((v): v is number => v != null && Number.isFinite(v)),
-      answer_relevancy: selectedGroups.map(g => g.avg_answer_relevancy).filter((v): v is number => v != null && Number.isFinite(v)),
-      context_precision: selectedGroups.map(g => g.avg_context_precision).filter((v): v is number => v != null && Number.isFinite(v)),
-      context_recall: selectedGroups.map(g => g.avg_context_recall).filter((v): v is number => v != null && Number.isFinite(v)),
-      answer_correctness: selectedGroups.map(g => g.avg_answer_correctness).filter((v): v is number => v != null && Number.isFinite(v)),
-    };
-
-    const calculateStats = (values: number[]) => {
-      if (values.length === 0) return null;
-      
-      const mean = values.reduce((a, b) => a + b, 0) / values.length;
-      const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
-      const stdDev = Math.sqrt(variance);
-      const sorted = [...values].sort((a, b) => a - b);
-      const median = sorted.length % 2 === 0
-        ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
-        : sorted[Math.floor(sorted.length / 2)];
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-
-      return { mean, stdDev, median, min, max, count: values.length };
-    };
-
-    const totalTests = selectedGroups.reduce((sum, g) => sum + (g.test_count || 0), 0);
-
-    return {
-      faithfulness: calculateStats(metrics.faithfulness),
-      answer_relevancy: calculateStats(metrics.answer_relevancy),
-      context_precision: calculateStats(metrics.context_precision),
-      context_recall: calculateStats(metrics.context_recall),
-      answer_correctness: calculateStats(metrics.answer_correctness),
-      totalSelected: selectedGroups.length,
-      totalTests,
-    };
-  }, [groups, selectedGroupNames]);
-
   useEffect(() => {
     loadCourses();
   }, []);
@@ -185,6 +142,7 @@ export default function RagasResultsPage() {
     if (selectedCourseId) {
       loadGroups();
       setPage(1);
+      setSelectedGroupNames(new Set()); // Clear selection when course changes
     }
   }, [selectedCourseId, loadGroups]);
 
@@ -193,7 +151,7 @@ export default function RagasResultsPage() {
       const data = await api.getCourses();
       setCourses(data);
       if (data.length > 0) {
-        const savedCourseId = localStorage.getItem("ragas_selected_course_id");
+        const savedCourseId = localStorage.getItem("semantic_similarity_selected_course_id");
         if (savedCourseId && data.find((c) => c.id === parseInt(savedCourseId))) {
           setSelectedCourseId(parseInt(savedCourseId));
         } else {
@@ -256,27 +214,28 @@ export default function RagasResultsPage() {
               <History className="w-6 h-6 text-slate-700" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">RAGAS Test Sonuçları</h1>
-              <p className="text-sm text-slate-600">Önce test listesi, sonra detay</p>
+              <h1 className="text-2xl font-bold text-slate-900">Semantic Similarity Sonuçları</h1>
+              <p className="text-sm text-slate-600">Test gruplarını listele ve analiz et</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {selectedGroupNames.size > 0 && (
-              <Button 
-                variant="outline"
-                onClick={() => setShowStatisticsModal(true)}
-                className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-              >
-                <BarChart3 className="w-4 h-4 mr-2" />
-                İstatistikler ({selectedGroupNames.size})
-              </Button>
+            {selectedGroupNames.size > 1 && (
+              <Link href={`/dashboard/semantic-similarity/analysis?groups=${Array.from(selectedGroupNames).join(",")}&course=${selectedCourseId}`}>
+                <Button 
+                  variant="outline"
+                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                >
+                  <BarChart3 className="w-4 h-4 mr-2" />
+                  Karşılaştır ({selectedGroupNames.size})
+                </Button>
+              </Link>
             )}
 
-            <Link href="/dashboard/ragas">
+            <Link href="/dashboard/semantic-similarity">
               <Button variant="outline">
                 <ArrowLeft className="w-4 h-4 mr-2" />
-                RAGAS&#39;a Dön
+                Geri Dön
               </Button>
             </Link>
 
@@ -290,7 +249,7 @@ export default function RagasResultsPage() {
               onValueChange={(v) => {
                 const courseId = Number(v);
                 setSelectedCourseId(courseId);
-                localStorage.setItem("ragas_selected_course_id", courseId.toString());
+                localStorage.setItem("semantic_similarity_selected_course_id", courseId.toString());
               }}
             >
               <SelectTrigger className="w-72">
@@ -324,6 +283,10 @@ export default function RagasResultsPage() {
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
           {(() => {
+            // Get unique values for filters
+            const uniqueLLMs = Array.from(new Set(groups.map(g => g.llm_model).filter(Boolean))) as string[];
+            const uniqueEmbeddings = Array.from(new Set(groups.map(g => g.embedding_model).filter(Boolean))) as string[];
+
             // Apply filters
             let filtered = groups
               .filter((g) => g.name && g.name.trim().length > 0)
@@ -338,17 +301,14 @@ export default function RagasResultsPage() {
               .filter((g) => {
                 // LLM filter
                 if (filterLLM !== "all") {
-                  const llm = g.llm_provider && g.llm_model
-                    ? `${g.llm_provider}/${g.llm_model}`
-                    : g.llm_model || g.llm_provider || "";
-                  return llm.toLowerCase().includes(filterLLM.toLowerCase());
+                  return g.llm_model === filterLLM;
                 }
                 return true;
               })
               .filter((g) => {
-                // Eval model filter
-                if (filterEvalModel !== "all") {
-                  return (g.evaluation_model || "").toLowerCase().includes(filterEvalModel.toLowerCase());
+                // Embedding filter
+                if (filterEmbedding !== "all") {
+                  return g.embedding_model === filterEmbedding;
                 }
                 return true;
               })
@@ -357,7 +317,7 @@ export default function RagasResultsPage() {
                 if (filterReranker === "enabled") {
                   return g.reranker_used === true;
                 } else if (filterReranker === "disabled") {
-                  return !g.reranker_used;
+                  return g.reranker_used !== true;
                 }
                 return true;
               });
@@ -369,18 +329,6 @@ export default function RagasResultsPage() {
               if (!b.created_at) return -1;
               return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
             });
-
-            // Get unique values for filter dropdowns
-            const uniqueLLMs = Array.from(new Set(
-              groups.map(g => {
-                if (g.llm_provider && g.llm_model) return `${g.llm_provider}/${g.llm_model}`;
-                return g.llm_model || g.llm_provider || "";
-              }).filter(Boolean)
-            )).sort();
-
-            const uniqueEvalModels = Array.from(new Set(
-              groups.map(g => g.evaluation_model).filter(Boolean)
-            )).sort();
 
             const totalPages = Math.max(1, Math.ceil(cleaned.length / PAGE_SIZE));
             const safePage = Math.min(Math.max(page, 1), totalPages);
@@ -430,11 +378,11 @@ export default function RagasResultsPage() {
                     </div>
 
                     <div>
-                      <label className="text-xs font-medium text-slate-700 mb-1 block">Eval Model</label>
+                      <label className="text-xs font-medium text-slate-700 mb-1 block">Embedding Model</label>
                       <Select
-                        value={filterEvalModel}
+                        value={filterEmbedding}
                         onValueChange={(v) => {
-                          setFilterEvalModel(v);
+                          setFilterEmbedding(v);
                           setPage(1);
                         }}
                       >
@@ -443,9 +391,9 @@ export default function RagasResultsPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="all">Tümü</SelectItem>
-                          {uniqueEvalModels.map((model) => (
-                            <SelectItem key={model} value={model}>
-                              {model}
+                          {uniqueEmbeddings.map((emb) => (
+                            <SelectItem key={emb} value={emb}>
+                              {emb}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -473,7 +421,7 @@ export default function RagasResultsPage() {
                     </div>
                   </div>
 
-                  {(searchQuery || filterLLM !== "all" || filterEvalModel !== "all" || filterReranker !== "all") && (
+                  {(searchQuery || filterLLM !== "all" || filterEmbedding !== "all" || filterReranker !== "all") && (
                     <div className="mt-3 flex items-center gap-2">
                       <span className="text-xs text-slate-600">Aktif filtreler:</span>
                       <Button
@@ -483,7 +431,7 @@ export default function RagasResultsPage() {
                         onClick={() => {
                           setSearchQuery("");
                           setFilterLLM("all");
-                          setFilterEvalModel("all");
+                          setFilterEmbedding("all");
                           setFilterReranker("all");
                           setPage(1);
                         }}
@@ -543,11 +491,10 @@ export default function RagasResultsPage() {
                         </th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">Grup</th>
                         <th className="px-3 py-2 text-right font-medium text-slate-600">Test</th>
-                        <th className="px-3 py-2 text-left font-medium text-slate-600">Ortalama</th>
-                        <th className="px-3 py-2 text-left font-medium text-slate-600">LLM</th>
-                        <th className="px-3 py-2 text-left font-medium text-slate-600">Eval</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Ortalama Skorlar</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">LLM Model</th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">Embedding</th>
-                        <th className="px-3 py-2 text-right font-medium text-slate-600">TopK</th>
+                        <th className="px-3 py-2 text-right font-medium text-slate-600">Top-K</th>
                         <th className="px-3 py-2 text-right font-medium text-slate-600">Alpha</th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">Reranker</th>
                         <th className="px-3 py-2 text-right font-medium text-slate-600"></th>
@@ -555,14 +502,6 @@ export default function RagasResultsPage() {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {pageItems.map((g, idx) => {
-                        const llm = g.llm_provider && g.llm_model
-                          ? `${g.llm_provider}/${g.llm_model}`
-                          : g.llm_model || g.llm_provider || "-";
-
-                        const reranker = g.reranker_used
-                          ? `${g.reranker_provider || "-"}/${g.reranker_model || "-"}`
-                          : "Kapalı";
-
                         return (
                           <tr key={g.name} className={idx % 2 === 0 ? "bg-white hover:bg-slate-50" : "bg-slate-50/40 hover:bg-slate-50"}>
                             <td className="px-3 py-2">
@@ -572,12 +511,9 @@ export default function RagasResultsPage() {
                               />
                             </td>
                             <td className="px-3 py-2">
-                              <Link
-                                href={`/dashboard/ragas/results/${encodeURIComponent(g.name)}`}
-                                className="font-semibold text-slate-900 hover:underline"
-                              >
+                              <div className="font-semibold text-slate-900">
                                 {g.name}
-                              </Link>
+                              </div>
                               <div className="text-[11px] text-slate-500 mt-0.5 whitespace-nowrap">
                                 {g.created_at ? new Date(g.created_at).toLocaleString("tr-TR") : "-"}
                               </div>
@@ -589,101 +525,126 @@ export default function RagasResultsPage() {
                             </td>
                             <td className="px-3 py-2">
                               <div className="text-xs flex gap-2 flex-wrap">
-                                {typeof g.avg_faithfulness === "number" && Number.isFinite(g.avg_faithfulness) && (
+                                {(() => {
+                                  console.log('Group data:', {
+                                    name: g.name,
+                                    avg_rouge1: g.avg_rouge1,
+                                    avg_original_bertscore_f1: g.avg_original_bertscore_f1,
+                                    hasOriginalBert: typeof g.avg_original_bertscore_f1 === "number",
+                                    isFinite: Number.isFinite(g.avg_original_bertscore_f1)
+                                  });
+                                  return null;
+                                })()}
+                                {typeof g.avg_rouge1 === "number" && Number.isFinite(g.avg_rouge1) && (
                                   <span className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-blue-700 border border-blue-200">
-                                    <span className="font-medium">F:</span>
-                                    <span>{(g.avg_faithfulness * 100).toFixed(0)}%</span>
+                                    <span className="font-medium">R1:</span>
+                                    <span>{(g.avg_rouge1 * 100).toFixed(0)}%</span>
                                   </span>
                                 )}
-                                {typeof g.avg_answer_relevancy === "number" && Number.isFinite(g.avg_answer_relevancy) && (
+                                {typeof g.avg_rouge2 === "number" && Number.isFinite(g.avg_rouge2) && (
                                   <span className="inline-flex items-center rounded bg-green-50 px-1.5 py-0.5 text-green-700 border border-green-200">
-                                    <span className="font-medium">AR:</span>
-                                    <span>{(g.avg_answer_relevancy * 100).toFixed(0)}%</span>
+                                    <span className="font-medium">R2:</span>
+                                    <span>{(g.avg_rouge2 * 100).toFixed(0)}%</span>
                                   </span>
                                 )}
-                                {typeof g.avg_context_precision === "number" && Number.isFinite(g.avg_context_precision) && (
+                                {typeof g.avg_rougel === "number" && Number.isFinite(g.avg_rougel) && (
                                   <span className="inline-flex items-center rounded bg-purple-50 px-1.5 py-0.5 text-purple-700 border border-purple-200">
-                                    <span className="font-medium">CP:</span>
-                                    <span>{(g.avg_context_precision * 100).toFixed(0)}%</span>
+                                    <span className="font-medium">RL:</span>
+                                    <span>{(g.avg_rougel * 100).toFixed(0)}%</span>
                                   </span>
                                 )}
-                                {typeof g.avg_context_recall === "number" && Number.isFinite(g.avg_context_recall) && (
+                                {typeof g.avg_original_bertscore_f1 === "number" && Number.isFinite(g.avg_original_bertscore_f1) && (
                                   <span className="inline-flex items-center rounded bg-orange-50 px-1.5 py-0.5 text-orange-700 border border-orange-200">
-                                    <span className="font-medium">CR:</span>
-                                    <span>{(g.avg_context_recall * 100).toFixed(0)}%</span>
-                                  </span>
-                                )}
-                                {typeof g.avg_answer_correctness === "number" && Number.isFinite(g.avg_answer_correctness) && (
-                                  <span className="inline-flex items-center rounded bg-red-50 px-1.5 py-0.5 text-red-700 border border-red-200">
-                                    <span className="font-medium">AC:</span>
-                                    <span>{(g.avg_answer_correctness * 100).toFixed(0)}%</span>
+                                    <span className="font-medium">BERT:</span>
+                                    <span>{(g.avg_original_bertscore_f1 * 100).toFixed(0)}%</span>
                                   </span>
                                 )}
                               </div>
                             </td>
                             <td className="px-3 py-2 whitespace-nowrap">
-                              <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700 border border-indigo-200">
-                                {llm}
+                              <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700 border border-indigo-200 text-[11px]">
+                                {g.llm_model || "-"}
                               </span>
                             </td>
                             <td className="px-3 py-2 whitespace-nowrap">
-                              <span className="inline-flex items-center rounded-full bg-purple-50 px-2 py-0.5 text-purple-700 border border-purple-200">
-                                {g.evaluation_model || "-"}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              <span className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
+                              <span className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200 text-[11px]">
                                 {g.embedding_model || "-"}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-right text-slate-700">{g.search_top_k ?? "-"}</td>
-                            <td className="px-3 py-2 text-right text-slate-700">{g.search_alpha ?? "-"}</td>
+                            <td className="px-3 py-2 text-right text-slate-700">
+                              {g.search_alpha !== null && g.search_alpha !== undefined ? g.search_alpha.toFixed(2) : "-"}
+                            </td>
                             <td className="px-3 py-2 whitespace-nowrap">
-                              <span
-                                className={`inline-flex items-center rounded-full px-2 py-0.5 border ${
-                                  g.reranker_used
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                    : "bg-slate-100 text-slate-600 border-slate-200"
-                                }`}
-                              >
-                                {reranker}
-                              </span>
+                              {(() => {
+                                if (!g.reranker_used) {
+                                  return (
+                                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 border border-slate-200 text-[11px]">
+                                      Yok
+                                    </span>
+                                  );
+                                }
+                                const rerankerText = g.reranker_provider && g.reranker_model
+                                  ? `${g.reranker_provider}/${g.reranker_model}`
+                                  : "Var";
+                                return (
+                                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 border border-emerald-200 text-[11px]">
+                                    {rerankerText}
+                                  </span>
+                                );
+                              })()}
                             </td>
                             <td className="px-3 py-2 text-right">
                               <div className="inline-flex items-center gap-1">
-                                <Link href={`/dashboard/ragas/results/${encodeURIComponent(g.name)}`}>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-8 w-8 p-0"
-                                    type="button"
-                                    title="Detay"
-                                  >
-                                    <SquarePen className="w-4 h-4" />
-                                  </Button>
-                                </Link>
-
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0 text-purple-600 hover:text-purple-700 hover:bg-purple-50"
+                                  onClick={async () => {
+                                    if (!selectedCourseId) return;
+                                    try {
+                                      toast.loading("W&B'ye aktarılıyor...", { id: "wandb-export" });
+                                      const res = await api.wandbExportSemanticSimilarityGroup({
+                                        course_id: selectedCourseId,
+                                        group_name: g.name,
+                                      });
+                                      if (res.run_url) {
+                                        toast.success(`Aktarıldı: ${res.exported_count} kayıt`, { id: "wandb-export" });
+                                        window.open(res.run_url, "_blank");
+                                      } else {
+                                        toast.success(`Aktarıldı: ${res.exported_count} kayıt`, { id: "wandb-export" });
+                                      }
+                                    } catch (e) {
+                                      const msg = e instanceof Error ? e.message : "W&B aktarımı başarısız";
+                                      toast.error(msg, { id: "wandb-export" });
+                                    }
+                                  }}
+                                  title="W&B'ye gönder"
+                                >
+                                  <BarChart3 className="w-4 h-4" />
+                                </Button>
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   className="h-8 w-8 p-0"
-                                  type="button"
-                                  title="Grup adını değiştir"
                                   onClick={() => openRenameDialog(g.name)}
+                                  title="Grup adını değiştir"
                                 >
                                   <History className="w-4 h-4" />
                                 </Button>
-
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
-                                  type="button"
-                                  title="Sil"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                                   onClick={() => handleDeleteGroup(g.name, g.test_count)}
                                   disabled={deletingGroupName === g.name}
+                                  title="Grubu sil"
                                 >
-                                  <Trash2 className={`w-4 h-4 ${deletingGroupName === g.name ? "opacity-50" : ""}`} />
+                                  {deletingGroupName === g.name ? (
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-4 h-4" />
+                                  )}
                                 </Button>
                               </div>
                             </td>
@@ -698,176 +659,6 @@ export default function RagasResultsPage() {
           })()}
         </div>
       )}
-
-      {/* Statistics Modal */}
-      <Dialog open={showStatisticsModal} onOpenChange={setShowStatisticsModal}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Grup İstatistikleri - {selectedGroupNames.size} Grup Seçildi</DialogTitle>
-          </DialogHeader>
-
-          {(() => {
-            const stats = calculateStatistics();
-            if (!stats) return <p className="text-slate-500">İstatistik hesaplanamadı</p>;
-
-            const StatCard = ({ title, data }: { title: string; data: ReturnType<typeof calculateStatistics>['faithfulness'] }) => {
-              if (!data) return null;
-              
-              return (
-                <div className="p-4 rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50">
-                  <h3 className="text-sm font-semibold text-slate-900 mb-3">{title}</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <div className="text-xs text-slate-500">Ortalama</div>
-                      <div className="text-lg font-bold text-blue-600">
-                        {(data.mean * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500">Std. Sapma</div>
-                      <div className="text-lg font-bold text-purple-600">
-                        {(data.stdDev * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500">Medyan</div>
-                      <div className="text-base font-semibold text-slate-700">
-                        {(data.median * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500">Aralık</div>
-                      <div className="text-base font-semibold text-slate-700">
-                        {(data.min * 100).toFixed(1)}% - {(data.max * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="mt-3 pt-3 border-t border-slate-200">
-                    <div className="flex items-center gap-2 text-xs">
-                      <div className="flex-1">
-                        <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all"
-                            style={{ width: `${data.mean * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                      <span className="text-slate-600 font-medium">{data.count} grup</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            };
-
-            return (
-              <div className="space-y-6">
-                {/* Summary */}
-                <div className="p-4 rounded-xl bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-bold text-slate-900">Genel Özet</h3>
-                      <p className="text-sm text-slate-600 mt-1">
-                        {stats.totalSelected} grup, toplam {stats.totalTests} test üzerinden hesaplanmıştır
-                      </p>
-                    </div>
-                    <BarChart3 className="w-12 h-12 text-blue-500 opacity-50" />
-                  </div>
-                </div>
-
-                {/* RAGAS Metrics */}
-                <div>
-                  <h3 className="text-base font-semibold text-slate-900 mb-3">RAGAS Metrikleri (Grup Ortalamaları)</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <StatCard title="Faithfulness" data={stats.faithfulness} />
-                    <StatCard title="Answer Relevancy" data={stats.answer_relevancy} />
-                    <StatCard title="Context Precision" data={stats.context_precision} />
-                    <StatCard title="Context Recall" data={stats.context_recall} />
-                    <StatCard title="Answer Correctness" data={stats.answer_correctness} />
-                  </div>
-                </div>
-
-                {/* Comparison Chart */}
-                <div className="p-4 rounded-xl border border-slate-200 bg-white">
-                  <h3 className="text-base font-semibold text-slate-900 mb-4">Metrik Karşılaştırması</h3>
-                  <div className="space-y-3">
-                    {stats.faithfulness && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-slate-700">Faithfulness</span>
-                          <span className="text-slate-600">{(stats.faithfulness.mean * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-blue-500 rounded-full transition-all"
-                            style={{ width: `${stats.faithfulness.mean * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {stats.answer_relevancy && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-slate-700">Answer Relevancy</span>
-                          <span className="text-slate-600">{(stats.answer_relevancy.mean * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-purple-500 rounded-full transition-all"
-                            style={{ width: `${stats.answer_relevancy.mean * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {stats.context_precision && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-slate-700">Context Precision</span>
-                          <span className="text-slate-600">{(stats.context_precision.mean * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-emerald-500 rounded-full transition-all"
-                            style={{ width: `${stats.context_precision.mean * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {stats.context_recall && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-slate-700">Context Recall</span>
-                          <span className="text-slate-600">{(stats.context_recall.mean * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-amber-500 rounded-full transition-all"
-                            style={{ width: `${stats.context_recall.mean * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {stats.answer_correctness && (
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-slate-700">Answer Correctness</span>
-                          <span className="text-slate-600">{(stats.answer_correctness.mean * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-rose-500 rounded-full transition-all"
-                            style={{ width: `${stats.answer_correctness.mean * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

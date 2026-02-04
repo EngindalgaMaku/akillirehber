@@ -113,6 +113,19 @@ class WeaviateService:
             self._client.close()
             self._client = None
 
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensure connection is closed."""
+        self.close()
+        return False
+
+    def __del__(self):
+        """Destructor - ensure connection is closed."""
+        self.close()
+
 
     # ==================== CRUD Operations ====================
 

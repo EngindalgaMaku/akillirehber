@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   api,
@@ -49,7 +49,7 @@ import {
   Trash2
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { generateAnalysisPDF } from "./exportAnalysisToPDF";
 
 export interface GroupComparison {
@@ -93,6 +93,7 @@ export interface QuestionComparison {
 export default function SemanticSimilarityAnalysisPage() {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -141,6 +142,9 @@ export default function SemanticSimilarityAnalysisPage() {
   const [isQuestionComparisonExpanded, setIsQuestionComparisonExpanded] = useState(true);
   const [isReliabilityExpanded, setIsReliabilityExpanded] = useState(true);
 
+  // Track if auto-analysis has been triggered
+  const autoAnalyzedRef = useRef(false);
+
   useEffect(() => {
     loadCourses();
   }, []);
@@ -152,6 +156,42 @@ export default function SemanticSimilarityAnalysisPage() {
       setGroupsPage(1); // Reset to first page when course changes
     }
   }, [selectedCourseId]);
+
+  // Handle URL parameters for auto-analysis
+  useEffect(() => {
+    if (autoAnalyzedRef.current) return; // Prevent multiple triggers
+    
+    const groupsParam = searchParams.get('groups');
+    const courseParam = searchParams.get('course');
+    
+    console.log('URL params:', { groupsParam, courseParam });
+    
+    if (groupsParam && courseParam) {
+      const courseId = parseInt(courseParam);
+      const groupNames = groupsParam.split(',').filter(g => g.trim());
+      
+      console.log('Parsed params:', { courseId, groupNames, isArray: Array.isArray(groupNames) });
+      
+      if (groupNames.length > 0 && !isNaN(courseId)) {
+        autoAnalyzedRef.current = true; // Mark as triggered
+        
+        // Set course if different
+        if (selectedCourseId !== courseId) {
+          setSelectedCourseId(courseId);
+          localStorage.setItem('semantic_similarity_selected_course_id', courseId.toString());
+        }
+        
+        // Set selected groups and trigger analysis
+        setSelectedGroups(groupNames);
+        
+        // Wait a bit for course to load, then analyze
+        setTimeout(() => {
+          console.log('Calling runAnalysis with:', { groupNames, courseId });
+          runAnalysis(groupNames, courseId);
+        }, 500);
+      }
+    }
+  }, [searchParams]);
 
   const loadCourses = async () => {
     try {
@@ -275,9 +315,20 @@ export default function SemanticSimilarityAnalysisPage() {
     }
   };
 
-  const runAnalysis = async () => {
-    if (selectedGroups.length < 2) {
+  const runAnalysis = async (groupsToAnalyze?: string[], courseId?: number) => {
+    const groups = groupsToAnalyze || selectedGroups;
+    const course = courseId || selectedCourseId;
+    
+    console.log('runAnalysis called with:', { groupsToAnalyze, courseId, selectedGroups, groups, isArray: Array.isArray(groups) });
+    
+    // Ensure groups is an array
+    if (!Array.isArray(groups) || groups.length < 2) {
       toast.error("Lütfen en az 2 grup seçin");
+      return;
+    }
+
+    if (!course) {
+      toast.error("Lütfen bir ders seçin");
       return;
     }
 
@@ -286,9 +337,9 @@ export default function SemanticSimilarityAnalysisPage() {
       // Her grup için sonuçları yükle
       const comparisons: GroupComparison[] = [];
       
-      for (const groupName of selectedGroups) {
+      for (const groupName of groups) {
         const data = await api.getSemanticSimilarityResults(
-          selectedCourseId!,
+          course,
           groupName,
           0,
           10000
@@ -585,7 +636,7 @@ export default function SemanticSimilarityAnalysisPage() {
       {/* Header */}
       <div className="relative overflow-hidden bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600 rounded-2xl p-8 text-white shadow-xl">
         <div className="absolute top-4 left-4 z-20">
-          <Link href="/dashboard/semantic-similarity">
+          <Link href="/dashboard/semantic-similarity/results">
             <Button
               variant="secondary"
               size="sm"
@@ -811,7 +862,7 @@ export default function SemanticSimilarityAnalysisPage() {
                         : "Lütfen en az 2 grup seçin"}
                     </p>
                     <Button
-                      onClick={runAnalysis}
+                      onClick={() => runAnalysis()}
                       disabled={isAnalyzing || selectedGroups.length < 2}
                       className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
                     >
@@ -934,6 +985,156 @@ export default function SemanticSimilarityAnalysisPage() {
                               </td>
                             </tr>
                           ))}
+                          
+                          {/* Overall Average Row */}
+                          {(() => {
+                            const rouge1Values = groupComparisons.filter(g => g.aggregate.avg_rouge1 != null).map(g => g.aggregate.avg_rouge1!);
+                            const rouge2Values = groupComparisons.filter(g => g.aggregate.avg_rouge2 != null).map(g => g.aggregate.avg_rouge2!);
+                            const rougelValues = groupComparisons.filter(g => g.aggregate.avg_rougel != null).map(g => g.aggregate.avg_rougel!);
+                            const bertF1Values = groupComparisons.filter(g => g.aggregate.avg_bertscore_f1 != null).map(g => g.aggregate.avg_bertscore_f1!);
+                            const latencyValues = groupComparisons.filter(g => g.aggregate.avg_latency_ms != null).map(g => g.aggregate.avg_latency_ms!);
+                            const totalTests = groupComparisons.reduce((sum, g) => sum + g.aggregate.test_count, 0);
+                            
+                            const avgRouge1 = rouge1Values.length > 0 ? rouge1Values.reduce((a, b) => a + b, 0) / rouge1Values.length : null;
+                            const avgRouge2 = rouge2Values.length > 0 ? rouge2Values.reduce((a, b) => a + b, 0) / rouge2Values.length : null;
+                            const avgRougel = rougelValues.length > 0 ? rougelValues.reduce((a, b) => a + b, 0) / rougelValues.length : null;
+                            const avgBertF1 = bertF1Values.length > 0 ? bertF1Values.reduce((a, b) => a + b, 0) / bertF1Values.length : null;
+                            const avgLatency = latencyValues.length > 0 ? latencyValues.reduce((a, b) => a + b, 0) / latencyValues.length : null;
+                            
+                            return (
+                              <tr className="bg-blue-50 border-t-2 border-blue-200 font-semibold">
+                                <td className="px-4 py-3 text-slate-900">
+                                  <span className="px-2 py-1 bg-blue-600 text-white rounded-full text-xs">
+                                    Genel Ortalama
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-center text-slate-900">{totalTests}</td>
+                                <td className="px-4 py-3 text-center">
+                                  {avgRouge1 != null ? (
+                                    <span className={`font-bold ${getMetricColor(avgRouge1)}`}>
+                                      {(avgRouge1 * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {avgRouge2 != null ? (
+                                    <span className={`font-bold ${getMetricColor(avgRouge2)}`}>
+                                      {(avgRouge2 * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {avgRougel != null ? (
+                                    <span className={`font-bold ${getMetricColor(avgRougel)}`}>
+                                      {(avgRougel * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {avgBertF1 != null ? (
+                                    <span className={`font-bold ${getMetricColor(avgBertF1)}`}>
+                                      {(avgBertF1 * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {avgLatency != null ? (
+                                    <span className="font-bold text-slate-900">
+                                      {avgLatency.toFixed(0)} ms
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })()}
+                          
+                          {/* Standard Deviation Row */}
+                          {(() => {
+                            const rouge1Values = groupComparisons.filter(g => g.aggregate.avg_rouge1 != null).map(g => g.aggregate.avg_rouge1!);
+                            const rouge2Values = groupComparisons.filter(g => g.aggregate.avg_rouge2 != null).map(g => g.aggregate.avg_rouge2!);
+                            const rougelValues = groupComparisons.filter(g => g.aggregate.avg_rougel != null).map(g => g.aggregate.avg_rougel!);
+                            const bertF1Values = groupComparisons.filter(g => g.aggregate.avg_bertscore_f1 != null).map(g => g.aggregate.avg_bertscore_f1!);
+                            const latencyValues = groupComparisons.filter(g => g.aggregate.avg_latency_ms != null).map(g => g.aggregate.avg_latency_ms!);
+                            
+                            const calcStdDev = (values: number[]) => {
+                              if (values.length < 2) return null;
+                              const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                              const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
+                              return Math.sqrt(variance);
+                            };
+                            
+                            const stdRouge1 = calcStdDev(rouge1Values);
+                            const stdRouge2 = calcStdDev(rouge2Values);
+                            const stdRougel = calcStdDev(rougelValues);
+                            const stdBertF1 = calcStdDev(bertF1Values);
+                            const stdLatency = calcStdDev(latencyValues);
+                            
+                            return (
+                              <tr className="bg-purple-50 border-t border-purple-200 font-semibold">
+                                <td className="px-4 py-3 text-slate-900">
+                                  <span className="px-2 py-1 bg-purple-600 text-white rounded-full text-xs">
+                                    Standart Sapma (σ)
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-center text-slate-400">-</td>
+                                <td className="px-4 py-3 text-center">
+                                  {stdRouge1 != null ? (
+                                    <span className={`font-bold ${getVarianceColor(stdRouge1)} px-2 py-1 rounded border`}>
+                                      ±{(stdRouge1 * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {stdRouge2 != null ? (
+                                    <span className={`font-bold ${getVarianceColor(stdRouge2)} px-2 py-1 rounded border`}>
+                                      ±{(stdRouge2 * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {stdRougel != null ? (
+                                    <span className={`font-bold ${getVarianceColor(stdRougel)} px-2 py-1 rounded border`}>
+                                      ±{(stdRougel * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {stdBertF1 != null ? (
+                                    <span className={`font-bold ${getVarianceColor(stdBertF1)} px-2 py-1 rounded border`}>
+                                      ±{(stdBertF1 * 100).toFixed(2)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {stdLatency != null ? (
+                                    <span className="font-bold text-purple-700 bg-purple-100 px-2 py-1 rounded border border-purple-200">
+                                      ±{stdLatency.toFixed(0)} ms
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })()}
                         </tbody>
                       </table>
                     </div>

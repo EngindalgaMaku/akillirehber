@@ -1,7 +1,7 @@
 """Chat API endpoints for RAG-based conversation."""
 
 from typing import List, Optional
-
+import uuid
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,6 +31,7 @@ from app.services.llm_service import (
 from app.services.weaviate_service import get_weaviate_service, SearchResult
 from app.services.chat_validation_service import ChatValidationService
 from app.services.rerank_service import get_rerank_service
+from app.services.memory_service import get_memory_service
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -148,12 +149,27 @@ async def chat_with_course(
     db: Session = Depends(get_db),
 ):
     """
-    Chat with course materials using RAG.
+    Chat with course materials using RAG with memory support.
 
     Performs hybrid search on course documents and generates
-    a response using the retrieved context.
+    a response using the retrieved context and conversation history.
     """
     verify_course_access(db, course_id, current_user)
+    
+    # Initialize memory service
+    try:
+        weaviate_service = get_weaviate_service()
+        weaviate_client = weaviate_service._get_client()
+        memory_service = get_memory_service(weaviate_client)
+        memory_enabled = True
+        print("[CHAT] Memory service initialized successfully")
+    except Exception as e:
+        print(f"[CHAT] Memory service initialization failed: {e}")
+        memory_service = None
+        memory_enabled = False
+    
+    # Generate session ID if not provided (for grouping related messages)
+    session_id = str(uuid.uuid4())
 
     # Validate chunk availability before processing
     chat_validation = ChatValidationService(db)
@@ -194,15 +210,41 @@ async def chat_with_course(
     # Debug log for embedding model
     print(f"Course embedding model: {settings.default_embedding_model}")
 
+    # Get conversation context from memory (if enabled)
+    short_term_context = []
+    if memory_enabled and memory_service:
+        try:
+            # Always get last 30 messages for better context
+            short_term_context = memory_service.get_short_term_context(
+                user_id=current_user.id,
+                course_id=course_id,
+                limit=30
+            )
+        except Exception as e:
+            print(f"[CHAT] Failed to get short-term context: {e}")
+
     # Get query embedding using course's embedding model
     embedding_service = get_embedding_service()
+    
+    # Enhance query with conversation context for better search
+    enhanced_query = request.message
+    if short_term_context and len(short_term_context) > 0:
+        # Get last user message for context
+        last_messages = [msg for msg in short_term_context[-3:] if msg['role'] == 'user']
+        if last_messages:
+            last_user_msg = last_messages[-1]['content']
+            # If current query is short/ambiguous, add context
+            if len(request.message.split()) <= 3:
+                enhanced_query = f"{last_user_msg} {request.message}"
+                print(f"[CHAT] Enhanced query: '{request.message}' -> '{enhanced_query}'")
     
     # DEBUG: Log the embedding model being used
     print(f"[CHAT DEBUG] Using embedding model: {settings.default_embedding_model}")
     print(f"[CHAT DEBUG] Course ID: {course_id}")
+    print(f"[CHAT DEBUG] Query: {enhanced_query}")
     
     query_vector = embedding_service.get_embedding(
-        request.message,
+        enhanced_query,
         model=settings.default_embedding_model
     )
     
@@ -225,13 +267,13 @@ async def chat_with_course(
     elif request.search_type == "keyword":
         results = weaviate_service.keyword_search(
             course_id=course_id,
-            query=request.message,
+            query=enhanced_query,
             limit=search_top_k
         )
     else:  # hybrid
         results = weaviate_service.hybrid_search(
             course_id=course_id,
-            query=request.message,
+            query=enhanced_query,
             query_vector=query_vector,
             alpha=search_alpha,
             limit=search_top_k
@@ -265,7 +307,7 @@ async def chat_with_course(
                 # Call reranker service
                 rerank_service = get_rerank_service()
                 reranked_docs = rerank_service.rerank(
-                    query=request.message,
+                    query=enhanced_query,
                     documents=documents_for_reranking,
                     provider=settings.reranker_provider,
                     model=settings.reranker_model,
@@ -372,37 +414,42 @@ async def chat_with_course(
             content=request.message,
         )
     )
+    
+    # Add user message to short-term memory (if enabled)
+    if memory_enabled and memory_service:
+        try:
+            memory_service.add_message_to_short_term(
+                user_id=current_user.id,
+                course_id=course_id,
+                role="user",
+                content=request.message,
+                session_id=session_id,
+                embedding_model=settings.default_embedding_model
+            )
+        except Exception as e:
+            print(f"[CHAT] Failed to add user message to memory: {e}")
 
     # Build messages for LLM
-    # Use custom system prompt from course settings if available, otherwise use default
-    default_system_prompt = """You are an educational assistant. Answer student questions using the provided context information.
-
-Rules:
-1. Use only the information from the provided context
-2. If the context doesn't contain the answer, say so clearly
-3. Provide accurate and helpful responses
-4. Keep your answers clear and understandable
-5. Reference sources when necessary"""
-    
+    # Use system prompt from course settings (required field, no default)
     active_template = getattr(settings, "active_prompt_template", None)
-    if active_template is not None and getattr(
-        active_template,
-        "content",
-        None,
-    ):
+    if active_template is not None and getattr(active_template, "content", None):
         system_prompt = active_template.content
     else:
-        system_prompt = (
-            settings.system_prompt if settings.system_prompt else default_system_prompt
+        system_prompt = settings.system_prompt
+    
+    if not system_prompt:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="System prompt not configured for this course"
         )
 
     messages = [{"role": "system", "content": system_prompt}]
-
-# ... (rest of the code remains the same)
-    # Add chat history
-    if request.history:
-        for msg in request.history[-10:]:  # Last 10 messages
-            messages.append({"role": msg.role, "content": msg.content})
+    
+    # Add chat history from memory (if available)
+    if short_term_context:
+        print(f"[CHAT] Adding {len(short_term_context)} messages from memory")
+        for i, msg in enumerate(short_term_context):
+            messages.append({"role": msg['role'], "content": msg['content']})
 
     # Add current message with context
     user_message = f"""Context:
@@ -411,6 +458,12 @@ Rules:
 Question: {request.message}"""
 
     messages.append({"role": "user", "content": user_message})
+    
+    # Debug: Print all messages being sent to LLM
+    print(f"[CHAT] Sending {len(messages)} messages to LLM:")
+    for i, msg in enumerate(messages):
+        content_preview = msg['content'][:150] if len(msg['content']) > 150 else msg['content']
+        print(f"[CHAT]   Message {i+1} ({msg['role']}): {content_preview}...")
 
     # Call LLM
     try:
@@ -437,6 +490,20 @@ Question: {request.message}"""
             )
         )
         db.commit()
+        
+        # Add assistant message to short-term memory (if enabled)
+        if memory_enabled and memory_service:
+            try:
+                memory_service.add_message_to_short_term(
+                    user_id=current_user.id,
+                    course_id=course_id,
+                    role="assistant",
+                    content=assistant_message,
+                    session_id=session_id,
+                    embedding_model=settings.default_embedding_model
+                )
+            except Exception as e:
+                print(f"[CHAT] Failed to add assistant message to memory: {e}")
 
         return ChatResponse(
             message=assistant_message,
@@ -503,6 +570,7 @@ async def clear_chat_history(
 ):
     verify_course_access(db, course_id, current_user)
 
+    # Clear PostgreSQL chat history
     deleted_count = (
         db.query(ChatMessageDB)
         .filter(ChatMessageDB.course_id == course_id)
@@ -510,6 +578,19 @@ async def clear_chat_history(
         .delete(synchronize_session=False)
     )
     db.commit()
+    
+    # Clear Weaviate memory
+    try:
+        weaviate_service = get_weaviate_service()
+        weaviate_client = weaviate_service._get_client()
+        memory_service = get_memory_service(weaviate_client)
+        memory_service.clear_user_memory(
+            user_id=current_user.id,
+            course_id=course_id
+        )
+        print(f"[CHAT] Cleared memory for user={current_user.id}, course={course_id}")
+    except Exception as e:
+        print(f"[CHAT] Failed to clear memory: {e}")
 
     return ChatHistoryClearResponse(success=True, deleted_count=deleted_count)
 
@@ -595,3 +676,53 @@ async def test_search_functionality(
     )
 
     return search_test
+
+
+@router.delete("/courses/{course_id}/chat/memory")
+async def clear_chat_memory(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clear user's conversation memory for a specific course."""
+    verify_course_access(db, course_id, current_user)
+    
+    weaviate_service = get_weaviate_service()
+    weaviate_client = weaviate_service._get_client()
+    memory_service = get_memory_service(weaviate_client)
+    
+    memory_service.clear_user_memory(
+        user_id=current_user.id,
+        course_id=course_id
+    )
+    
+    return {"message": "Konuşma geçmişi temizlendi"}
+
+
+@router.post("/courses/{course_id}/chat/memory/summarize")
+async def summarize_to_long_term_memory(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Manually trigger summarization of recent conversations to long-term memory."""
+    verify_course_access(db, course_id, current_user)
+    
+    settings = get_or_create_settings(db, course_id)
+    llm_service = get_llm_service(
+        provider=settings.llm_provider,
+        model=settings.llm_model,
+    )
+    
+    weaviate_service = get_weaviate_service()
+    weaviate_client = weaviate_service._get_client()
+    memory_service = get_memory_service(weaviate_client)
+    
+    memory_service.summarize_to_long_term(
+        user_id=current_user.id,
+        course_id=course_id,
+        llm_service=llm_service,
+        embedding_model=settings.default_embedding_model
+    )
+    
+    return {"message": "Konuşma özeti oluşturuldu"}

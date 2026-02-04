@@ -22,21 +22,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
-def _bcrypt_secret(secret: str) -> bytes:
-    data = (secret or "").encode("utf-8")
-    if len(data) <= 72:
-        return data
-    return data[:72]
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hashed password."""
-    return pwd_context.verify(_bcrypt_secret(plain_password), hashed_password)
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    return pwd_context.hash(_bcrypt_secret(password))
+    return pwd_context.hash(password)
 
 
 # Alias for consistency

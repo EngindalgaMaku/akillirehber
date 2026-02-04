@@ -392,6 +392,7 @@ class CourseSettingsBase(BaseModel):
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
     reranker_top_k: int = Field(default=10, ge=5, le=20)
+    vector_store: str = "weaviate"
 
 
 class CourseSettingsCreate(CourseSettingsBase):
@@ -438,6 +439,7 @@ class CourseSettingsUpdate(BaseModel):
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
     reranker_top_k: Optional[int] = Field(default=None, ge=5, le=20)
+    vector_store: Optional[str] = None
 
     @field_validator('reranker_provider')
     @classmethod
@@ -457,6 +459,14 @@ class CourseSettingsUpdate(BaseModel):
         allowed_prefixes = ['openai/', 'alibaba/', 'cohere/', 'jina/', 'bge/', 'ollama/', 'voyage/']
         if not any(v.startswith(p) for p in allowed_prefixes) and not v.startswith('voyage-'):
             raise ValueError(f"Invalid embedding model: {v}. Must start with one of: {', '.join(allowed_prefixes)} or voyage-")
+        return v
+    
+    @field_validator('vector_store')
+    @classmethod
+    def validate_vector_store(cls, v: Optional[str]) -> Optional[str]:
+        """Validate vector store is one of the supported values."""
+        if v is not None and v not in ['weaviate', 'chromadb']:
+            raise ValueError(f"Invalid vector store: {v}. Must be one of: weaviate, chromadb")
         return v
 
 
@@ -1121,6 +1131,11 @@ class SemanticSimilarityBatchTestRequest(BaseModel):
     embedding_model: Optional[str] = None
     llm_provider: Optional[str] = None  # Override course LLM provider
     llm_model: Optional[str] = None  # Override course LLM model
+    search_top_k: Optional[int] = None  # Override search top_k
+    search_alpha: Optional[float] = None  # Override search alpha
+    reranker_used: Optional[bool] = None  # Override reranker usage
+    reranker_provider: Optional[str] = None  # Override reranker provider
+    reranker_model: Optional[str] = None  # Override reranker model
 
 
 class SemanticSimilarityBatchResult(BaseModel):
@@ -1203,6 +1218,13 @@ class SemanticSimilarityResultCreate(BaseModel):
     llm_model_used: Optional[str] = None
     retrieved_contexts: Optional[List[str]] = None
     system_prompt_used: Optional[str] = None
+    # Search configuration
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
+    # Reranker configuration
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
     created_by: int
     created_at: datetime
 
@@ -1248,10 +1270,28 @@ class SemanticSimilarityResultResponse(BaseModel):
 
 
 class SemanticSimilarityGroupInfo(BaseModel):
-    """Schema for group information with creation date."""
+    """Schema for group information with statistics."""
 
     name: str
     created_at: Optional[str] = None
+    test_count: int = 0
+    avg_rouge1: Optional[float] = None
+    avg_rouge2: Optional[float] = None
+    avg_rougel: Optional[float] = None
+    avg_bertscore_precision: Optional[float] = None
+    avg_bertscore_recall: Optional[float] = None
+    avg_bertscore_f1: Optional[float] = None
+    avg_original_bertscore_precision: Optional[float] = None
+    avg_original_bertscore_recall: Optional[float] = None
+    avg_original_bertscore_f1: Optional[float] = None
+    avg_latency_ms: Optional[float] = None
+    llm_model: Optional[str] = None
+    embedding_model: Optional[str] = None
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
 
 
 class SemanticSimilarityResultListResponse(BaseModel):
@@ -1364,6 +1404,9 @@ class BatchTestSessionResponse(BaseModel):
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     embedding_model_used: Optional[str] = None
+    # Search configuration
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
     # Reranker configuration
     reranker_used: Optional[bool] = None
     reranker_provider: Optional[str] = None
@@ -1389,6 +1432,9 @@ class BatchTestSessionCreate(BaseModel):
     embedding_model: Optional[str] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    # Search configuration
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
     # Reranker configuration
     reranker_used: Optional[bool] = None
     reranker_provider: Optional[str] = None

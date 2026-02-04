@@ -2123,6 +2123,205 @@ async def delete_quick_test_result(
     return None
 
 
+@router.post("/quick-test-results/wandb-export")
+async def export_quick_test_results_to_wandb(
+    data: dict,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Export quick test results group to Weights & Biases."""
+    course_id = data.get("course_id")
+    group_name = data.get("group_name")
+    
+    if not course_id or not group_name:
+        raise HTTPException(
+            status_code=400,
+            detail="course_id and group_name are required"
+        )
+    
+    verify_course_access(db, course_id, current_user)
+
+    wb_project = os.getenv("WANDB_PROJECT")
+    wb_mode = os.getenv("WANDB_MODE")
+    wb_has_key = bool(os.getenv("WANDB_API_KEY"))
+    if wandb is None or not wb_project or (not wb_has_key and wb_mode != "offline"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "W&B is not configured. Set WANDB_PROJECT and WANDB_API_KEY "
+                "(or WANDB_MODE=offline)."
+            ),
+        )
+
+    # Get all results for this group
+    results = (
+        db.query(QuickTestResult)
+        .filter(
+            QuickTestResult.course_id == course_id,
+            QuickTestResult.group_name == group_name
+        )
+        .order_by(QuickTestResult.created_at.asc())
+        .all()
+    )
+    
+    if not results:
+        raise HTTPException(status_code=404, detail="No results found for this group")
+
+    # Get course info
+    from app.models.db_models import Course
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    # Calculate aggregate metrics
+    metrics_with_values = {
+        'faithfulness': [r.faithfulness for r in results if r.faithfulness is not None],
+        'answer_relevancy': [r.answer_relevancy for r in results if r.answer_relevancy is not None],
+        'context_precision': [r.context_precision for r in results if r.context_precision is not None],
+        'context_recall': [r.context_recall for r in results if r.context_recall is not None],
+        'answer_correctness': [r.answer_correctness for r in results if r.answer_correctness is not None],
+        'latency_ms': [r.latency_ms for r in results if r.latency_ms is not None],
+    }
+    
+    def safe_avg(values):
+        return sum(values) / len(values) if values else None
+
+    avg_metrics = {
+        'avg_faithfulness': safe_avg(metrics_with_values['faithfulness']),
+        'avg_answer_relevancy': safe_avg(metrics_with_values['answer_relevancy']),
+        'avg_context_precision': safe_avg(metrics_with_values['context_precision']),
+        'avg_context_recall': safe_avg(metrics_with_values['context_recall']),
+        'avg_answer_correctness': safe_avg(metrics_with_values['answer_correctness']),
+        'avg_latency_ms': safe_avg(metrics_with_values['latency_ms']),
+    }
+
+    # Get representative test parameters from first result
+    sample = results[0]
+    
+    wb_entity = os.getenv("WANDB_ENTITY")
+    from datetime import timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_name = f"ragas-quick-{course_id}-{group_name}-{timestamp}"
+
+    # Initialize W&B run
+    wb_run = wandb.init(
+        project=wb_project,
+        entity=wb_entity,
+        name=run_name,
+        config={
+            "course_id": course_id,
+            "course_name": course.name,
+            "group_name": group_name,
+            "test_type": "quick_test",
+            # Generation (RAG) models
+            "generation_llm_provider": sample.llm_provider,
+            "generation_llm_model": sample.llm_model,
+            "embedding_model": sample.embedding_model,
+            # Evaluation (RAGAS) models
+            "evaluation_model": sample.evaluation_model,
+            # Search parameters
+            "search_alpha": sample.search_alpha,
+            "search_top_k": sample.search_top_k,
+            # Reranker settings
+            "reranker_used": sample.reranker_used,
+            "reranker_provider": sample.reranker_provider,
+            "reranker_model": sample.reranker_model,
+            # System prompt
+            "system_prompt": sample.system_prompt,
+            # Counts
+            "total_questions": len(results),
+        },
+        tags=["RAGAS", "ragas", "quick_test", "evaluation", group_name],
+    )
+
+    # Create detailed results table
+    table = wandb.Table(
+        columns=[
+            "id",
+            "question",
+            "ground_truth",
+            "alternative_ground_truths",
+            "generated_answer",
+            "contexts_count",
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
+            "context_recall",
+            "answer_correctness",
+            "latency_ms",
+            "llm_provider",
+            "llm_model",
+            "evaluation_model",
+            "embedding_model",
+            "search_top_k",
+            "search_alpha",
+            "reranker_used",
+            "reranker_provider",
+            "reranker_model",
+            "created_at",
+        ]
+    )
+
+    for r in results:
+        contexts_count = 0
+        if r.retrieved_contexts:
+            if isinstance(r.retrieved_contexts, list):
+                contexts_count = len(r.retrieved_contexts)
+        
+        table.add_data(
+            r.id,
+            r.question,
+            r.ground_truth,
+            r.alternative_ground_truths,
+            r.generated_answer,
+            contexts_count,
+            r.faithfulness,
+            r.answer_relevancy,
+            r.context_precision,
+            r.context_recall,
+            r.answer_correctness,
+            r.latency_ms,
+            r.llm_provider,
+            r.llm_model,
+            r.evaluation_model,
+            r.embedding_model,
+            r.search_top_k,
+            r.search_alpha,
+            r.reranker_used,
+            r.reranker_provider,
+            r.reranker_model,
+            r.created_at.isoformat() if r.created_at else None,
+        )
+
+    # Log everything to W&B
+    payload = {
+        "results": table,
+        "test_count": len(results),
+    }
+    
+    # Add aggregate metrics
+    for key, value in avg_metrics.items():
+        if value is not None:
+            payload[f"aggregate/{key}"] = value
+    
+    wandb.log(payload)
+
+    # Get run URL
+    run_url = getattr(wb_run, "url", None)
+    run_id = getattr(wb_run, "id", None)
+    
+    wb_run.finish()
+    
+    return {
+        "success": True,
+        "run_name": run_name,
+        "run_id": run_id,
+        "run_url": run_url,
+        "exported_count": len(results),
+        "aggregate_metrics": avg_metrics,
+    }
+
+
 # ==================== Batch Test Streaming Endpoint ====================
 
 class BatchTestStreamRequest(BaseModel):

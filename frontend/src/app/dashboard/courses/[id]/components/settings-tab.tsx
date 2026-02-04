@@ -106,7 +106,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
   
   // Accordion state (only one section open at a time)
   const [expandedSection, setExpandedSection] = useState<
-    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | null
+    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | "vector_store" | null
   >(null);
   
   // Model management state
@@ -145,6 +145,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
     reranker_provider: null as string | null,
     reranker_model: null as string | null,
     reranker_top_k: 10,
+    vector_store: "weaviate" as string,
   });
 
   const loadSettings = useCallback(async () => {
@@ -169,6 +170,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
         reranker_provider: data.reranker_provider || null,
         reranker_model: data.reranker_model || null,
         reranker_top_k: data.reranker_top_k || 10,
+        vector_store: data.vector_store || "weaviate",
       };
       console.log("New Form Data:", newFormData);
       setFormData(newFormData);
@@ -1133,6 +1135,85 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
               </div>
             </div>
           </div>
+          </div>
+        )}
+      </div>
+
+      {/* Vector Store Settings Section (EXPERIMENTAL) */}
+      <div className={sectionCardStyles}>
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) => (prev === "vector_store" ? null : "vector_store"))
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center shadow-sm">
+                <Settings2 className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg flex items-center gap-2">
+                  Vector Database
+                  <span className="text-xs font-normal bg-orange-100 text-orange-700 px-2 py-0.5 rounded">
+                    EXPERIMENTAL
+                  </span>
+                </h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Vektör veritabanı seçimi (Benchmark için)
+                </p>
+              </div>
+            </div>
+            <ChevronDown
+              className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                expandedSection === "vector_store" ? 'rotate-180' : ''
+              }`}
+            />
+          </div>
+        </div>
+        {expandedSection === "vector_store" && (
+          <div className={sectionContentStyles}>
+            <div className="space-y-6">
+              {/* Vector Store Selection */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Vector Database
+                  </Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="w-4 h-4 text-slate-400 cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="max-w-xs">
+                        Weaviate: Hybrid search (vector + keyword).
+                        ChromaDB: Pure vector search. Karşılaştırma için kullanın.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Select
+                  value={formData.vector_store}
+                  onValueChange={(v) => setFormData({ ...formData, vector_store: v })}
+                  disabled={!isOwner}
+                >
+                  <SelectTrigger className="h-11 border-slate-200 focus:border-cyan-300 focus:ring-cyan-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="weaviate">
+                      <div className="flex flex-col">
+                        <span className="font-medium">Weaviate</span>
+                        <span className="text-xs text-slate-500">Hybrid search (vector + keyword)</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500 bg-slate-50 px-2 py-1.5 rounded">
+                  Weaviate: Hybrid search (vector + BM25 keyword)
+                </p>
+              </div>
+            </div>
           </div>
         )}
       </div>
