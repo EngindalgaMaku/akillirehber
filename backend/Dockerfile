@@ -16,12 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies with cache mount
 # First install large packages that rarely change (for better caching)
-COPY backend/requirements-base.txt .
+COPY requirements-base.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip wheel --wheel-dir /app/wheels -r requirements-base.txt
 
 # Then install other packages that may change more frequently
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip wheel --wheel-dir /app/wheels -r requirements.txt
 
@@ -54,7 +54,7 @@ ENV NLTK_DATA=/usr/share/nltk_data
 RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True, download_dir='/usr/share/nltk_data')"
 
 # Copy application code
-COPY --chown=appuser:appgroup backend/ .
+COPY --chown=appuser:appgroup . .
 
 # Switch to non-root user
 USER appuser
@@ -67,7 +67,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
 # Copy entrypoint script
-COPY --chown=appuser:appgroup backend/docker-entrypoint.sh /app/
+COPY --chown=appuser:appgroup docker-entrypoint.sh /app/
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Run the application using entrypoint script
