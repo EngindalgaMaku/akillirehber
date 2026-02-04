@@ -52,6 +52,15 @@ def upgrade() -> None:
         
         # Alter embedding_status column
         if 'embedding_status' in doc_columns:
+            # First create the enum type if it doesn't exist
+            conn.execute(sa.text("""
+                DO $$ BEGIN
+                    CREATE TYPE embeddingstatus AS ENUM ('PENDING', 'PROCESSING', 'COMPLETED', 'ERROR');
+                EXCEPTION
+                    WHEN duplicate_object THEN null;
+                END $$;
+            """))
+            
             # First drop the default to avoid casting issues
             op.alter_column('documents', 'embedding_status',
                        existing_type=sa.VARCHAR(length=20),
