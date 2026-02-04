@@ -8,7 +8,7 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
     container_name: rag-frontend
@@ -31,7 +31,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
     container_name: rag-backend
     ports:
       - "8000:8000"
@@ -75,7 +75,7 @@ services:
   ragas:
     build:
       context: ./ragas_service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
     container_name: rag-ragas
     ports:
       - "8001:8001"
