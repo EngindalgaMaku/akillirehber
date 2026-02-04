@@ -25,9 +25,17 @@ while ! nc -z weaviate 8080; do
 done
 echo "Weaviate is ready!"
 
-# Run database migrations
+# Run database migrations with error handling
 echo "Running database migrations..."
-alembic upgrade head
+if ! alembic upgrade head; then
+  echo "Migration failed, trying to create tables from models..."
+  python -c "
+from app.database import engine, Base
+from app.models.db_models import *
+Base.metadata.create_all(bind=engine)
+print('Tables created successfully from models')
+"
+fi
 
 # Check if we should run in development or production mode
 if [ "${ENVIRONMENT}" = "production" ]; then
