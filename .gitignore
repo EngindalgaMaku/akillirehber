@@ -184,3 +184,10 @@ veriseti/
 # backups/ - Commented out to allow committing backups for auto-restore on deployment
 docs/
 grafikler/
+
+# Weaviate raw data (use JSON backups instead)
+backups/data/
+
+# Backup files (use compressed .zip versions)
+backups/*.sql
+backups/*.json

@@ -62,11 +62,58 @@ finally:
   if [ "$DB_EMPTY" = "empty" ]; then
     echo "Database is empty - attempting auto-restore..."
     
-    # Find latest PostgreSQL backup
-    LATEST_PG=$(ls -t $BACKUP_DIR/postgres-*.sql 2>/dev/null | head -1)
+    # Find latest PostgreSQL backup (support both .sql and .sql.zip)
+    LATEST_PG=$(ls -t $BACKUP_DIR/postgres-*.sql $BACKUP_DIR/postgres-*.sql.zip 2>/dev/null | head -1)
     if [ -n "$LATEST_PG" ]; then
       echo "Restoring PostgreSQL from: $(basename $LATEST_PG)"
-      python -c "
+      
+      # Check if file is zipped
+      if [[ "$LATEST_PG" == *.zip ]]; then
+        echo "Extracting zipped backup..."
+        python -c "
+import zipfile
+import sys
+
+try:
+    with zipfile.ZipFile('$LATEST_PG', 'r') as zip_ref:
+        # Extract to temp location
+        zip_ref.extractall('/tmp/')
+        # Get the extracted SQL file name
+        sql_file = [f for f in zip_ref.namelist() if f.endswith('.sql')][0]
+        print(f'Extracted: {sql_file}')
+        
+        # Now restore from extracted file
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        
+        db = SessionLocal()
+        try:
+            with open(f'/tmp/{sql_file}', 'r', encoding='utf-8') as f:
+                sql_content = f.read()
+            
+            for statement in sql_content.split(';'):
+                statement = statement.strip()
+                if statement and not statement.startswith('--'):
+                    try:
+                        db.execute(text(statement))
+                    except Exception as e:
+                        print(f'Warning: {e}', file=sys.stderr)
+            
+            db.commit()
+            print('✅ PostgreSQL restored successfully')
+        except Exception as e:
+            db.rollback()
+            print(f'❌ PostgreSQL restore failed: {e}', file=sys.stderr)
+            sys.exit(1)
+        finally:
+            db.close()
+except Exception as e:
+    print(f'❌ Failed to extract backup: {e}', file=sys.stderr)
+    sys.exit(1)
+"
+      else
+        # Direct SQL file restore
+        python -c "
 from app.database import SessionLocal
 from sqlalchemy import text
 import sys
@@ -93,13 +140,56 @@ except Exception as e:
 finally:
     db.close()
 "
+      fi
     fi
     
-    # Find latest Weaviate backup
-    LATEST_WV=$(ls -t $BACKUP_DIR/weaviate-*.json 2>/dev/null | head -1)
+    # Find latest Weaviate backup (support both .json and .json.zip)
+    LATEST_WV=$(ls -t $BACKUP_DIR/weaviate-*.json $BACKUP_DIR/weaviate-*.json.zip 2>/dev/null | head -1)
     if [ -n "$LATEST_WV" ]; then
       echo "Restoring Weaviate from: $(basename $LATEST_WV)"
-      python -c "
+      
+      # Check if file is zipped
+      if [[ "$LATEST_WV" == *.zip ]]; then
+        echo "Extracting zipped backup..."
+        python -c "
+import zipfile
+import json
+import sys
+sys.path.insert(0, '/app')
+
+from app.services.weaviate_service import WeaviateService
+
+try:
+    with zipfile.ZipFile('$LATEST_WV', 'r') as zip_ref:
+        # Get the JSON file name
+        json_file = [f for f in zip_ref.namelist() if f.endswith('.json')][0]
+        
+        # Read JSON directly from zip
+        with zip_ref.open(json_file) as f:
+            backup_data = json.load(f)
+    
+    weaviate_service = WeaviateService()
+    total_imported = 0
+    
+    for collection_name, collection_data in backup_data.get('collections', {}).items():
+        if 'error' in collection_data:
+            continue
+        
+        course_id = collection_data.get('course_id')
+        objects = collection_data.get('objects', [])
+        
+        if course_id and objects:
+            imported = weaviate_service.import_collection(course_id, objects)
+            total_imported += imported
+            print(f'  - Imported {imported} objects for course {course_id}')
+    
+    print(f'✅ Weaviate restored successfully ({total_imported} objects)')
+except Exception as e:
+    print(f'❌ Weaviate restore failed: {e}', file=sys.stderr)
+"
+      else
+        # Direct JSON file restore
+        python -c "
 import json
 import sys
 sys.path.insert(0, '/app')
@@ -129,6 +219,7 @@ try:
 except Exception as e:
     print(f'❌ Weaviate restore failed: {e}', file=sys.stderr)
 "
+      fi
     fi
     
     echo "=========================================="
