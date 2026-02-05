@@ -2,6 +2,31 @@
 
 AkıllıRehber, eğitim kurumları için geliştirilmiş, yapay zeka destekli akıllı soru-cevap sistemidir. Retrieval-Augmented Generation (RAG) teknolojisi ile öğrencilere ders materyalleri hakkında doğru ve bağlama uygun yanıtlar sunar.
 
+## 🔄 Localhost → Coolify Veri Senkronizasyonu
+
+Localhost'taki verilerinizi Coolify ortamına kolayca aktarmak için hazır araçlar:
+
+- **[⚡ Hızlı Başlangıç](./SYNC_QUICKSTART.md)** - 5 dakikada başlayın
+- **[📖 Detaylı Rehber](./COOLIFY_SYNC_GUIDE.md)** - Tüm seçenekler ve sorun giderme
+- **[📊 Özet](./SYNC_SUMMARY.md)** - Karşılaştırma ve öneriler
+
+### Tek Komutla Aktarım
+
+```bash
+# Linux/Mac
+./sync-to-coolify.sh user@coolify-server.com
+
+# Windows PowerShell
+.\sync-to-coolify.ps1 -CoolifyHost "user@coolify-server.com"
+```
+
+**Ne aktarılır:**
+- ✅ PostgreSQL veritabanı (kullanıcılar, kurslar, ayarlar)
+- ✅ Weaviate vektör veritabanı (embeddings, dökümanlar)
+- ✅ Otomatik yedekleme ve restore talimatları
+
+---
+
 ## ✨ Özellikler
 
 ### 🎯 Temel Özellikler

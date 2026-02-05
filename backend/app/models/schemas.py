@@ -1454,3 +1454,38 @@ class TestDatasetCreate(BaseModel):
     name: str
     description: Optional[str] = None
     test_cases: List[Dict[str, Any]]
+
+
+# ==================== Backup Schemas ====================
+
+class BackupInfo(BaseModel):
+    """Schema for backup file information."""
+    
+    filename: str
+    size: int  # Size in bytes
+    created_at: datetime
+    type: str  # postgres, weaviate, or full
+
+
+class BackupListResponse(BaseModel):
+    """Schema for backup list response."""
+    
+    backups: List[BackupInfo]
+    total: int
+
+
+class BackupCreateResponse(BaseModel):
+    """Schema for backup creation response."""
+    
+    success: bool
+    message: str
+    filename: str
+    size: int
+    created_at: datetime
+
+
+class BackupRestoreResponse(BaseModel):
+    """Schema for backup restore response."""
+    
+    success: bool
+    message: str

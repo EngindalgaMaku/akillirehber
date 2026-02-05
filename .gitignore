@@ -181,6 +181,6 @@ static/uploads/
 veriseti/
 
 # Local artifacts
-backups/
+# backups/ - Commented out to allow committing backups for auto-restore on deployment
 docs/
 grafikler/

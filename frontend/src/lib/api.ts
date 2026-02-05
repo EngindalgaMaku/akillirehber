@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+﻿const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // Token keys for localStorage
 const TOKEN_KEY = "akilli_rehber_token";
@@ -18,6 +18,7 @@ export function setOnUnauthorizedCallback(callback: AuthEventCallback | null) {
 
 export interface ApiError {
   detail: string;
+  message?: string;
 }
 
 export interface GenerateTestSetQuestionsResponse {
@@ -373,15 +374,15 @@ class ApiClient {
           onUnauthorizedCallback();
         }
         
-        throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
+        throw new Error("Oturum sÃ¼resi doldu. LÃ¼tfen tekrar giriÅŸ yapÄ±n.");
       }
       
       const error: ApiError = await response.json().catch(() => ({
-        detail: "Bir hata oluştu",
+        detail: "Bir hata oluÅŸtu",
       }));
       
       // Handle detail as string or object
-      let errorMessage = "Bir hata oluştu";
+      let errorMessage = "Bir hata oluÅŸtu";
       if (typeof error.detail === "string") {
         errorMessage = error.detail;
       } else if (error.detail && typeof error.detail === "object") {
@@ -426,7 +427,7 @@ class ApiClient {
 
     if (!response.ok) {
       const error: ApiError = await response.json().catch(() => ({
-        detail: "Giriş başarısız",
+        detail: "GiriÅŸ baÅŸarÄ±sÄ±z",
       }));
       throw new Error(error.detail);
     }
@@ -630,7 +631,7 @@ class ApiClient {
 
     if (!response.ok) {
       const error: ApiError = await response.json().catch(() => ({
-        detail: "Dosya yüklenirken hata oluştu",
+        detail: "Dosya yÃ¼klenirken hata oluÅŸtu",
       }));
       throw new Error(error.detail);
     }
@@ -1132,7 +1133,7 @@ class ApiClient {
       test_count: number;
     };
   }> {
-    // RAGAS'ta batch test yok, her soruyu tek tek çalıştırmamız gerekiyor
+    // RAGAS'ta batch test yok, her soruyu tek tek Ã§alÄ±ÅŸtÄ±rmamÄ±z gerekiyor
     const results: Array<{
       question: string;
       ground_truth: string;
@@ -1826,6 +1827,94 @@ class ApiClient {
 
     return response.json();
   }
+
+  // ==================== Backup Endpoints ====================
+
+  async listBackups(): Promise<BackupListResponse> {
+    return this.request<BackupListResponse>("/api/admin/backup/list");
+  }
+
+  async createPostgresBackup(): Promise<BackupCreateResponse> {
+    return this.request<BackupCreateResponse>("/api/admin/backup/create/postgres", {
+      method: "POST",
+    });
+  }
+
+  async createWeaviateBackup(): Promise<BackupCreateResponse> {
+    return this.request<BackupCreateResponse>("/api/admin/backup/create/weaviate", {
+      method: "POST",
+    });
+  }
+
+  async createFullBackup(): Promise<BackupCreateResponse> {
+    return this.request<BackupCreateResponse>("/api/admin/backup/create/full", {
+      method: "POST",
+    });
+  }
+
+  async downloadBackup(filename: string): Promise<Blob> {
+    const token = this.getToken();
+    const response = await fetch(`${API_URL}/api/admin/backup/download/${filename}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error("Yedek indirilemedi");
+    }
+
+    return response.blob();
+  }
+
+  async restorePostgresBackup(file: File): Promise<BackupRestoreResponse> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const token = this.getToken();
+    const response = await fetch(`${API_URL}/api/admin/backup/restore/postgres`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: "Restore baÅŸarÄ±sÄ±z" }));
+      throw new Error(error.detail);
+    }
+
+    return response.json();
+  }
+
+  async restoreWeaviateBackup(file: File): Promise<BackupRestoreResponse> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const token = this.getToken();
+    const response = await fetch(`${API_URL}/api/admin/backup/restore/weaviate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: "Restore baÅŸarÄ±sÄ±z" }));
+      throw new Error(error.detail);
+    }
+
+    return response.json();
+  }
+
+  async deleteBackup(filename: string): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(
+      `/api/admin/backup/delete/${filename}`,
+      { method: "DELETE" }
+    );
+  }
 }
 
 export const api = new ApiClient();
@@ -1852,6 +1941,33 @@ export interface PublicSettings {
   captcha_enabled: boolean;
   hcaptcha_site_key: string | null;
   registration_key_required: boolean;
+}
+
+// ==================== Backup Types ====================
+
+export interface BackupInfo {
+  filename: string;
+  size: number;
+  created_at: string;
+  type: string;
+}
+
+export interface BackupListResponse {
+  backups: BackupInfo[];
+  total: number;
+}
+
+export interface BackupCreateResponse {
+  success: boolean;
+  message: string;
+  filename: string;
+  size: number;
+  created_at: string;
+}
+
+export interface BackupRestoreResponse {
+  success: boolean;
+  message: string;
 }
 
 
@@ -2660,4 +2776,32 @@ export async function streamChunking(
         }
       });
   });
+}
+
+
+// ==================== Backup Types ====================
+
+export interface BackupInfo {
+  filename: string;
+  size: number;
+  created_at: string;
+  type: string;
+}
+
+export interface BackupListResponse {
+  backups: BackupInfo[];
+  total: number;
+}
+
+export interface BackupCreateResponse {
+  success: boolean;
+  message: string;
+  filename: string;
+  size: number;
+  created_at: string;
+}
+
+export interface BackupRestoreResponse {
+  success: boolean;
+  message: string;
 }

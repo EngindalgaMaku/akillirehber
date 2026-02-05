@@ -36,7 +36,7 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=postgresql://raguser:R4gCh4tb0t!2024#Secure@postgres:5432/ragchatbot
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ragchatbot}
       - WEAVIATE_URL=http://weaviate:8080
       - RAGAS_URL=http://ragas:8001
       - SECRET_KEY=${SECRET_KEY}
@@ -52,6 +52,8 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - COHERE_API_KEY=${COHERE_API_KEY:-}
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+    volumes:
+      - ./backups:/app/backups:ro
     depends_on:
       postgres:
         condition: service_healthy

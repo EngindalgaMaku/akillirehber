@@ -107,6 +107,61 @@ class WeaviateService:
 
         return collection_name
 
+    def export_collection(self, course_id: int) -> List[dict]:
+        """Export all objects from a course collection for backup.
+        
+        Args:
+            course_id: Course ID
+            
+        Returns:
+            List of objects with properties and vectors
+        """
+        client = self._get_client()
+        collection_name = self._get_collection_name(course_id)
+        
+        if not client.collections.exists(collection_name):
+            return []
+        
+        collection = client.collections.get(collection_name)
+        
+        # Get all objects with vectors
+        objects = []
+        for item in collection.iterator(include_vector=True):
+            objects.append({
+                "uuid": str(item.uuid),
+                "properties": item.properties,
+                "vector": item.vector.get("default") if item.vector else None
+            })
+        
+        return objects
+    
+    def import_collection(self, course_id: int, objects: List[dict]) -> int:
+        """Import objects into a course collection from backup.
+        
+        Args:
+            course_id: Course ID
+            objects: List of objects to import
+            
+        Returns:
+            Number of objects imported
+        """
+        if not objects:
+            return 0
+            
+        client = self._get_client()
+        collection_name = self.ensure_collection(course_id)
+        collection = client.collections.get(collection_name)
+        
+        # Import objects
+        with collection.batch.dynamic() as batch:
+            for obj in objects:
+                batch.add_object(
+                    properties=obj["properties"],
+                    vector=obj.get("vector")
+                )
+        
+        return len(objects)
+
     def close(self):
         """Close Weaviate client connection."""
         if self._client is not None:
