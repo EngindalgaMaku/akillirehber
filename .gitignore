@@ -191,3 +191,7 @@ backups/data/
 # Backup files (use compressed .zip versions)
 backups/*.sql
 backups/*.json
+
+# Backup files - restore manually via /restore page
+backend/backups/
+backups/*.zip
