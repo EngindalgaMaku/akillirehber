@@ -4,100 +4,164 @@ import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Upload, Database, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Upload, Database, CheckCircle, XCircle, Loader2, Terminal, Copy } from 'lucide-react';
+
+interface UploadResult {
+  success: boolean;
+  message: string;
+  filename?: string;
+  path?: string;
+}
 
 export default function RestorePage() {
   const [postgresFile, setPostgresFile] = useState<File | null>(null);
   const [weaviateFile, setWeaviateFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [postgresResult, setPostgresResult] = useState<UploadResult | null>(null);
+  const [weaviateResult, setWeaviateResult] = useState<UploadResult | null>(null);
 
   const handlePostgresChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
+    if (e.target.files?.[0]) {
       setPostgresFile(e.target.files[0]);
+      setPostgresResult(null);
     }
   };
 
   const handleWeaviateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
+    if (e.target.files?.[0]) {
       setWeaviateFile(e.target.files[0]);
+      setWeaviateResult(null);
     }
   };
 
-  const handleRestore = async () => {
+  const handleUpload = async () => {
     if (!postgresFile && !weaviateFile) {
-      setResult({ success: false, message: 'En az bir backup dosyası seçmelisiniz' });
       return;
     }
 
     setLoading(true);
-    setResult(null);
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       
-      // PostgreSQL restore
+      // Upload PostgreSQL
       if (postgresFile) {
         const formData = new FormData();
         formData.append('file', postgresFile);
 
-        const pgResponse = await fetch(`${apiUrl}/api/restore/postgres`, {
+        const pgResponse = await fetch(`${apiUrl}/api/restore/upload/postgres`, {
           method: 'POST',
           body: formData,
         });
 
         const pgData = await pgResponse.json();
         
-        if (!pgResponse.ok) {
-          throw new Error(pgData.detail || 'PostgreSQL restore başarısız');
+        if (pgResponse.ok) {
+          setPostgresResult({
+            success: true,
+            message: pgData.message,
+            filename: pgData.details?.filename,
+            path: pgData.details?.path,
+          });
+        } else {
+          setPostgresResult({
+            success: false,
+            message: pgData.detail || 'Upload başarısız',
+          });
         }
-        
-        console.log('PostgreSQL restore:', pgData);
       }
 
-      // Weaviate restore
+      // Upload Weaviate
       if (weaviateFile) {
         const formData = new FormData();
         formData.append('file', weaviateFile);
 
-        const wvResponse = await fetch(`${apiUrl}/api/restore/weaviate`, {
+        const wvResponse = await fetch(`${apiUrl}/api/restore/upload/weaviate`, {
           method: 'POST',
           body: formData,
         });
 
         const wvData = await wvResponse.json();
         
-        if (!wvResponse.ok) {
-          throw new Error(wvData.detail || 'Weaviate restore başarısız');
+        if (wvResponse.ok) {
+          setWeaviateResult({
+            success: true,
+            message: wvData.message,
+            filename: wvData.details?.filename,
+            path: wvData.details?.path,
+          });
+        } else {
+          setWeaviateResult({
+            success: false,
+            message: wvData.detail || 'Upload başarısız',
+          });
         }
-        
-        console.log('Weaviate restore:', wvData);
       }
-
-      setResult({
-        success: true,
-        message: 'Backup başarıyla restore edildi! Artık giriş yapabilirsiniz.',
-      });
     } catch (error) {
-      setResult({
-        success: false,
-        message: error instanceof Error ? error.message : 'Restore işlemi başarısız',
-      });
+      const errorMsg = error instanceof Error ? error.message : 'Upload işlemi başarısız';
+      if (postgresFile && !postgresResult) {
+        setPostgresResult({ success: false, message: errorMsg });
+      }
+      if (weaviateFile && !weaviateResult) {
+        setWeaviateResult({ success: false, message: errorMsg });
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
+  const getRestoreCommands = () => {
+    const commands: string[] = [];
+    
+    if (postgresResult?.success && postgresResult.filename) {
+      const filename = postgresResult.filename;
+      const isZip = filename.endsWith('.zip');
+      
+      if (isZip) {
+        commands.push(
+          '# PostgreSQL Restore (ZIP dosyası)',
+          `cd /app/backups/uploads`,
+          `unzip ${filename}`,
+          `psql -U raguser -d ragchatbot -f *.sql`,
+          ''
+        );
+      } else {
+        commands.push(
+          '# PostgreSQL Restore',
+          `psql -U raguser -d ragchatbot -f /app/backups/uploads/${filename}`,
+          ''
+        );
+      }
+    }
+    
+    if (weaviateResult?.success && weaviateResult.filename) {
+      commands.push(
+        '# Weaviate Restore',
+        `# Weaviate restore için backend API kullanılmalı`,
+        `# Dosya: /app/backups/uploads/${weaviateResult.filename}`,
+        ''
+      );
+    }
+    
+    return commands.join('\n');
+  };
+
+  const showCommands = (postgresResult?.success || weaviateResult?.success);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <Card className="w-full max-w-2xl">
+      <Card className="w-full max-w-3xl">
         <CardHeader>
           <CardTitle className="text-2xl flex items-center gap-2">
             <Database className="h-6 w-6" />
-            Database Restore
+            Database Restore - File Upload
           </CardTitle>
           <CardDescription>
-            İlk kurulum için backup dosyalarını yükleyin
+            Backup dosyalarını yükleyin, sonra terminalden restore edin
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -120,6 +184,16 @@ export default function RestorePage() {
                 Seçilen: {postgresFile.name} ({(postgresFile.size / 1024 / 1024).toFixed(2)} MB)
               </p>
             )}
+            {postgresResult && (
+              <Alert variant={postgresResult.success ? 'default' : 'destructive'}>
+                {postgresResult.success ? (
+                  <CheckCircle className="h-4 w-4" />
+                ) : (
+                  <XCircle className="h-4 w-4" />
+                )}
+                <AlertDescription>{postgresResult.message}</AlertDescription>
+              </Alert>
+            )}
           </div>
 
           {/* Weaviate Backup */}
@@ -141,23 +215,21 @@ export default function RestorePage() {
                 Seçilen: {weaviateFile.name} ({(weaviateFile.size / 1024 / 1024).toFixed(2)} MB)
               </p>
             )}
+            {weaviateResult && (
+              <Alert variant={weaviateResult.success ? 'default' : 'destructive'}>
+                {weaviateResult.success ? (
+                  <CheckCircle className="h-4 w-4" />
+                ) : (
+                  <XCircle className="h-4 w-4" />
+                )}
+                <AlertDescription>{weaviateResult.message}</AlertDescription>
+              </Alert>
+            )}
           </div>
 
-          {/* Result Message */}
-          {result && (
-            <Alert variant={result.success ? 'default' : 'destructive'}>
-              {result.success ? (
-                <CheckCircle className="h-4 w-4" />
-              ) : (
-                <XCircle className="h-4 w-4" />
-              )}
-              <AlertDescription>{result.message}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* Restore Button */}
+          {/* Upload Button */}
           <Button
-            onClick={handleRestore}
+            onClick={handleUpload}
             disabled={loading || (!postgresFile && !weaviateFile)}
             className="w-full"
             size="lg"
@@ -165,22 +237,49 @@ export default function RestorePage() {
             {loading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Restore ediliyor...
+                Yükleniyor...
               </>
             ) : (
               <>
                 <Upload className="mr-2 h-4 w-4" />
-                Restore Et
+                Dosyaları Yükle
               </>
             )}
           </Button>
 
+          {/* Restore Commands */}
+          {showCommands && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium flex items-center gap-2">
+                  <Terminal className="h-4 w-4" />
+                  Restore Komutları
+                </label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copyToClipboard(getRestoreCommands())}
+                >
+                  <Copy className="h-3 w-3 mr-1" />
+                  Kopyala
+                </Button>
+              </div>
+              <pre className="bg-gray-900 text-green-400 p-4 rounded-md text-xs overflow-x-auto">
+                {getRestoreCommands()}
+              </pre>
+              <p className="text-xs text-gray-500">
+                Coolify terminalinde backend container&apos;a girin ve yukarıdaki komutları çalıştırın
+              </p>
+            </div>
+          )}
+
           {/* Info */}
-          <div className="text-xs text-gray-500 space-y-1">
-            <p>• Bu sayfa sadece ilk kurulum için kullanılır</p>
-            <p>• Dosya boyutu limiti yoktur</p>
-            <p>• Hem .sql/.json hem de .zip formatları desteklenir</p>
-            <p>• Restore sonrası /login sayfasından giriş yapabilirsiniz</p>
+          <div className="text-xs text-gray-500 space-y-1 border-t pt-4">
+            <p className="font-medium">Kullanım:</p>
+            <p>1. Backup dosyalarını seçin ve yükleyin</p>
+            <p>2. Coolify&apos;da backend container terminaline girin</p>
+            <p>3. Yukarıdaki restore komutlarını çalıştırın</p>
+            <p>4. Restore tamamlandıktan sonra /login sayfasından giriş yapın</p>
           </div>
         </CardContent>
       </Card>
