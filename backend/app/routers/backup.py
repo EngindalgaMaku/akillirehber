@@ -25,9 +25,10 @@ from app.models.schemas import (
 
 router = APIRouter(prefix="/api/admin/backup", tags=["admin-backup"])
 
-# Backup directory
-BACKUP_DIR = Path("/var/backups/rag")
-BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+# Backup directory - use /app/backups which is mounted from host
+BACKUP_DIR = Path("/app/backups")
+# Don't create directory here - it's mounted from host and may not have write permissions
+# BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.get("/list", response_model=BackupListResponse)
@@ -72,6 +73,13 @@ async def create_postgres_backup(
 ):
     """Create a PostgreSQL database backup using SQL dump."""
     try:
+        # Ensure backup directory exists and is writable
+        if not BACKUP_DIR.exists():
+            raise HTTPException(
+                status_code=500,
+                detail="Backup directory not found. Ensure /app/backups is mounted."
+            )
+        
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         filename = f"postgres-{timestamp}.sql"
         backup_path = BACKUP_DIR / filename
@@ -154,6 +162,13 @@ async def create_weaviate_backup(
 ):
     """Create a Weaviate vector database backup using API export."""
     try:
+        # Ensure backup directory exists and is writable
+        if not BACKUP_DIR.exists():
+            raise HTTPException(
+                status_code=500,
+                detail="Backup directory not found. Ensure /app/backups is mounted."
+            )
+        
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         filename = f"weaviate-{timestamp}.json"
         backup_path = BACKUP_DIR / filename

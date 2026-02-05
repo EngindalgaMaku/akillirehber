@@ -53,7 +53,7 @@ services:
       - COHERE_API_KEY=${COHERE_API_KEY:-}
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
     volumes:
-      - ./backups:/app/backups:ro
+      - ./backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy

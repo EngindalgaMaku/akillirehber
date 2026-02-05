@@ -49,7 +49,7 @@ services:
       - ./backend/app:/app/app:ro
       - ./backend/alembic:/app/alembic:ro
       - ./backend/alembic.ini:/app/alembic.ini:ro
-      - ./backups:/app/backups:ro
+      - ./backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy
