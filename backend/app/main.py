@@ -63,6 +63,8 @@ app.add_middleware(
         "http://localhost:3000",  # Next.js dev server
         "http://127.0.0.1:3000",
         "http://frontend:3000",  # Docker network
+        "https://akillirehber.kodleon.com",  # Production frontend
+        "https://rehberapi.kodleon.com",  # Production API (for self-requests)
     ],
     allow_credentials=True,
     allow_methods=["*"],
