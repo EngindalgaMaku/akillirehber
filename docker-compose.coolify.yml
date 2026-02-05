@@ -36,7 +36,7 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=DATABASE_URL=postgresql://raguser:ragpassword@postgres:5432/ragchatbot
+      - DATABASE_URL=DATABASE_URL=postgresql://raguser:R4gCh4tb0t!2024#Secure@postgres:5432/ragchatbot
       - WEAVIATE_URL=http://weaviate:8080
       - RAGAS_URL=http://ragas:8001
       - SECRET_KEY=${SECRET_KEY}
