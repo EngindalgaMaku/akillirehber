@@ -46,9 +46,13 @@ export default function RestorePage() {
           body: formData,
         });
 
+        const pgData = await pgResponse.json();
+        
         if (!pgResponse.ok) {
-          throw new Error('PostgreSQL restore başarısız');
+          throw new Error(pgData.detail || 'PostgreSQL restore başarısız');
         }
+        
+        console.log('PostgreSQL restore:', pgData);
       }
 
       // Weaviate restore
@@ -61,9 +65,13 @@ export default function RestorePage() {
           body: formData,
         });
 
+        const wvData = await wvResponse.json();
+        
         if (!wvResponse.ok) {
-          throw new Error('Weaviate restore başarısız');
+          throw new Error(wvData.detail || 'Weaviate restore başarısız');
         }
+        
+        console.log('Weaviate restore:', wvData);
       }
 
       setResult({

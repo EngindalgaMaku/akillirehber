@@ -44,17 +44,40 @@ async def restore_postgres(file: UploadFile = File(...)):
         # Execute SQL
         from app.database import SessionLocal
         db = SessionLocal()
+        errors = []
+        success_count = 0
+        
         try:
-            for statement in sql_content.split(';'):
-                statement = statement.strip()
-                if statement and not statement.startswith('--'):
-                    try:
-                        db.execute(text(statement))
-                    except Exception as e:
-                        print(f"Warning: {e}")
+            statements = [s.strip() for s in sql_content.split(';') if s.strip() and not s.strip().startswith('--')]
+            
+            for i, statement in enumerate(statements):
+                try:
+                    db.execute(text(statement))
+                    success_count += 1
+                except Exception as e:
+                    error_msg = f"Statement {i+1}: {str(e)[:100]}"
+                    errors.append(error_msg)
+                    print(f"Warning: {error_msg}")
             
             db.commit()
-            return {"success": True, "message": "PostgreSQL restored successfully"}
+            
+            # Check if any users were created
+            user_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar()
+            
+            message = f"PostgreSQL restored: {success_count} statements executed"
+            if errors:
+                message += f", {len(errors)} errors (check logs)"
+            message += f", {user_count} users in database"
+            
+            return {
+                "success": True,
+                "message": message,
+                "details": {
+                    "statements_executed": success_count,
+                    "errors": len(errors),
+                    "users": user_count
+                }
+            }
         except Exception as e:
             db.rollback()
             raise HTTPException(500, f"Restore failed: {str(e)}")
@@ -96,21 +119,37 @@ async def restore_weaviate(file: UploadFile = File(...)):
         # Restore to Weaviate
         weaviate_service = WeaviateService()
         total_imported = 0
+        errors = []
         
         for collection_name, collection_data in backup_data.get('collections', {}).items():
             if 'error' in collection_data:
+                errors.append(f"{collection_name}: {collection_data['error']}")
                 continue
             
             course_id = collection_data.get('course_id')
             objects = collection_data.get('objects', [])
             
             if course_id and objects:
-                imported = weaviate_service.import_collection(course_id, objects)
-                total_imported += imported
+                try:
+                    imported = weaviate_service.import_collection(course_id, objects)
+                    total_imported += imported
+                except Exception as e:
+                    error_msg = f"Course {course_id}: {str(e)[:100]}"
+                    errors.append(error_msg)
+                    print(f"Error importing course {course_id}: {e}")
+        
+        message = f"Weaviate restored: {total_imported} objects imported"
+        if errors:
+            message += f", {len(errors)} errors (check logs)"
         
         return {
             "success": True,
-            "message": f"Weaviate restored successfully ({total_imported} objects)"
+            "message": message,
+            "details": {
+                "objects_imported": total_imported,
+                "errors": len(errors),
+                "error_messages": errors[:5]  # First 5 errors
+            }
         }
             
     except HTTPException:
