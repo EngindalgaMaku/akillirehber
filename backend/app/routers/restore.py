@@ -35,11 +35,23 @@ async def restore_postgres(file: UploadFile = File(...)):
                     raise HTTPException(400, "No SQL file found in zip")
                 
                 with zip_ref.open(sql_files[0]) as sql_file:
-                    sql_content = sql_file.read().decode('utf-8')
+                    sql_bytes = sql_file.read()
             
             Path(tmp_zip_path).unlink()
         else:
-            sql_content = content.decode('utf-8')
+            sql_bytes = content
+        
+        # Try different encodings
+        sql_content = None
+        for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
+            try:
+                sql_content = sql_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if sql_content is None:
+            raise HTTPException(400, "Could not decode SQL file. Try different encoding.")
         
         # Execute SQL
         from app.database import SessionLocal
