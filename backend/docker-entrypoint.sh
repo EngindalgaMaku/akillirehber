@@ -25,6 +25,12 @@ while ! nc -z weaviate 8080; do
 done
 echo "Weaviate is ready!"
 
+# Create necessary directories
+echo "Creating necessary directories..."
+mkdir -p /app/backups/uploads
+chmod 755 /app/backups/uploads
+echo "Directories created!"
+
 # Run database migrations with error handling
 echo "Running database migrations..."
 if ! alembic upgrade head; then

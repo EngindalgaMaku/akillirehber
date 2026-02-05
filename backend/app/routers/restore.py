@@ -10,9 +10,8 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/restore", tags=["restore"])
 
-# Upload directory inside container
+# Upload directory inside container (created by entrypoint script)
 UPLOAD_DIR = Path("/app/backups/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/upload/postgres")
