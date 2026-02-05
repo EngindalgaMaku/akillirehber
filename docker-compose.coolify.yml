@@ -119,7 +119,7 @@ services:
       - rag-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragchatbot}"]
       interval: 5s
       timeout: 5s
       retries: 10
