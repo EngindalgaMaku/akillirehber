@@ -38,13 +38,16 @@ class EmbeddingProvider(ABC):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
         """Get embeddings for a list of texts.
         
         Args:
             texts: List of text strings to embed
             model: Optional model override
+            input_type: Context type - "query" for search queries,
+                       "document" for indexing. Defaults to "document".
             
         Returns:
             List of embedding vectors (list of floats)
@@ -143,9 +146,19 @@ class OpenRouterProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via OpenRouter API."""
+        """Get embeddings via OpenRouter API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" or "document" (ignored by OpenRouter)
+        
+        Returns:
+            List of embedding vectors
+        """
         self._ensure_client()
         
         model = model or self.DEFAULT_MODEL
@@ -235,9 +248,19 @@ class OpenAIProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via OpenAI API."""
+        """Get embeddings via OpenAI API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" or "document" (ignored by OpenAI)
+        
+        Returns:
+            List of embedding vectors
+        """
         self._ensure_client()
         
         model = model or self.DEFAULT_MODEL
@@ -330,9 +353,20 @@ class CohereProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via Cohere API."""
+        """Get embeddings via Cohere API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" for search queries,
+                       "document" for indexing. Defaults to "document".
+        
+        Returns:
+            List of embedding vectors
+        """
         self._ensure_client()
         
         model = model or self.DEFAULT_MODEL
@@ -345,11 +379,14 @@ class CohereProvider(EmbeddingProvider):
         if not non_empty_texts:
             return []
         
+        # Map input_type to Cohere's format
+        cohere_input_type = "search_query" if input_type == "query" else "search_document"
+        
         try:
             response = self._client.embed(
                 texts=non_empty_texts,
                 model=model,
-                input_type="search_document"
+                input_type=cohere_input_type
             )
             
             if not hasattr(response, 'embeddings') or not response.embeddings:
@@ -414,9 +451,19 @@ class JinaProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via Jina AI API."""
+        """Get embeddings via Jina AI API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" or "document" (ignored by Jina)
+        
+        Returns:
+            List of embedding vectors
+        """
         if not self._api_key:
             raise EmbeddingProviderError(
                 "JINA_AI_API_KEY not configured",
@@ -544,9 +591,19 @@ class AlibabaProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via Alibaba DashScope API."""
+        """Get embeddings via Alibaba DashScope API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" or "document" (ignored by Alibaba)
+        
+        Returns:
+            List of embedding vectors
+        """
         self._ensure_client()
         
         model = model or self.DEFAULT_MODEL
@@ -622,9 +679,19 @@ class OllamaProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via Ollama API."""
+        """Get embeddings via Ollama API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" or "document" (ignored by Ollama)
+        
+        Returns:
+            List of embedding vectors
+        """
         model = model or self.DEFAULT_MODEL
         # Remove ollama/ prefix if present
         if model.startswith("ollama/"):
@@ -772,9 +839,20 @@ class VoyageProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings via Voyage API."""
+        """Get embeddings via Voyage API.
+        
+        Args:
+            texts: List of texts to embed
+            model: Model identifier
+            input_type: Context type - "query" for search queries,
+                       "document" for indexing. Defaults to "document".
+        
+        Returns:
+            List of embedding vectors
+        """
         if not self._api_key:
             raise EmbeddingProviderError(
                 "VOYAGE_API_KEY not configured",
@@ -803,7 +881,7 @@ class VoyageProvider(EmbeddingProvider):
             data = {
                 "input": non_empty_texts,
                 "model": model,
-                "input_type": "document",
+                "input_type": input_type,
             }
             
             # Enhanced retry logic for rate limiting
@@ -1022,13 +1100,16 @@ class EmbeddingProviderManager:
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
         """Get embeddings with automatic fallback and retry.
         
         Args:
             texts: List of texts to embed
             model: Optional model override
+            input_type: Context type - "query" for search queries,
+                       "document" for indexing. Defaults to "document".
             
         Returns:
             List of embedding vectors
@@ -1070,7 +1151,7 @@ class EmbeddingProviderManager:
                 normalized_model = self._normalize_model_for_provider(provider, model)
                 logger.info(f"[EMBEDDING DEBUG] Trying provider: {provider.name} with model: {normalized_model}")
                 embeddings = self._get_embeddings_with_retry(
-                    provider, non_empty_texts, normalized_model
+                    provider, non_empty_texts, normalized_model, input_type
                 )
                 
                 # Mark provider as healthy
@@ -1150,15 +1231,26 @@ class EmbeddingProviderManager:
         self,
         provider: EmbeddingProvider,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
-        """Get embeddings with exponential backoff retry."""
+        """Get embeddings with exponential backoff retry.
+        
+        Args:
+            provider: Provider to use
+            texts: List of texts to embed
+            model: Optional model override
+            input_type: Context type - "query" or "document"
+        
+        Returns:
+            List of embedding vectors
+        """
         last_error = None
         delay = self.config.retry_delay
         
         for attempt in range(self.config.max_retries):
             try:
-                return provider.get_embeddings(texts, model)
+                return provider.get_embeddings(texts, model, input_type)
             except EmbeddingProviderError as e:
                 last_error = e
                 if attempt < self.config.max_retries - 1:
@@ -1189,13 +1281,15 @@ class EmbeddingProviderManager:
     def get_embeddings_batch(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
         """Get embeddings in batches to avoid API limits.
         
         Args:
             texts: List of texts to embed
             model: Optional model override
+            input_type: Context type - "query" or "document"
             
         Returns:
             List of embedding vectors
@@ -1208,7 +1302,7 @@ class EmbeddingProviderManager:
         
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            batch_embeddings = self.get_embeddings(batch, model)
+            batch_embeddings = self.get_embeddings(batch, model, input_type)
             all_embeddings.extend(batch_embeddings)
         
         return all_embeddings

@@ -44,7 +44,8 @@ class MockProvider(EmbeddingProvider):
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
         self._call_count += 1
         if self._call_count <= self._fail_count:
@@ -496,7 +497,7 @@ class TestEmbeddingCache:
         original_embeddings = {}
         
         class CountingProvider(MockProvider):
-            def get_embeddings(self, texts, model=None):
+            def get_embeddings(self, texts, model=None, input_type="document"):
                 call_count[0] += len(texts)
                 result = []
                 for t in texts:
@@ -648,7 +649,7 @@ class TestCachedEmbeddingProvider:
         call_count = [0]
         
         class CountingProvider(MockProvider):
-            def get_embeddings(self, texts, model=None):
+            def get_embeddings(self, texts, model=None, input_type="document"):
                 call_count[0] += 1
                 return [[0.1, 0.2]] * len(texts)
         
@@ -668,7 +669,7 @@ class TestCachedEmbeddingProvider:
         call_count = [0]
         
         class CountingProvider(MockProvider):
-            def get_embeddings(self, texts, model=None):
+            def get_embeddings(self, texts, model=None, input_type="document"):
                 call_count[0] += len(texts)
                 return [[0.1 * len(t)] for t in texts]
         
@@ -708,7 +709,7 @@ class TestBatchProcessing:
         api_calls = [0]
         
         class BatchCountingProvider(MockProvider):
-            def get_embeddings(self, texts, model=None):
+            def get_embeddings(self, texts, model=None, input_type="document"):
                 api_calls[0] += 1  # Count batch calls, not individual texts
                 return [[0.1, 0.2]] * len(texts)
         
@@ -763,7 +764,7 @@ class TestBatchProcessing:
     def test_batch_preserves_order(self):
         """Property: Batch processing preserves text order."""
         class OrderedProvider(MockProvider):
-            def get_embeddings(self, texts, model=None):
+            def get_embeddings(self, texts, model=None, input_type="document"):
                 # Return embedding based on text content
                 return [[float(t.split('_')[1])] for t in texts]
         

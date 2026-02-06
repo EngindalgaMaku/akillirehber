@@ -65,7 +65,11 @@ async def embed_document(
         print(f"First text preview: {texts[0][:100] if texts else 'No texts'}...")
         
         try:
-            embeddings = embedding_service.get_embeddings(texts, model=request.model)
+            embeddings = embedding_service.get_embeddings(
+                texts, 
+                model=request.model,
+                input_type="document"
+            )
             print(f"Embeddings generated: {len(embeddings)}")
             print(f"First embedding length: {len(embeddings[0]) if embeddings else 0}")
         except Exception as e:

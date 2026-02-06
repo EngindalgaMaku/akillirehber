@@ -1569,7 +1569,8 @@ async def quick_test(
         embedding_service = EmbeddingService()
         query_vector = embedding_service.get_embedding(
             data.question,
-            model=course_settings.default_embedding_model
+            model=course_settings.default_embedding_model,
+            input_type="query"
         )
         
         # Search for relevant chunks
@@ -2555,7 +2556,8 @@ async def batch_test_stream(
                         else:
                             query_vector = embedding_service.get_embedding(
                                 question,
-                                model=course_settings.default_embedding_model
+                                model=course_settings.default_embedding_model,
+                                input_type="query"
                             )
                             embedding_cache[cache_key] = query_vector
                             logger.debug(f"[CACHE MISS] Test {idx}: Generated new embedding for question")

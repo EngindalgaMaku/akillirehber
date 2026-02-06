@@ -1225,8 +1225,9 @@ class SemanticSimilarityResultCreate(BaseModel):
     reranker_used: Optional[bool] = None
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
-    created_by: int
-    created_at: datetime
+    # These fields are set automatically by the backend
+    # created_by: int  # Set from current_user
+    # created_at: datetime  # Set automatically by database
 
 
 class SemanticSimilarityResultResponse(BaseModel):

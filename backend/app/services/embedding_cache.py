@@ -291,13 +291,15 @@ class CachedEmbeddingProvider:
     def get_embeddings(
         self,
         texts: List[str],
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        input_type: str = "document"
     ) -> List[List[float]]:
         """Get embeddings with caching.
         
         Args:
             texts: List of texts to embed
             model: Model to use
+            input_type: Context type - "query" or "document"
             
         Returns:
             List of embedding vectors
@@ -316,7 +318,7 @@ class CachedEmbeddingProvider:
         
         # Get embeddings for missing texts
         missing_texts = [texts[i] for i in missing]
-        new_embeddings = self.provider.get_embeddings(missing_texts, model)
+        new_embeddings = self.provider.get_embeddings(missing_texts, model, input_type)
         
         # Cache new embeddings
         self.cache.set_batch(missing_texts, model, new_embeddings)

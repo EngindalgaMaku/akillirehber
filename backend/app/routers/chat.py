@@ -245,7 +245,8 @@ async def chat_with_course(
     
     query_vector = embedding_service.get_embedding(
         enhanced_query,
-        model=settings.default_embedding_model
+        model=settings.default_embedding_model,
+        input_type="query"
     )
     
     # Debug log for query vector

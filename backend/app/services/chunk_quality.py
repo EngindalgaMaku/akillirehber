@@ -219,7 +219,7 @@ class ChunkQualityAnalyzer:
         if embeddings is None:
             self._ensure_embedding_provider()
             embeddings = self._embedding_provider.get_embeddings(
-                sentences, self._embedding_model
+                sentences, self._embedding_model, input_type="document"
             )
         
         if len(embeddings) < 2:
@@ -276,7 +276,7 @@ class ChunkQualityAnalyzer:
         # Get embeddings
         self._ensure_embedding_provider()
         embeddings = self._embedding_provider.get_embeddings(
-            [last_sentence, first_sentence], self._embedding_model
+            [last_sentence, first_sentence], self._embedding_model, input_type="document"
         )
         
         if len(embeddings) < 2:
@@ -370,7 +370,7 @@ class ChunkQualityAnalyzer:
         if embeddings is None:
             self._ensure_embedding_provider()
             embeddings = self._embedding_provider.get_embeddings(
-                sentences, self._embedding_model
+                sentences, self._embedding_model, input_type="document"
             )
         
         if len(embeddings) < 2:
@@ -448,7 +448,7 @@ class ChunkQualityAnalyzer:
         if sentence_count > 1:
             self._ensure_embedding_provider()
             embeddings = self._embedding_provider.get_embeddings(
-                sentences, self._embedding_model
+                sentences, self._embedding_model, input_type="document"
             )
         
         # Calculate coherence

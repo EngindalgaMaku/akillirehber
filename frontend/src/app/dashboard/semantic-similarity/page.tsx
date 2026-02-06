@@ -1019,6 +1019,19 @@ export default function SemanticSimilarityPage() {
             } else if (data.event === 'progress') {
               results.push(data.result as StreamingResult);
 
+              // Debug: Log BERTScore values
+              if (data.result) {
+                console.log('Result BERTScore values:', {
+                  question: data.result.question?.substring(0, 50),
+                  bertscore_precision: data.result.bertscore_precision,
+                  bertscore_recall: data.result.bertscore_recall,
+                  bertscore_f1: data.result.bertscore_f1,
+                  original_bertscore_precision: data.result.original_bertscore_precision,
+                  original_bertscore_recall: data.result.original_bertscore_recall,
+                  original_bertscore_f1: data.result.original_bertscore_f1,
+                });
+              }
+
               if (data.result?.error_message) {
                 toast.error(
                   `Soru ${data.index + 1} başarısız: ${data.result.error_message}`
@@ -1093,6 +1106,71 @@ export default function SemanticSimilarityPage() {
               
               toast.success(`Test tamamlandı: ${data.completed}/${data.total}`);
               setCurrentTestId(null);
+              
+              // Auto-save results with timestamp-based group name
+              try {
+                const autoGroupName = `batch_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}`;
+                const settings = await api.getCourseSettings(selectedCourseId!);
+                
+                let savedCount = 0;
+                for (const result of results) {
+                  try {
+                    // Debug: Log BERTScore values before saving
+                    console.log('Saving result with BERTScore:', {
+                      question: result.question?.substring(0, 50),
+                      bertscore_precision: result.bertscore_precision,
+                      bertscore_recall: result.bertscore_recall,
+                      bertscore_f1: result.bertscore_f1,
+                      original_bertscore_precision: result.original_bertscore_precision,
+                      original_bertscore_recall: result.original_bertscore_recall,
+                      original_bertscore_f1: result.original_bertscore_f1,
+                    });
+                    
+                    await api.saveSemanticSimilarityResult({
+                      course_id: selectedCourseId!,
+                      group_name: autoGroupName,
+                      question: result.question,
+                      ground_truth: result.ground_truth,
+                      alternative_ground_truths: undefined,
+                      generated_answer: result.generated_answer,
+                      bloom_level: undefined,
+                      similarity_score: result.similarity_score,
+                      best_match_ground_truth: result.best_match_ground_truth,
+                      all_scores: undefined,
+                      rouge1: result.rouge1,
+                      rouge2: result.rouge2,
+                      rougel: result.rougel,
+                      bertscore_precision: result.bertscore_precision,
+                      bertscore_recall: result.bertscore_recall,
+                      bertscore_f1: result.bertscore_f1,
+                      original_bertscore_precision: result.original_bertscore_precision,
+                      original_bertscore_recall: result.original_bertscore_recall,
+                      original_bertscore_f1: result.original_bertscore_f1,
+                      latency_ms: result.latency_ms || 0,
+                      embedding_model_used: finalResult.embedding_model_used,
+                      llm_model_used: finalResult.llm_model_used,
+                      retrieved_contexts: result.retrieved_contexts,
+                      system_prompt_used: result.system_prompt_used,
+                      search_top_k: settings.search_top_k,
+                      search_alpha: settings.search_alpha,
+                      reranker_used: settings.enable_reranker,
+                      reranker_provider: settings.reranker_provider,
+                      reranker_model: settings.reranker_model
+                    });
+                    savedCount++;
+                  } catch (saveError) {
+                    console.error("Failed to save individual result:", saveError);
+                  }
+                }
+                
+                if (savedCount > 0) {
+                  toast.success(`${savedCount} sonuç otomatik kaydedildi (Grup: ${autoGroupName})`);
+                }
+              } catch (autoSaveError) {
+                console.error("Auto-save failed:", autoSaveError);
+                toast.warning("Sonuçlar otomatik kaydedilemedi. Manuel kaydetmeyi deneyin.");
+              }
+              
               return finalResult;
             } else if (data.event === 'cancelled') {
               toast.warning(`Test iptal edildi: ${data.completed}/${data.total} tamamlandı`);
@@ -1390,6 +1468,9 @@ export default function SemanticSimilarityPage() {
             bertscore_precision: result.bertscore_precision,
             bertscore_recall: result.bertscore_recall,
             bertscore_f1: result.bertscore_f1,
+            original_bertscore_precision: result.original_bertscore_precision,
+            original_bertscore_recall: result.original_bertscore_recall,
+            original_bertscore_f1: result.original_bertscore_f1,
             latency_ms: result.latency_ms || 0,
             embedding_model_used: batchTestResult.embedding_model_used || selectedEmbeddingModel || "unknown",
             llm_model_used: batchTestResult.llm_model_used,

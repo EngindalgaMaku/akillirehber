@@ -171,7 +171,7 @@ class SemanticSimilarityService:
         if missing:
             missing_texts = [all_texts[i] for i in missing]
             new_embeddings = self.embedding_service.get_embeddings(
-                missing_texts, model=embedding_model
+                missing_texts, model=embedding_model, input_type="document"
             )
             # Cache new embeddings
             _embedding_cache.set_batch(
@@ -250,6 +250,7 @@ class SemanticSimilarityService:
         lang: str = "tr",
     ) -> Dict[str, float]:
         try:
+            logger.info("Starting original BERTScore computation...")
             from transformers.utils import logging as hf_logging
             from bert_score import score as bert_score
             import bert_score as bert_score_pkg
@@ -261,6 +262,7 @@ class SemanticSimilarityService:
                 "ORIGINAL_BERTSCORE_MODEL",
                 "bert-base-multilingual-cased",
             )
+            logger.info(f"Using BERTScore model: {model_type}")
 
             # bert-score ships rescale baseline files per (lang, model).
             # If missing, enabling rescale emits warnings and has no effect.
@@ -271,6 +273,7 @@ class SemanticSimilarityService:
                 f"{model_type}.tsv",
             )
             use_rescale = os.path.exists(baseline_path)
+            logger.info(f"Baseline path: {baseline_path}, exists: {use_rescale}")
 
             @lru_cache(maxsize=8)
             def _cached_score(
@@ -279,6 +282,7 @@ class SemanticSimilarityService:
                 model: str,
                 language: str,
             ) -> Tuple[float, float, float]:
+                logger.info(f"Computing BERTScore with lang={language}, model={model}")
                 P, R, F1 = bert_score(
                     list(cands),
                     list(refs),
@@ -287,6 +291,7 @@ class SemanticSimilarityService:
                     verbose=False,
                     rescale_with_baseline=use_rescale,
                 )
+                logger.info(f"BERTScore computed: P={P.mean().item():.4f}, R={R.mean().item():.4f}, F1={F1.mean().item():.4f}")
                 return (
                     float(P.mean().item()),
                     float(R.mean().item()),
@@ -300,13 +305,14 @@ class SemanticSimilarityService:
                 lang,
             )
 
+            logger.info(f"Original BERTScore result: P={p:.4f}, R={r:.4f}, F1={f1:.4f}")
             return {
                 "precision": p,
                 "recall": r,
                 "f1": f1,
             }
         except Exception as e:
-            logger.error(f"Error computing original BERTScore: {e}")
+            logger.error(f"Error computing original BERTScore: {e}", exc_info=True)
             raise
 
     def compute_bertscore(
@@ -446,16 +452,27 @@ class SemanticSimilarityService:
                 result['bertscore_recall'] = bertscore['recall']
                 result['bertscore_f1'] = bertscore['f1']
 
-            original_bertscore = self.compute_original_bertscore(
-                generated_answer,
-                best_match,
-                lang=lang,
-            )
-            result['original_bertscore_precision'] = (
-                original_bertscore['precision']
-            )
-            result['original_bertscore_recall'] = original_bertscore['recall']
-            result['original_bertscore_f1'] = original_bertscore['f1']
+            # Compute original BERTScore (bert-score library)
+            try:
+                original_bertscore = self.compute_original_bertscore(
+                    generated_answer,
+                    best_match,
+                    lang=lang,
+                )
+                logger.info(
+                    "Original BERTScore computed: P=%.4f R=%.4f F1=%.4f",
+                    original_bertscore['precision'],
+                    original_bertscore['recall'],
+                    original_bertscore['f1']
+                )
+                result['original_bertscore_precision'] = (
+                    original_bertscore['precision']
+                )
+                result['original_bertscore_recall'] = original_bertscore['recall']
+                result['original_bertscore_f1'] = original_bertscore['f1']
+            except Exception as e:
+                logger.error(f"Failed to compute original BERTScore, skipping: {e}", exc_info=True)
+                # Leave as None - already initialized in result dict
 
         return result
 

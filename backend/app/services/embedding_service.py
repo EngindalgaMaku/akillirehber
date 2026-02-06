@@ -263,7 +263,7 @@ class EmbeddingService:
         return self._get_client()
 
     def get_embedding(
-        self, text: str, model: str = None
+        self, text: str, model: str = None, input_type: str = None
     ) -> List[float]:
         """Get embedding for a single text.
         
@@ -275,6 +275,9 @@ class EmbeddingService:
         Args:
             text: Text to embed
             model: Embedding model to use
+            input_type: Context type - "query" for search queries, 
+                       "document" for indexing. Defaults to "query".
+                       Supported by Voyage AI and Cohere providers.
             
         Returns:
             Embedding vector
@@ -288,6 +291,10 @@ class EmbeddingService:
         """
         if not text or not text.strip():
             return []
+        
+        # Default to "query" for backward compatibility
+        if input_type is None:
+            input_type = "query"
             
         model = model or self.DEFAULT_MODEL
         
@@ -316,7 +323,7 @@ class EmbeddingService:
                 data = {
                     "input": text.strip(),
                     "model": voyage_model,
-                    "input_type": "query",
+                    "input_type": input_type,  # Use parameter instead of hardcoded "query"
                 }
 
                 # Enhanced retry logic for rate limiting
@@ -377,10 +384,14 @@ class EmbeddingService:
             if provider == "cohere":
                 client = self._get_cohere_client()
                 cohere_model = model.replace(self.COHERE_MODEL_PREFIX, "")
+                
+                # Map input_type to Cohere's format
+                cohere_input_type = "search_query" if input_type == "query" else "search_document"
+                
                 response = client.embed(
                     texts=[text.strip()],
                     model=cohere_model,
-                    input_type="search_query",
+                    input_type=cohere_input_type,
                 )
                 embeddings = getattr(response, "embeddings", None)
                 if not embeddings:
@@ -580,7 +591,7 @@ class EmbeddingService:
             raise
 
     def get_embeddings(
-        self, texts: List[str], model: str = None
+        self, texts: List[str], model: str = None, input_type: str = None
     ) -> List[List[float]]:
         """Get embeddings for multiple texts.
         
@@ -591,6 +602,9 @@ class EmbeddingService:
         Args:
             texts: List of texts to embed
             model: Embedding model to use
+            input_type: Context type - "query" for search queries,
+                       "document" for indexing. Defaults to "document".
+                       Supported by Voyage AI and Cohere providers.
             
         Returns:
             List of embedding vectors
@@ -604,6 +618,10 @@ class EmbeddingService:
         """
         if not texts:
             return []
+        
+        # Default to "document" for backward compatibility
+        if input_type is None:
+            input_type = "document"
             
         # Filter empty texts but track indices
         non_empty = [(i, t.strip()) for i, t in enumerate(texts) if t.strip()]
@@ -651,10 +669,13 @@ class EmbeddingService:
                     batch_indices = [i for i, _ in batch]
                     
                     try:
+                        # Map input_type to Cohere's format
+                        cohere_input_type = "search_query" if input_type == "query" else "search_document"
+                        
                         response = client.embed(
                             texts=batch_texts,
                             model=cohere_model,
-                            input_type="search_document"
+                            input_type=cohere_input_type
                         )
                         
                         for j, embedding in enumerate(response.embeddings):
@@ -864,7 +885,7 @@ class EmbeddingService:
                     data = {
                         "input": batch_texts,
                         "model": voyage_model,
-                        "input_type": "document",
+                        "input_type": input_type,  # Use parameter instead of hardcoded "document"
                     }
 
                     # Enhanced retry logic for rate limiting

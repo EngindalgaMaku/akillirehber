@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Settings, Shield, Key, Bot, Loader2, Save, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { Settings, Shield, Key, Bot, Loader2, Save, Eye, EyeOff, RefreshCw, HardDrive, ArrowRight } from "lucide-react";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -304,6 +304,33 @@ export default function SettingsPage() {
                   <Save className="w-4 h-4 mr-2" />
                 )}
                 Kaydet
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Backup Link */}
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center">
+                  <HardDrive className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-slate-900">Veritabanı Yedekleme</h4>
+                  <p className="text-sm text-slate-600 mt-1">
+                    Yedekleri oluşturun, indirin ve geri yükleyin
+                  </p>
+                </div>
+              </div>
+              <Button 
+                onClick={() => router.push("/dashboard/backup")}
+                size="lg"
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                Yedekleme Sayfası
+                <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           </CardContent>

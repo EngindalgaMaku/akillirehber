@@ -222,7 +222,7 @@ class ChatValidationService:
         """
         try:
             # Get query embedding
-            query_vector = self.embedding_service.get_embedding(test_query)
+            query_vector = self.embedding_service.get_embedding(test_query, input_type="query")
 
             if not query_vector:
                 return {
