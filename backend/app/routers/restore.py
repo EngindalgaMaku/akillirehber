@@ -7,6 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 router = APIRouter(prefix="/api/restore", tags=["restore"])
 
@@ -32,15 +33,22 @@ async def upload_postgres(file: UploadFile = File(...)):
         
         file_size_mb = len(content) / 1024 / 1024
         
-        return {
-            "success": True,
-            "message": f"PostgreSQL backup uploaded: {safe_filename}",
-            "details": {
-                "filename": safe_filename,
-                "path": str(file_path),
-                "size_mb": round(file_size_mb, 2)
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": f"PostgreSQL backup uploaded: {safe_filename}",
+                "details": {
+                    "filename": safe_filename,
+                    "path": str(file_path),
+                    "size_mb": round(file_size_mb, 2)
+                }
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
             }
-        }
+        )
             
     except HTTPException:
         raise
@@ -66,15 +74,22 @@ async def upload_weaviate(file: UploadFile = File(...)):
         
         file_size_mb = len(content) / 1024 / 1024
         
-        return {
-            "success": True,
-            "message": f"Weaviate backup uploaded: {safe_filename}",
-            "details": {
-                "filename": safe_filename,
-                "path": str(file_path),
-                "size_mb": round(file_size_mb, 2)
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": f"Weaviate backup uploaded: {safe_filename}",
+                "details": {
+                    "filename": safe_filename,
+                    "path": str(file_path),
+                    "size_mb": round(file_size_mb, 2)
+                }
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
             }
-        }
+        )
             
     except HTTPException:
         raise
@@ -97,9 +112,55 @@ async def list_uploads():
                     "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
         
-        return {
-            "success": True,
-            "files": sorted(files, key=lambda x: x["modified"], reverse=True)
-        }
+        return JSONResponse(
+            content={
+                "success": True,
+                "files": sorted(files, key=lambda x: x["modified"], reverse=True)
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
     except Exception as e:
         raise HTTPException(500, f"Failed to list files: {str(e)}")
+
+
+@router.options("/upload/postgres")
+async def options_upload_postgres():
+    """Handle CORS preflight for postgres upload."""
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@router.options("/upload/weaviate")
+async def options_upload_weaviate():
+    """Handle CORS preflight for weaviate upload."""
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@router.options("/list")
+async def options_list():
+    """Handle CORS preflight for list."""
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
