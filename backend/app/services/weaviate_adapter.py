@@ -85,6 +85,10 @@ class WeaviateAdapter(VectorStoreInterface):
         )
         return self._convert_results(results)
 
+    def delete_by_chunk_id(self, course_id: int, chunk_id: int) -> int:
+        """Delete a single vector by chunk_id."""
+        return self._service.delete_by_chunk_id(course_id, chunk_id)
+
     def delete_by_document(self, course_id: int, document_id: int) -> int:
         """Delete all vectors for a document."""
         return self._service.delete_by_document(course_id, document_id)

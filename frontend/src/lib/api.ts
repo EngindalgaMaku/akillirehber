@@ -92,6 +92,7 @@ export interface Document {
 }
 
 export interface Chunk {
+  id?: number;
   content: string;
   start_index: number;
   end_index: number;
@@ -649,6 +650,10 @@ class ApiClient {
 
   async deleteDocumentChunks(documentId: number): Promise<void> {
     await this.request(`/api/documents/${documentId}/chunks`, { method: "DELETE" });
+  }
+
+  async deleteChunk(documentId: number, chunkId: number): Promise<void> {
+    await this.request(`/api/documents/${documentId}/chunks/${chunkId}`, { method: "DELETE" });
   }
 
   async processDocument(

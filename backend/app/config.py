@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # Weaviate
     weaviate_url: str = "http://localhost:8080"
+    weaviate_api_key: Optional[str] = None
 
     # RAGAS Service
     ragas_url: str = "http://localhost:8001"

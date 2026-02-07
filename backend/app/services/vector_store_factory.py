@@ -1,6 +1,7 @@
 """Factory for creating vector store instances based on course settings.
 
 This allows switching between Weaviate and ChromaDB per course.
+Uses a singleton adapter to avoid creating new connections on every call.
 """
 
 import logging
@@ -11,6 +12,17 @@ from app.services.vector_store_interface import VectorStoreInterface
 from app.services.weaviate_adapter import WeaviateAdapter
 
 logger = logging.getLogger(__name__)
+
+# Singleton instance — reuses the same Weaviate connection
+_default_adapter: Optional[WeaviateAdapter] = None
+
+
+def _get_singleton_adapter() -> WeaviateAdapter:
+    """Get or create the singleton WeaviateAdapter."""
+    global _default_adapter
+    if _default_adapter is None:
+        _default_adapter = WeaviateAdapter()
+    return _default_adapter
 
 
 def get_vector_store_for_course(
@@ -26,14 +38,14 @@ def get_vector_store_for_course(
     Returns:
         VectorStoreInterface implementation (Weaviate or ChromaDB)
     """
-    logger.info(f"Using Weaviate for course {course_id}")
-    return WeaviateAdapter()
+    logger.debug(f"Using Weaviate for course {course_id}")
+    return _get_singleton_adapter()
 
 
 def get_default_vector_store() -> VectorStoreInterface:
     """Get the default vector store (Weaviate).
     
     Returns:
-        WeaviateAdapter instance
+        WeaviateAdapter instance (singleton)
     """
-    return WeaviateAdapter()
+    return _get_singleton_adapter()

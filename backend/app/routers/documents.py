@@ -35,6 +35,7 @@ from app.services.document_service import (
     retry_document_processing,
     get_document_processing_status,
     delete_document_chunks as del_chunks,
+    delete_single_chunk,
 )
 from app.services.weaviate_service import get_weaviate_service
 from app.services.chunker import ChunkerService
@@ -234,6 +235,45 @@ async def delete_document_chunks(
 
     # Delete all chunks
     del_chunks(db, document_id)
+    return None
+
+
+@router.delete("/documents/{document_id}/chunks/{chunk_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_single_chunk_endpoint(
+    document_id: int,
+    chunk_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a single chunk by ID.
+
+    Also removes the corresponding vector from Weaviate if it exists.
+    """
+    document = get_document_by_id(db, document_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=DOC_NOT_FOUND,
+        )
+
+    _verify_document_ownership(db, document, current_user)
+
+    deleted = delete_single_chunk(db, chunk_id, document_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chunk not found",
+        )
+
+    # Also delete from Weaviate if document has a course
+    if document.course_id:
+        try:
+            weaviate_svc = get_weaviate_service()
+            weaviate_svc.delete_by_chunk_id(document.course_id, chunk_id)
+        except Exception:
+            pass  # Vector may not exist yet
+
     return None
 
 

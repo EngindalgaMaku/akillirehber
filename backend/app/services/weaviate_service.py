@@ -1,13 +1,19 @@
 """Weaviate vector database service for storing and searching embeddings."""
 
+import logging
 from typing import List, Optional
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import weaviate
 from weaviate.classes.config import Configure, Property, DataType
 from weaviate.classes.query import MetadataQuery, Filter
+from weaviate.connect import ConnectionParams
+from weaviate.auth import AuthApiKey
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,14 +57,73 @@ class WeaviateService:
         settings = get_settings()
         self._url = url or settings.weaviate_url
         self._client = None
+        self._api_key = getattr(settings, 'weaviate_api_key', None) or None
 
     def _get_client(self) -> weaviate.WeaviateClient:
-        """Get or create Weaviate client connection."""
+        """Get or create Weaviate client connection.
+        
+        Automatically detects local vs remote URLs and uses the
+        appropriate connection method. Supports HTTPS with API key auth.
+        
+        For remote connections, tries gRPC first. If gRPC port is
+        unreachable, falls back to REST-only mode (skip_init_checks).
+        """
         if self._client is None:
-            self._client = weaviate.connect_to_local(
-                host=self._url.replace("http://", "").split(":")[0],
-                port=int(self._url.split(":")[-1]) if ":" in self._url else 8080
-            )
+            parsed = urlparse(self._url)
+            is_https = parsed.scheme == "https"
+            host = parsed.hostname or "localhost"
+            
+            if is_https or (host not in ("localhost", "127.0.0.1")):
+                # Remote connection
+                grpc_port = 50051
+                http_port = parsed.port or (443 if is_https else 8080)
+                
+                auth = AuthApiKey(self._api_key) if self._api_key else None
+                
+                logger.info(f"Connecting to remote Weaviate at {host} (https={is_https})")
+                
+                # First try with gRPC
+                try:
+                    client = weaviate.connect_to_custom(
+                        http_host=host,
+                        http_port=http_port,
+                        http_secure=is_https,
+                        grpc_host=host,
+                        grpc_port=grpc_port,
+                        grpc_secure=is_https,
+                        auth_credentials=auth,
+                        additional_config=weaviate.config.AdditionalConfig(
+                            timeout=(10, 120),
+                        ),
+                    )
+                    # Quick check — if gRPC is broken this will fail
+                    client.collections.list_all()
+                    self._client = client
+                    logger.info("Connected to Weaviate with gRPC")
+                except Exception as e:
+                    logger.warning(f"gRPC connection failed ({e}), falling back to REST-only")
+                    # Fallback: skip gRPC init checks, use REST only
+                    self._client = weaviate.connect_to_custom(
+                        http_host=host,
+                        http_port=http_port,
+                        http_secure=is_https,
+                        grpc_host=host,
+                        grpc_port=grpc_port,
+                        grpc_secure=is_https,
+                        auth_credentials=auth,
+                        additional_config=weaviate.config.AdditionalConfig(
+                            timeout=(10, 120),
+                        ),
+                        skip_init_checks=True,
+                    )
+                    logger.info("Connected to Weaviate in REST-only mode")
+            else:
+                # Local connection
+                port = parsed.port or 8080
+                self._client = weaviate.connect_to_local(
+                    host=host,
+                    port=port,
+                )
         return self._client
 
     def _get_collection_name(self, course_id: int) -> str:
@@ -219,6 +284,30 @@ class WeaviateService:
                 uuids.append(str(uuid))
 
         return uuids
+
+    def delete_by_chunk_id(self, course_id: int, chunk_id: int) -> int:
+        """Delete a single vector by chunk_id.
+        
+        Args:
+            course_id: Course ID
+            chunk_id: Chunk ID (DB primary key)
+            
+        Returns:
+            Number of deleted objects (0 or 1)
+        """
+        client = self._get_client()
+        collection_name = self._get_collection_name(course_id)
+
+        if not client.collections.exists(collection_name):
+            return 0
+
+        collection = client.collections.get(collection_name)
+        
+        result = collection.data.delete_many(
+            where=Filter.by_property("chunk_id").equal(chunk_id)
+        )
+        
+        return result.successful if hasattr(result, 'successful') else 0
 
     def delete_by_document(self, course_id: int, document_id: int) -> int:
         """Delete all vectors for a document.

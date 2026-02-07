@@ -125,6 +125,19 @@ class VectorStoreInterface(ABC):
         pass
 
     @abstractmethod
+    def delete_by_chunk_id(self, course_id: int, chunk_id: int) -> int:
+        """Delete a single vector by chunk_id.
+        
+        Args:
+            course_id: Course ID
+            chunk_id: Chunk ID
+            
+        Returns:
+            Number of deleted objects
+        """
+        pass
+
+    @abstractmethod
     def delete_by_document(self, course_id: int, document_id: int) -> int:
         """Delete all vectors for a document.
         

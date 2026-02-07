@@ -235,6 +235,29 @@ def delete_document_chunks(db: Session, document_id: int) -> int:
     db.commit()
     return count
 
+def delete_single_chunk(db: Session, chunk_id: int, document_id: int) -> bool:
+    """Delete a single chunk by ID.
+
+    Returns True if deleted, False if not found.
+    """
+    chunk = db.query(Chunk).filter(
+        Chunk.id == chunk_id,
+        Chunk.document_id == document_id
+    ).first()
+    if not chunk:
+        return False
+    db.delete(chunk)
+    db.commit()
+
+    # Update document chunk count
+    remaining = db.query(Chunk).filter(Chunk.document_id == document_id).count()
+    document = get_document_by_id(db, document_id)
+    if document and remaining == 0:
+        document.is_processed = False
+        db.commit()
+    return True
+
+
 
 def save_chunks_to_db(
     db: Session, document: Document, chunks_data: List[dict]

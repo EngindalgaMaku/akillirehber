@@ -75,6 +75,7 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDeletingChunks, setIsDeletingChunks] = useState(false);
+  const [isDeletingChunkId, setIsDeletingChunkId] = useState<number | null>(null);
   const [isEmbedding, setIsEmbedding] = useState(false);
   const [isDeletingVectors, setIsDeletingVectors] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<ProcessingProgress[]>([]);
@@ -184,6 +185,22 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
       toast.error(error instanceof Error ? error.message : "Silme hatası");
     } finally {
       setIsDeletingChunks(false);
+    }
+  };
+
+  const handleDeleteSingleChunk = async (chunkId: number) => {
+    if (!selectedDocId || !chunkId) return;
+    if (!confirm("Bu chunk'ı silmek istediğinizden emin misiniz?")) return;
+    setIsDeletingChunkId(chunkId);
+    try {
+      await api.deleteChunk(selectedDocId, chunkId);
+      setDocChunks((prev) => prev.filter((c) => c.id !== chunkId));
+      toast.success("Chunk silindi");
+      loadDocuments();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Silme hatası");
+    } finally {
+      setIsDeletingChunkId(null);
     }
   };
 
@@ -676,16 +693,34 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
                     const globalIdx = (chunkPage - 1) * CHUNKS_PER_PAGE + idx;
                     return (
                       <div
-                        key={globalIdx}
+                        key={chunk.id ?? globalIdx}
                         className="bg-slate-50 rounded border border-slate-200 p-3"
                       >
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-xs font-medium text-slate-600">
                             Chunk {globalIdx + 1}
                           </span>
-                          <span className="text-xs text-slate-400">
-                            {chunk.content.length} karakter
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-400">
+                              {chunk.content.length} karakter
+                            </span>
+                            {chunk.id && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDeleteSingleChunk(chunk.id!)}
+                                disabled={isDeletingChunkId === chunk.id}
+                                className="h-6 w-6 p-0 text-red-400 hover:text-red-600 hover:bg-red-50"
+                                title="Bu chunk'ı sil"
+                              >
+                                {isDeletingChunkId === chunk.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                )}
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         <p className="text-sm text-slate-700 whitespace-pre-wrap">
                           {chunk.content}
