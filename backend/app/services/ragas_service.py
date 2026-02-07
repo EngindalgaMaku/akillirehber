@@ -15,7 +15,7 @@ from app.models.db_models import (
     EvaluationRun, EvaluationResult, RunSummary, 
     TestQuestion, Course
 )
-from app.services.course_service import get_or_create_settings
+from app.services.course_service import get_or_create_settings, DEFAULT_SYSTEM_PROMPT
 from app.services.weaviate_service import WeaviateService
 from app.services.llm_service import LLMService
 
@@ -461,14 +461,16 @@ class RagasEvaluationService:
         context_text = "\n\n---\n\n".join(retrieved_contexts) if retrieved_contexts else ""
         
         # Generate answer using LLM
-        system_prompt = course_settings.system_prompt or "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+        system_prompt = course_settings.system_prompt or DEFAULT_SYSTEM_PROMPT
         
-        user_prompt = f"""Bağlam:
+        user_prompt = f"""Aşağıda ders dokümanlarından alınan bağlam bilgileri verilmiştir.
+
+Bağlam:
 {context_text}
 
 Soru: {question.question}
 
-Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
+Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamdaki teknik terimleri ve ifadeleri aynen kullan. Bağlamda olmayan bilgi ekleme."""
 
         try:
             llm_service = LLMService(

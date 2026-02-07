@@ -133,15 +133,14 @@ class DocumentProcessor:
                         error_type="EmptyDocument",
                         context={"page_count": 0}
                     )
-                
+
                 for page_num, page in enumerate(doc):
                     try:
                         page_text = page.get_text()
                         text_parts.append(page_text)
                     except Exception as e:
                         logger.warning(f"Failed to extract text from page {page_num + 1}: {str(e)}")
-                        # Continue with other pages
-                        
+
         except fitz.FileDataError as e:
             raise DocumentProcessingError(
                 f"Invalid or corrupted PDF file: {str(e)}",
@@ -165,7 +164,7 @@ class DocumentProcessor:
             ) from e
 
         extracted_text = "\n".join(text_parts)
-        
+
         # Validate extraction results
         if not extracted_text.strip():
             raise DocumentProcessingError(
@@ -173,7 +172,7 @@ class DocumentProcessor:
                 error_type="EmptyExtraction",
                 context={"page_count": len(text_parts)}
             )
-        
+
         return extracted_text
 
     def _extract_markdown(self, content: bytes) -> str:

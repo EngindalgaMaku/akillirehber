@@ -836,6 +836,110 @@ class VoyageProvider(EmbeddingProvider):
         """
         self._api_key = api_key or os.environ.get("VOYAGE_API_KEY")
     
+    # VoyageAI token limits per single text input by model
+    MAX_TOKENS_PER_TEXT = {
+        "voyage-3-large": 32000,
+        "voyage-4-large": 32000,
+        "voyage-3-lite": 16000,
+        "voyage-3": 32000,
+    }
+    # VoyageAI max tokens per batch by model
+    MAX_TOKENS_PER_BATCH = {
+        "voyage-4-large": 120000,
+        "voyage-3-large": 120000,
+        "voyage-3-lite": 120000,
+        "voyage-3": 120000,
+    }
+    # Approximate chars-per-token ratio (conservative — overestimates tokens)
+    CHARS_PER_TOKEN_ESTIMATE = 3
+
+    def _split_and_average_embedding(
+        self, text: str, model: str, headers: dict, input_type: str
+    ) -> List[float]:
+        """Split a long text into smaller segments, embed each, and average.
+        
+        This avoids truncation-based data loss: every part of the text
+        contributes to the final embedding vector.
+        """
+        import requests
+        try:
+            import numpy as np
+        except ImportError:
+            # Fallback: simple average without numpy
+            np = None
+
+        max_tokens = self.MAX_TOKENS_PER_TEXT.get(model, 32000)
+        max_chars = max_tokens * self.CHARS_PER_TOKEN_ESTIMATE
+        # Use 90% of limit to leave safety margin
+        segment_max = int(max_chars * 0.9)
+
+        # Split at sentence/word boundaries
+        segments = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= segment_max:
+                segments.append(remaining)
+                break
+            # Find a good split point
+            cut = remaining[:segment_max]
+            # Prefer sentence boundary
+            for sep in [". ", ".\n", "? ", "! ", "\n\n", "\n", " "]:
+                pos = cut.rfind(sep)
+                if pos > segment_max * 0.5:
+                    cut = remaining[:pos + len(sep)]
+                    break
+            else:
+                cut = remaining[:segment_max]
+            segments.append(cut.strip())
+            remaining = remaining[len(cut):].strip()
+
+        logger.info(
+            f"VoyageAI: Text too long ({len(text)} chars), split into "
+            f"{len(segments)} segments for averaged embedding"
+        )
+
+        # Embed each segment
+        all_segment_embeddings = []
+        for seg in segments:
+            if not seg.strip():
+                continue
+            data = {
+                "input": [seg],
+                "model": model,
+                "input_type": input_type,
+            }
+            response = requests.post(
+                f"{self.BASE_URL}/embeddings",
+                headers=headers,
+                json=data,
+                timeout=30,
+            )
+            response.raise_for_status()
+            result = response.json()
+            emb_data = result.get("data")
+            if emb_data:
+                all_segment_embeddings.append(emb_data[0].get("embedding"))
+
+        if not all_segment_embeddings:
+            return []
+
+        # Weighted average by segment length (longer segments contribute more)
+        weights = [len(s) for s in segments if s.strip()]
+        if np is not None:
+            arr = np.array(all_segment_embeddings)
+            w = np.array(weights[:len(arr)], dtype=float)
+            w /= w.sum()
+            averaged = np.average(arr, axis=0, weights=w).tolist()
+        else:
+            # Simple average fallback without numpy
+            dim = len(all_segment_embeddings[0])
+            total_weight = sum(weights[:len(all_segment_embeddings)])
+            averaged = [0.0] * dim
+            for emb, weight in zip(all_segment_embeddings, weights):
+                for j in range(dim):
+                    averaged[j] += emb[j] * weight / total_weight
+        return averaged
+
     def get_embeddings(
         self,
         texts: List[str],
@@ -878,67 +982,186 @@ class VoyageProvider(EmbeddingProvider):
                 "Content-Type": "application/json",
             }
             
-            data = {
-                "input": non_empty_texts,
-                "model": model,
-                "input_type": input_type,
-            }
+            # Check for texts that exceed token limits — handle them individually
+            max_tokens = self.MAX_TOKENS_PER_TEXT.get(model, 32000)
+            max_chars = max_tokens * self.CHARS_PER_TOKEN_ESTIMATE
             
-            # Enhanced retry logic for rate limiting
-            max_retries = 8
-            base_delay = 5
+            short_texts = []
+            short_indices = []
+            long_texts_map = {}  # index -> original text
             
-            for attempt in range(max_retries):
+            for i, text in enumerate(non_empty_texts):
+                if len(text) > max_chars:
+                    long_texts_map[i] = text
+                else:
+                    short_texts.append(text)
+                    short_indices.append(i)
+            
+            # Pre-allocate results
+            results = [None] * len(non_empty_texts)
+            
+            # Handle long texts via split-and-average (no data loss)
+            for idx, long_text in long_texts_map.items():
                 try:
-                    response = requests.post(
-                        f"{self.BASE_URL}/embeddings",
-                        headers=headers,
-                        json=data,
-                        timeout=30,
+                    averaged = self._split_and_average_embedding(
+                        long_text, model, headers, input_type
                     )
+                    results[idx] = averaged
+                except Exception as e:
+                    logger.error(
+                        f"VoyageAI: Failed to embed long text (index {idx}, "
+                        f"{len(long_text)} chars) via split-and-average: {e}"
+                    )
+                    raise EmbeddingProviderError(
+                        f"Failed to embed long text ({len(long_text)} chars): {str(e)}",
+                        provider=self.name,
+                        details={"model": model, "text_length": len(long_text)}
+                    ) from e
+            
+            # Handle normal-length texts — split into sub-batches by token limit
+            if short_texts:
+                max_batch_tokens = self.MAX_TOKENS_PER_BATCH.get(model, 120000)
+                # Use 90% of limit as safety margin
+                max_batch_chars = int(max_batch_tokens * self.CHARS_PER_TOKEN_ESTIMATE * 0.9)
+                
+                # Build sub-batches that fit within the token budget
+                sub_batches = []  # list of (batch_texts, batch_original_indices)
+                current_batch_texts = []
+                current_batch_indices = []
+                current_batch_chars = 0
+                
+                for text, orig_idx in zip(short_texts, short_indices):
+                    text_chars = len(text)
+                    # If adding this text would exceed the batch limit, flush
+                    if current_batch_texts and (current_batch_chars + text_chars) > max_batch_chars:
+                        sub_batches.append((current_batch_texts, current_batch_indices))
+                        current_batch_texts = []
+                        current_batch_indices = []
+                        current_batch_chars = 0
+                    current_batch_texts.append(text)
+                    current_batch_indices.append(orig_idx)
+                    current_batch_chars += text_chars
+                
+                if current_batch_texts:
+                    sub_batches.append((current_batch_texts, current_batch_indices))
+                
+                if len(sub_batches) > 1:
+                    logger.info(
+                        f"VoyageAI: Split {len(short_texts)} texts into "
+                        f"{len(sub_batches)} sub-batches to stay within "
+                        f"{max_batch_tokens} token batch limit"
+                    )
+                
+                # Send each sub-batch
+                for batch_texts, batch_indices in sub_batches:
+                    data = {
+                        "input": batch_texts,
+                        "model": model,
+                        "input_type": input_type,
+                    }
                     
-                    if response.status_code == 429:
-                        if attempt < max_retries - 1:
-                            delay = base_delay * (2 ** attempt) + random.uniform(1.0, 3.0)
-                            logger.warning(
-                                f"VoyageAI rate limit hit, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
+                    # Retry logic for transient errors (429, 5xx, network)
+                    # 400 errors are NOT retried — they indicate bad input data
+                    max_retries = 8
+                    base_delay = 5
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            response = requests.post(
+                                f"{self.BASE_URL}/embeddings",
+                                headers=headers,
+                                json=data,
+                                timeout=60,
                             )
-                            time.sleep(delay)
-                            continue
-                        else:
-                            raise EmbeddingProviderError(
-                                "VoyageAI rate limit exceeded. Please try again later.",
-                                provider=self.name,
-                                details={"model": model, "text_count": len(non_empty_texts)}
-                            )
-                    
-                    response.raise_for_status()
-                    result = response.json()
-                    embeddings = result.get("data") or []
-                    
-                    if not embeddings:
-                        raise EmbeddingProviderError(
-                            "No embedding data received from Voyage API",
-                            provider=self.name,
-                            details={"model": model, "text_count": len(non_empty_texts)}
-                        )
-                    
-                    return [item.get("embedding") for item in embeddings]
-                    
-                except requests.exceptions.RequestException as e:
-                    if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt) + random.uniform(1.0, 3.0)
-                        logger.warning(
-                            f"VoyageAI request failed, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries}): {e}"
-                        )
-                        time.sleep(delay)
-                        continue
-                    else:
-                        raise EmbeddingProviderError(
-                            f"Voyage embedding failed: {str(e)}",
-                            provider=self.name,
-                            details={"model": model, "text_count": len(non_empty_texts)}
-                        ) from e
+                            
+                            if response.status_code == 429:
+                                if attempt < max_retries - 1:
+                                    delay = base_delay * (2 ** attempt) + random.uniform(1.0, 3.0)
+                                    logger.warning(
+                                        f"VoyageAI rate limit hit, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
+                                    )
+                                    time.sleep(delay)
+                                    continue
+                                else:
+                                    raise EmbeddingProviderError(
+                                        "VoyageAI rate limit exceeded. Please try again later.",
+                                        provider=self.name,
+                                        details={"model": model, "text_count": len(batch_texts)}
+                                    )
+                            
+                            # 400 Bad Request — do NOT retry, log the response body
+                            if response.status_code == 400:
+                                error_body = ""
+                                try:
+                                    error_body = response.text
+                                except Exception:
+                                    error_body = "(could not read response body)"
+                                
+                                text_lengths = [len(t) for t in batch_texts]
+                                logger.error(
+                                    f"VoyageAI 400 Bad Request (not retrying). "
+                                    f"Model: {model}, text_count: {len(batch_texts)}, "
+                                    f"text_lengths: min={min(text_lengths)}, max={max(text_lengths)}, "
+                                    f"total_chars: {sum(text_lengths)}, "
+                                    f"response: {error_body[:500]}"
+                                )
+                                raise EmbeddingProviderError(
+                                    f"VoyageAI rejected the request (400 Bad Request): {error_body[:300]}. "
+                                    f"Text count: {len(batch_texts)}, max text length: {max(text_lengths)} chars.",
+                                    provider=self.name,
+                                    details={
+                                        "model": model,
+                                        "text_count": len(batch_texts),
+                                        "text_lengths": text_lengths,
+                                        "response_body": error_body[:500],
+                                    }
+                                )
+                            
+                            response.raise_for_status()
+                            result = response.json()
+                            embeddings = result.get("data") or []
+                            
+                            if not embeddings:
+                                raise EmbeddingProviderError(
+                                    "No embedding data received from Voyage API",
+                                    provider=self.name,
+                                    details={"model": model, "text_count": len(batch_texts)}
+                                )
+                            
+                            # Place batch results into correct positions
+                            batch_embeddings = [item.get("embedding") for item in embeddings]
+                            for i, emb in zip(batch_indices, batch_embeddings):
+                                results[i] = emb
+                            break  # Success, exit retry loop
+                            
+                        except requests.exceptions.RequestException as e:
+                            # Don't retry client errors (4xx) other than 429
+                            status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+                            if status_code and 400 <= status_code < 500 and status_code != 429:
+                                logger.error(
+                                    f"VoyageAI client error {status_code} (not retrying): {e}"
+                                )
+                                raise EmbeddingProviderError(
+                                    f"Voyage embedding failed with client error {status_code}: {str(e)}",
+                                    provider=self.name,
+                                    details={"model": model, "text_count": len(batch_texts)}
+                                ) from e
+                            
+                            if attempt < max_retries - 1:
+                                delay = base_delay * (2 ** attempt) + random.uniform(1.0, 3.0)
+                                logger.warning(
+                                    f"VoyageAI request failed, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries}): {e}"
+                                )
+                                time.sleep(delay)
+                                continue
+                            else:
+                                raise EmbeddingProviderError(
+                                    f"Voyage embedding failed: {str(e)}",
+                                    provider=self.name,
+                                    details={"model": model, "text_count": len(batch_texts)}
+                                ) from e
+            
+            return results
                         
         except ImportError as exc:
             raise EmbeddingProviderError(

@@ -30,7 +30,11 @@ from app.models.schemas import (
     QuickTestResultCreate, QuickTestResultResponse, QuickTestResultListResponse,
 )
 from app.services.auth_service import get_current_user, get_current_teacher
-from app.services.course_service import verify_course_access, get_or_create_settings
+from app.services.course_service import (
+    verify_course_access,
+    get_or_create_settings,
+    DEFAULT_SYSTEM_PROMPT,
+)
 from app.services.ragas_service import RagasEvaluationService
 
 try:
@@ -1537,8 +1541,7 @@ async def quick_test(
     # Use provided system_prompt or get from course settings
     system_prompt = data.system_prompt
     if system_prompt is None:
-        system_prompt = course_settings.system_prompt or \
-            "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+        system_prompt = course_settings.system_prompt or DEFAULT_SYSTEM_PROMPT
     
     # Use provided LLM settings or get from course settings
     llm_provider = data.llm_provider or course_settings.llm_provider
@@ -2392,8 +2395,7 @@ async def batch_test_stream(
                     except Exception as e:
                         logger.warning(f"[BATCH W&B] Error finishing previous run: {e}")
                     
-                    system_prompt = course_settings.system_prompt or \
-                        "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+                    system_prompt = course_settings.system_prompt or DEFAULT_SYSTEM_PROMPT
                     
                     wb_run = wandb.init(
                         project=wb_project,
@@ -2476,8 +2478,7 @@ async def batch_test_stream(
             sum_latency = 0
             cnt_latency = 0
             
-            system_prompt = course_settings.system_prompt or \
-                "Sen yardımcı bir asistansın. Verilen bağlama göre soruları yanıtla."
+            system_prompt = course_settings.system_prompt or DEFAULT_SYSTEM_PROMPT
             
             llm_provider = course_settings.llm_provider
             llm_model = course_settings.llm_model

@@ -21,7 +21,7 @@ from app.models.giskard_models import (
     GiskardResult, GiskardSummary
 )
 from app.services.giskard_service import create_giskard_tester
-from app.services.course_service import get_or_create_settings
+from app.services.course_service import get_or_create_settings, DEFAULT_SYSTEM_PROMPT
 from app.services.weaviate_service import WeaviateService
 from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
@@ -470,17 +470,7 @@ class GiskardIntegrationService:
                 ) if retrieved_contexts else ""
 
                 # Generate system prompt
-                default_system_prompt = (
-                    "Sen AkıllıRehber adında bir RAG sistemisin.\n\n"
-                    "KURALLAR:\n"
-                    "1. Sadece ders notlarında BULUNAN "
-                    "bilgilere dayalı cevap ver\n"
-                    "2. Notlarda olmayan sorular için "
-                    "'Bilmiyorum' veya 'Bu konuda bilgim yok' de\n"
-                    "3. Cevaplarını TÜRKÇE ver\n"
-                    "4. Akademik ve anlaşılır bir dil kullan\n"
-                    "5. Uydurma bilgi verme (halüsinasyon yapma)"
-                )
+                default_system_prompt = DEFAULT_SYSTEM_PROMPT
 
                 system_prompt = (
                     course_settings.system_prompt
@@ -489,12 +479,14 @@ class GiskardIntegrationService:
                 )
 
                 # Generate answer
-                user_prompt = f"""Bağlam:
+                user_prompt = f"""Aşağıda ders dokümanlarından alınan bağlam bilgileri verilmiştir.
+
+Bağlam:
 {context_text}
 
 Soru: {question}
 
-Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
+Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamdaki teknik terimleri ve ifadeleri aynen kullan. Bağlamda olmayan bilgi ekleme."""
 
                 try:
                     generated_answer = llm_service.generate_response([
@@ -872,17 +864,7 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                 ) if retrieved_contexts else ""
 
             # Generate system prompt
-            default_system_prompt = (
-                "Sen AkıllıRehber adında bir RAG sistemisin.\n\n"
-                "KURALLAR:\n"
-                "1. Sadece ders notlarında BULUNAN "
-                "bilgilere dayalı cevap ver\n"
-                "2. Notlarda olmayan sorular için "
-                "'Bilmiyorum' veya 'Bu konuda bilgim yok' de\n"
-                "3. Cevaplarını TÜRKÇE ver\n"
-                "4. Akademik ve anlaşılır bir dil kullan\n"
-                "5. Uydurma bilgi verme (halüsinasyon yapma)"
-            )
+            default_system_prompt = DEFAULT_SYSTEM_PROMPT
 
             actual_system_prompt = (
                 system_prompt
@@ -891,12 +873,14 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             )
 
             # Generate answer
-            user_prompt = f"""Bağlam:
+            user_prompt = f"""Aşağıda ders dokümanlarından alınan bağlam bilgileri verilmiştir.
+
+Bağlam:
 {context_text}
 
 Soru: {question}
 
-Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
+Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamdaki teknik terimleri ve ifadeleri aynen kullan. Bağlamda olmayan bilgi ekleme."""
 
             generated_answer = llm_service.generate_response([
                 {"role": "system", "content": actual_system_prompt},

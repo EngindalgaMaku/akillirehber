@@ -37,7 +37,8 @@ from app.models.schemas import (
 from app.services.auth_service import get_current_user, get_current_teacher
 from app.services.course_service import (
     verify_course_access,
-    get_or_create_settings
+    get_or_create_settings,
+    DEFAULT_SYSTEM_PROMPT,
 )
 from app.services.semantic_similarity_service import (
     SemanticSimilarityService
@@ -144,11 +145,7 @@ async def quick_test(
         retrieved_contexts = []
         
         # Get system prompt from course settings
-        default_system_prompt = (
-            "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
-            "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
-            "Türkçe ver."
-        )
+        default_system_prompt = DEFAULT_SYSTEM_PROMPT
         active_template = getattr(
             course_settings,
             "active_prompt_template",
@@ -255,11 +252,7 @@ async def batch_test(
     # Get course settings
     course_settings = get_or_create_settings(db, data.course_id)
 
-    default_system_prompt = (
-        "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
-        "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
-        "Türkçe ver."
-    )
+    default_system_prompt = DEFAULT_SYSTEM_PROMPT
     system_prompt_used = (
         course_settings.system_prompt
         if course_settings.system_prompt
@@ -425,11 +418,7 @@ async def batch_test_stream(
             llm_model_used = None
             
             # Get system prompt to include in results
-            default_system_prompt = (
-                "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
-                "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
-                "Türkçe ver."
-            )
+            default_system_prompt = DEFAULT_SYSTEM_PROMPT
             system_prompt_used = (
                 course_settings.system_prompt
                 if course_settings.system_prompt
@@ -1943,11 +1932,7 @@ async def resume_batch_test_session(
             cnt_mrr = 0
 
             # Get system prompt to include in results
-            default_system_prompt = (
-                "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
-                "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
-                "Türkçe ver."
-            )
+            default_system_prompt = DEFAULT_SYSTEM_PROMPT
             system_prompt_used = (
                 course_settings.system_prompt
                 if course_settings.system_prompt
@@ -2722,11 +2707,7 @@ async def batch_test_stream_cancellable(
             llm_model_used = None
             
             # Get system prompt to include in results
-            default_system_prompt = (
-                "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
-                "kullanarak öğrencilerin sorularını yanıtla. Yanıtlarını "
-                "Türkçe ver."
-            )
+            default_system_prompt = DEFAULT_SYSTEM_PROMPT
             system_prompt_used = (
                 course_settings.system_prompt
                 if course_settings.system_prompt

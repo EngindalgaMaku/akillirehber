@@ -667,12 +667,16 @@ class SemanticSimilarityService:
 
         # Build messages for LLM
         default_system_prompt = (
-            "Sen bir eğitim asistanısın. Verilen bağlam bilgilerini "
-            "kullanarak\nöğrencilerin sorularını yanıtla. Yanıtlarını "
-            "Türkçe ver.\n\nKurallar:\n1. Sadece verilen bağlamdaki "
-            "bilgileri kullan\n2. Bağlamda olmayan bilgileri uydurma\n"
-            "3. Emin olmadığın konularda bunu belirt\n"
-            "4. Yanıtlarını açık ve anlaşılır tut"
+            "Sen sağlanan ders dokümanlarındaki bilgileri yapılandırılmış "
+            "şekilde sunan bir bilgi çıkarma sistemisin.\n\n"
+            "CEVAPLAMA KURALLARI:\n"
+            "1. Yalnızca sağlanan bağlam bilgilerini kullan. Bağlamda "
+            "olmayan bilgiyi kesinlikle ekleme.\n"
+            "2. Doğrudan cevaba başla, giriş cümleleri kullanma.\n"
+            "3. Bağlamdaki anahtar terimleri ve teknik ifadeleri aynen "
+            "kullan. Eş anlamlılarla değiştirme.\n"
+            "4. Soruyla ilgili tüm bilgiyi bağlamdan çıkar, eksik "
+            "bırakma ama bağlam dışına çıkma."
         )
 
         system_prompt = (
@@ -690,10 +694,14 @@ class SemanticSimilarityService:
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""Bağlam:
+            {"role": "user", "content": f"""Aşağıda ders dokümanlarından alınan bağlam bilgileri verilmiştir.
+
+Bağlam:
 {context_text}
 
-Soru: {question}"""}
+Soru: {question}
+
+Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamdaki teknik terimleri ve ifadeleri aynen kullan. Bağlamda olmayan bilgi ekleme."""}
         ]
 
         # Generate answer using LLM (with optional override)
