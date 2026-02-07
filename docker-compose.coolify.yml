@@ -36,8 +36,8 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ragchatbot}
-      - WEAVIATE_URL=http://weaviate:8080
+      - DATABASE_URL=${DATABASE_URL:-}
+      - WEAVIATE_URL=${WEAVIATE_URL:-}
       - RAGAS_URL=http://ragas:8001
       - SECRET_KEY=${SECRET_KEY}
       - ALGORITHM=${ALGORITHM:-HS256}
@@ -54,11 +54,6 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
     volumes:
       - ./backups:/app/backups
-    depends_on:
-      postgres:
-        condition: service_healthy
-      weaviate:
-        condition: service_healthy
     networks:
       - rag-network
     restart: unless-stopped
@@ -104,66 +99,12 @@ services:
     labels:
       - "coolify.managed=true"
 
-  # ===========================================
-  # PostgreSQL Database
-  # ===========================================
-  postgres:
-    image: postgres:16-alpine
-    container_name: rag-postgres
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-raguser}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB:-ragchatbot}
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - rag-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragchatbot}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    labels:
-      - "coolify.managed=true"
-
-  # ===========================================
-  # Weaviate Vector Database
-  # ===========================================
-  weaviate:
-    image: semitechnologies/weaviate:1.27.0
-    container_name: rag-weaviate
-    environment:
-      - QUERY_DEFAULTS_LIMIT=25
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-      - DEFAULT_VECTORIZER_MODULE=none
-      - ENABLE_MODULES=
-      - CLUSTER_HOSTNAME=node1
-      - LOG_LEVEL=info
-    volumes:
-      - weaviate_data:/var/lib/weaviate
-    networks:
-      - rag-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/.well-known/ready"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-    labels:
-      - "coolify.managed=true"
-
 networks:
   rag-network:
     driver: bridge
 
 volumes:
-  postgres_data:
-  weaviate_data:
+  {}
 
 # ===========================================
 # Coolify Deployment Notes

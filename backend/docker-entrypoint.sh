@@ -13,17 +13,25 @@ echo "=========================================="
 
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL..."
-while ! nc -z postgres 5432; do
-  sleep 1
-done
-echo "PostgreSQL is ready!"
+if echo "${DATABASE_URL:-}" | grep -q "@postgres:"; then
+  while ! nc -z postgres 5432; do
+    sleep 1
+  done
+  echo "PostgreSQL is ready!"
+else
+  echo "Skipping PostgreSQL wait (remote DATABASE_URL)"
+fi
 
 # Wait for Weaviate to be ready
 echo "Waiting for Weaviate..."
-while ! nc -z weaviate 8080; do
-  sleep 1
-done
-echo "Weaviate is ready!"
+if echo "${WEAVIATE_URL:-}" | grep -q "://weaviate\(:\|/\)"; then
+  while ! nc -z weaviate 8080; do
+    sleep 1
+  done
+  echo "Weaviate is ready!"
+else
+  echo "Skipping Weaviate wait (remote WEAVIATE_URL)"
+fi
 
 # Run database migrations with error handling
 echo "Running database migrations..."
@@ -68,7 +76,8 @@ finally:
       echo "Restoring PostgreSQL from: $(basename $LATEST_PG)"
       
       # Check if file is zipped
-      if [[ "$LATEST_PG" == *.zip ]]; then
+      case "$LATEST_PG" in
+      *.zip)
         echo "Extracting zipped backup..."
         python -c "
 import zipfile
@@ -111,7 +120,8 @@ except Exception as e:
     print(f'❌ Failed to extract backup: {e}', file=sys.stderr)
     sys.exit(1)
 "
-      else
+      ;;
+      *)
         # Direct SQL file restore
         python -c "
 from app.database import SessionLocal
@@ -140,7 +150,8 @@ except Exception as e:
 finally:
     db.close()
 "
-      fi
+      ;;
+      esac
     fi
     
     # Find latest Weaviate backup (support both .json and .json.zip)
@@ -149,7 +160,8 @@ finally:
       echo "Restoring Weaviate from: $(basename $LATEST_WV)"
       
       # Check if file is zipped
-      if [[ "$LATEST_WV" == *.zip ]]; then
+      case "$LATEST_WV" in
+      *.zip)
         echo "Extracting zipped backup..."
         python -c "
 import zipfile
@@ -187,7 +199,8 @@ try:
 except Exception as e:
     print(f'❌ Weaviate restore failed: {e}', file=sys.stderr)
 "
-      else
+      ;;
+      *)
         # Direct JSON file restore
         python -c "
 import json
@@ -219,7 +232,8 @@ try:
 except Exception as e:
     print(f'❌ Weaviate restore failed: {e}', file=sys.stderr)
 "
-      fi
+      ;;
+      esac
     fi
     
     echo "=========================================="

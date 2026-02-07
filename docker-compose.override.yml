@@ -22,8 +22,6 @@ services:
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/requirements.txt:/app/requirements.txt
       - ./backend/requirements-base.txt:/app/requirements-base.txt
-      # Mount entrypoint script for development changes
-      - ./backend/docker-entrypoint.sh:/app/docker-entrypoint.sh
       # Mount backups directory for backup/restore functionality
       - ./backups:/app/backups
     # Override restart policy for development

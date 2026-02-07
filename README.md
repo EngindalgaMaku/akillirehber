@@ -6,9 +6,8 @@ AkıllıRehber, eğitim kurumları için geliştirilmiş, yapay zeka destekli ak
 
 Localhost'taki verilerinizi Coolify ortamına kolayca aktarmak için hazır araçlar:
 
-- **[⚡ Hızlı Başlangıç](./SYNC_QUICKSTART.md)** - 5 dakikada başlayın
-- **[📖 Detaylı Rehber](./COOLIFY_SYNC_GUIDE.md)** - Tüm seçenekler ve sorun giderme
-- **[📊 Özet](./SYNC_SUMMARY.md)** - Karşılaştırma ve öneriler
+- **[⚡ Hızlı Başlangıç](./docs/SYNC_QUICKSTART.md)** - 5 dakikada başlayın
+- **[📖 Detaylı Rehber](./docs/COOLIFY_SYNC_GUIDE.md)** - Tüm seçenekler ve sorun giderme
 
 ### Tek Komutla Aktarım
 

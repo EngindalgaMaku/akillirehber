@@ -26,35 +26,8 @@ def get_vector_store_for_course(
     Returns:
         VectorStoreInterface implementation (Weaviate or ChromaDB)
     """
-    # Default to Weaviate
-    vector_store_type = "weaviate"
-    
-    # Check course settings if db session provided
-    if db is not None:
-        try:
-            from app.models.db_models import CourseSettings
-            settings = db.query(CourseSettings).filter(
-                CourseSettings.course_id == course_id
-            ).first()
-            
-            if settings and hasattr(settings, 'vector_store'):
-                vector_store_type = settings.vector_store or "weaviate"
-        except Exception as e:
-            logger.warning(
-                f"Could not load vector store setting for course {course_id}: {e}. "
-                f"Defaulting to Weaviate."
-            )
-    
-    # Create appropriate vector store
-    if vector_store_type == "chromadb":
-        logger.warning(
-            f"ChromaDB requested for course {course_id} but temporarily disabled. "
-            f"Using Weaviate instead."
-        )
-        return WeaviateAdapter()
-    else:
-        logger.info(f"Using Weaviate for course {course_id}")
-        return WeaviateAdapter()
+    logger.info(f"Using Weaviate for course {course_id}")
+    return WeaviateAdapter()
 
 
 def get_default_vector_store() -> VectorStoreInterface:

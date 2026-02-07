@@ -22,9 +22,6 @@ class Settings(BaseSettings):
     # Weaviate
     weaviate_url: str = "http://localhost:8080"
 
-    # ChromaDB (EXPERIMENTAL: for benchmarking)
-    chromadb_url: str = "http://localhost:8081"
-
     # RAGAS Service
     ragas_url: str = "http://localhost:8001"
 

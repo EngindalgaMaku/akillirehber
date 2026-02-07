@@ -90,7 +90,7 @@ async def embed_document(
                     vector=embedding
                 ))
 
-        # Get vector store for this course (Weaviate or ChromaDB based on settings)
+        # Get vector store for this course
         vector_store = get_vector_store_for_course(document.course_id, db)
         vector_store_name = vector_store.__class__.__name__
         

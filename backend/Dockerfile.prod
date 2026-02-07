@@ -19,9 +19,11 @@ RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True, download_dir=
 COPY --chown=appuser:appgroup . .
 RUN mkdir -p /app/benchmark_results && chown -R appuser:appgroup /app/benchmark_results
 RUN mkdir -p /app/backups/uploads && chown -R appuser:appgroup /app/backups
-USER appuser
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 COPY --chown=appuser:appgroup docker-entrypoint.sh /app/
-RUN chmod +x /app/docker-entrypoint.sh
+RUN chown -R appuser:appgroup /app \
+    && sed -i 's/\r$//' /app/docker-entrypoint.sh \
+    && chmod +x /app/docker-entrypoint.sh
+USER appuser
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

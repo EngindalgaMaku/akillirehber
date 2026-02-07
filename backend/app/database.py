@@ -7,9 +7,15 @@ from app.config import get_settings
 
 settings = get_settings()
 
+
+def _normalize_database_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://") :]
+    return url
+
 # Create SQLAlchemy engine with increased pool size for parallel processing
 engine = create_engine(
-    settings.database_url,
+    _normalize_database_url(settings.database_url),
     pool_pre_ping=True,
     pool_size=20,  # Increased from 5 to 20 for parallel RAGAS/semantic tests
     max_overflow=30,  # Increased from 10 to 30 (total: 50 connections)

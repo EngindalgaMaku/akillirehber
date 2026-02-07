@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -19,6 +20,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    op.execute(
+        """
+        DO $$ BEGIN
+            CREATE TYPE userrole AS ENUM ('TEACHER', 'STUDENT');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+        """
+    )
+    userrole_enum = postgresql.ENUM('TEACHER', 'STUDENT', name='userrole', create_type=False)
+
     # Create users table
     op.create_table(
         'users',
@@ -26,7 +38,7 @@ def upgrade() -> None:
         sa.Column('email', sa.String(length=255), nullable=False),
         sa.Column('hashed_password', sa.String(length=255), nullable=False),
         sa.Column('full_name', sa.String(length=255), nullable=False),
-        sa.Column('role', sa.Enum('TEACHER', 'STUDENT', name='userrole'), nullable=False),
+        sa.Column('role', userrole_enum, nullable=False),
         sa.Column('is_active', sa.Boolean(), nullable=True, default=True),
         sa.Column('created_at', sa.DateTime(), nullable=True),
         sa.Column('updated_at', sa.DateTime(), nullable=True),

@@ -15,8 +15,8 @@ services:
     env_file:
       - ./.env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD:-ragpassword}@postgres:5432/${POSTGRES_DB:-ragchatbot}
-      - WEAVIATE_URL=http://weaviate:8080
+      - DATABASE_URL=${DATABASE_URL:-}
+      - WEAVIATE_URL=${WEAVIATE_URL:-}
       - RAGAS_URL=http://rag-ragas:8001
       - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
       - ALGORITHM=${ALGORITHM:-HS256}
@@ -50,11 +50,6 @@ services:
       - ./backend/alembic:/app/alembic:ro
       - ./backend/alembic.ini:/app/alembic.ini:ro
       - ./backups:/app/backups
-    depends_on:
-      postgres:
-        condition: service_healthy
-      weaviate:
-        condition: service_healthy
     networks:
       - rag-network
     restart: unless-stopped
@@ -64,60 +59,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-  # ===========================================
-  # PostgreSQL Database
-  # ===========================================
-  postgres:
-    image: postgres:16-alpine
-    container_name: rag-postgres
-    ports:
-      - "5432:5432"
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-raguser}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ragpassword}
-      - POSTGRES_DB=${POSTGRES_DB:-ragchatbot}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - rag-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragchatbot}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  # ===========================================
-  # Weaviate Vector Database
-  # ===========================================
-  weaviate:
-    image: semitechnologies/weaviate:1.35.3
-    container_name: rag-weaviate
-    ports:
-      - "8080:8080"
-      - "50051:50051"
-    environment:
-      - QUERY_DEFAULTS_LIMIT=25
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-      - DEFAULT_VECTORIZER_MODULE=none
-      - ENABLE_MODULES=
-      - CLUSTER_HOSTNAME=node1
-      - LOG_LEVEL=info
-    volumes:
-      - weaviate_data:/var/lib/weaviate
-    networks:
-      - rag-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/.well-known/ready"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
 
   # ===========================================
   # RAGAS Evaluation Service
@@ -161,8 +102,4 @@ networks:
     driver: bridge
     name: rag-educational-network
 
-volumes:
-  postgres_data:
-    name: rag-postgres-data
-  weaviate_data:
-    name: rag-weaviate-data
+volumes: {}

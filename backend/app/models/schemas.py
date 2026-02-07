@@ -465,8 +465,8 @@ class CourseSettingsUpdate(BaseModel):
     @classmethod
     def validate_vector_store(cls, v: Optional[str]) -> Optional[str]:
         """Validate vector store is one of the supported values."""
-        if v is not None and v not in ['weaviate', 'chromadb']:
-            raise ValueError(f"Invalid vector store: {v}. Must be one of: weaviate, chromadb")
+        if v is not None and v not in ['weaviate']:
+            raise ValueError(f"Invalid vector store: {v}. Must be: weaviate")
         return v
 
 
