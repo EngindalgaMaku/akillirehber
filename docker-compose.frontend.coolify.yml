@@ -19,17 +19,20 @@ services:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     # Network kullanmıyoruz - default bridge kullan
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+    # Healthcheck kaldırıldı - node:alpine'da curl/wget yok
+    # Coolify kendi healthcheck'i kullanır
     labels:
       - "coolify.managed=true"
-      # Coolify Traefik labels
+      # Coolify Traefik labels - v4 için gerekli
       - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`akillirehber.kodleon.com`)"
+      - "traefik.http.routers.frontend.entrypoints=https"
+      - "traefik.http.routers.frontend.tls=true"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.routers.frontend-http.rule=Host(`akillirehber.kodleon.com`)"
+      - "traefik.http.routers.frontend-http.entrypoints=http"
+      - "traefik.http.middlewares.frontend-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.frontend-http.middlewares=frontend-redirect"
 
 # ===========================================
 # Coolify Deployment Notes - Frontend Only
