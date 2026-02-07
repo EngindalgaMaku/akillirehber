@@ -43,6 +43,14 @@ services:
       start_period: 40s
     labels:
       - "coolify.managed=true"
+      # Traefik labels for Coolify v4
+      - "traefik.enable=true"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolalloworiginlist=https://akillirehber.kodleon.com"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowheaders=*"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowcredentials=true"
+      - "traefik.http.routers.backend.middlewares=backend-cors"
 
   # ===========================================
   # RAGAS Evaluation Service
