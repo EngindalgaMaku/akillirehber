@@ -8,8 +8,7 @@ from urllib.parse import urlparse
 import weaviate
 from weaviate.classes.config import Configure, Property, DataType
 from weaviate.classes.query import MetadataQuery, Filter
-from weaviate.connect import ConnectionParams
-from weaviate.auth import AuthApiKey
+from weaviate.classes.init import Auth
 
 from app.config import get_settings
 
@@ -78,7 +77,7 @@ class WeaviateService:
                 grpc_port = 50051
                 http_port = parsed.port or (443 if is_https else 8080)
                 
-                auth = AuthApiKey(self._api_key) if self._api_key else None
+                auth = Auth.api_key(self._api_key) if self._api_key else None
                 
                 logger.info(f"Connecting to remote Weaviate at {host} (https={is_https})")
                 
