@@ -216,15 +216,19 @@ class WeaviateService:
         collection_name = self.ensure_collection(course_id)
         collection = client.collections.get(collection_name)
         
-        # Import objects
-        with collection.batch.dynamic() as batch:
-            for obj in objects:
-                batch.add_object(
+        # Insert objects one by one (REST-compatible, no gRPC needed)
+        count = 0
+        for obj in objects:
+            try:
+                collection.data.insert(
                     properties=obj["properties"],
                     vector=obj.get("vector")
                 )
+                count += 1
+            except Exception as e:
+                logger.warning(f"Failed to import object: {e}")
         
-        return len(objects)
+        return count
 
     def close(self):
         """Close Weaviate client connection."""
@@ -269,9 +273,9 @@ class WeaviateService:
         collection = client.collections.get(collection_name)
 
         uuids = []
-        with collection.batch.dynamic() as batch:
-            for chunk in chunks:
-                uuid = batch.add_object(
+        for chunk in chunks:
+            try:
+                uuid = collection.data.insert(
                     properties={
                         "chunk_id": chunk.chunk_id,
                         "document_id": chunk.document_id,
@@ -281,6 +285,8 @@ class WeaviateService:
                     vector=chunk.vector
                 )
                 uuids.append(str(uuid))
+            except Exception as e:
+                logger.warning(f"Failed to insert chunk {chunk.chunk_id}: {e}")
 
         return uuids
 
