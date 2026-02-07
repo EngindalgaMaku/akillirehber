@@ -1,0 +1,61 @@
+# Coolify Frontend-Only Deployment
+# Bu dosyayı Coolify'da ayrı bir Docker Compose resource olarak kullanın
+# Backend ayrı bir resource olarak deploy edilmelidir
+
+services:
+  # ===========================================
+  # Frontend Service - Next.js (Ayrı Deploy)
+  # ===========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Backend API URL - build-time'da gerekli
+        # Bu değer backend'in dışarıdan erişilebilir URL'si olmalı
+        # Örnek: https://api.yourdomain.com veya https://backend-yourapp.coolify.io
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    container_name: rag-frontend
+    expose:
+      - "3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    networks:
+      - rag-frontend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "coolify.managed=true"
+
+networks:
+  rag-frontend-network:
+    driver: bridge
+
+# ===========================================
+# Coolify Deployment Notes - Frontend Only
+# ===========================================
+# 
+# 1. Coolify'da yeni bir "Docker Compose" resource oluşturun
+# 2. Bu dosyayı repository'den seçin veya yapıştırın
+# 3. Aşağıdaki environment variable'ları Coolify'da ayarlayın:
+#
+# ZORUNLU:
+#   - NEXT_PUBLIC_API_URL: Backend API URL'i 
+#     (örn: https://api.yourdomain.com veya backend Coolify domain'i)
+#
+# 4. Port mapping'leri Coolify'ın reverse proxy'sine göre ayarlayın
+# 5. Bu frontend servisi backend'den bağımsız olarak scale edilebilir
+#
+# ÖNEMLİ:
+# - Backend ayrı bir Docker Compose resource olarak deploy edilmeli
+# - Backend ve frontend aynı Coolify instance'ında olabilir ama 
+#   farklı resource'lar olarak
+# - NEXT_PUBLIC_API_URL backend'in dış URL'si olmalı (iç network değil)
+#
+# Deployment sonrası:
+# - Frontend: https://yourdomain.com (Coolify domain)

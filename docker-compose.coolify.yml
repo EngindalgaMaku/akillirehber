@@ -1,30 +1,8 @@
-# Coolify Production Deployment
+# Coolify Backend-Only Deployment
 # Bu dosyayı Coolify'da Docker Compose resource olarak kullanın
+# Frontend ayrı bir resource olarak deploy edilmelidir
 
 services:
-  # ===========================================
-  # Frontend Service - Next.js
-  # ===========================================
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.prod
-      args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
-    container_name: rag-frontend
-    expose:
-      - "3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - rag-network
-    restart: unless-stopped
-    labels:
-      - "coolify.managed=true"
-
   # ===========================================
   # Backend Service - FastAPI
   # ===========================================
