@@ -563,6 +563,15 @@ def _process_test_case(
 
             rouge1 = metrics.get("rouge1")
             no_info = service._is_no_info_answer(generated_answer)
+            
+            # Retry if BERTScore is missing (embedding API may have failed)
+            bertscore_missing = metrics.get("bertscore_f1") is None
+            if bertscore_missing and retry_count < MAX_RETRIES:
+                last_error = "BERTScore missing; retrying"
+                retry_count += 1
+                time.sleep(1)
+                continue
+            
             if (
                 rouge1 is not None
                 and rouge1 < 0.40

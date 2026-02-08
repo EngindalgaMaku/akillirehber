@@ -79,7 +79,15 @@ def cancel_batch_test(test_id: str) -> bool:
         _active_batch_tests[test_id]["cancelled"] = True
         logger.info(f"Batch test cancelled: {test_id}")
         return True
-    return False
+    # Even if not found locally, register it as cancelled
+    # (handles multi-worker scenarios where test runs on different worker)
+    _active_batch_tests[test_id] = {
+        "cancelled": True,
+        "paused": False,
+        "start_time": datetime.now(timezone.utc)
+    }
+    logger.info(f"Batch test force-cancelled (not found locally): {test_id}")
+    return True
 
 def pause_batch_test(test_id: str) -> bool:
     """Pause a running batch test."""
@@ -87,7 +95,13 @@ def pause_batch_test(test_id: str) -> bool:
         _active_batch_tests[test_id]["paused"] = True
         logger.info(f"Batch test paused: {test_id}")
         return True
-    return False
+    _active_batch_tests[test_id] = {
+        "cancelled": False,
+        "paused": True,
+        "start_time": datetime.now(timezone.utc)
+    }
+    logger.info(f"Batch test force-paused (not found locally): {test_id}")
+    return True
 
 def resume_batch_test(test_id: str) -> bool:
     """Resume a paused batch test."""
@@ -95,7 +109,13 @@ def resume_batch_test(test_id: str) -> bool:
         _active_batch_tests[test_id]["paused"] = False
         logger.info(f"Batch test resumed: {test_id}")
         return True
-    return False
+    _active_batch_tests[test_id] = {
+        "cancelled": False,
+        "paused": False,
+        "start_time": datetime.now(timezone.utc)
+    }
+    logger.info(f"Batch test force-resumed (not found locally): {test_id}")
+    return True
 
 def unregister_batch_test(test_id: str) -> None:
     """Remove batch test from active tests."""
