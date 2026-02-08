@@ -515,13 +515,13 @@ export default function SemanticSimilarityPage() {
                 );
               }
 
-              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
-              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
-              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
-              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score != null);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 != null);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 != null);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel != null);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision != null);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall != null);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 != null);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -542,16 +542,16 @@ export default function SemanticSimilarityPage() {
                 llm_model_used: data.llm_model_used || undefined
               });
             } else if (data.event === 'complete') {
-              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
-              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
-              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
-              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision !== undefined);
-              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall !== undefined);
-              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score != null);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 != null);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 != null);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel != null);
+              const bertPrecisionResults = results.filter((r): r is StreamingResult => r.bertscore_precision != null);
+              const bertRecallResults = results.filter((r): r is StreamingResult => r.bertscore_recall != null);
+              const bertF1Results = results.filter((r): r is StreamingResult => r.bertscore_f1 != null);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision != null);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall != null);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 != null);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -567,6 +567,9 @@ export default function SemanticSimilarityPage() {
                   avg_bertscore_precision: bertPrecisionResults.length > 0 ? bertPrecisionResults.reduce((sum, r) => sum + r.bertscore_precision!, 0) / bertPrecisionResults.length : undefined,
                   avg_bertscore_recall: bertRecallResults.length > 0 ? bertRecallResults.reduce((sum, r) => sum + r.bertscore_recall!, 0) / bertRecallResults.length : undefined,
                   avg_bertscore_f1: bertF1Results.length > 0 ? bertF1Results.reduce((sum, r) => sum + r.bertscore_f1!, 0) / bertF1Results.length : undefined,
+                  avg_original_bertscore_precision: origBertPrecisionResults.length > 0 ? origBertPrecisionResults.reduce((sum, r) => sum + r.original_bertscore_precision!, 0) / origBertPrecisionResults.length : undefined,
+                  avg_original_bertscore_recall: origBertRecallResults.length > 0 ? origBertRecallResults.reduce((sum, r) => sum + r.original_bertscore_recall!, 0) / origBertRecallResults.length : undefined,
+                  avg_original_bertscore_f1: origBertF1Results.length > 0 ? origBertF1Results.reduce((sum, r) => sum + r.original_bertscore_f1!, 0) / origBertF1Results.length : undefined,
                 },
                 embedding_model_used: data.embedding_model_used || '',
                 llm_model_used: data.llm_model_used || undefined
@@ -1080,13 +1083,13 @@ export default function SemanticSimilarityPage() {
                 );
               }
 
-              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
-              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
-              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
-              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score != null);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 != null);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 != null);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel != null);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision != null);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall != null);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 != null);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1107,13 +1110,13 @@ export default function SemanticSimilarityPage() {
                 llm_model_used: selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined
               });
             } else if (data.event === 'complete') {
-              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
-              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
-              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
-              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score != null);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 != null);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 != null);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel != null);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision != null);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall != null);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 != null);
 
               const finalResult: SemanticSimilarityBatchTestResponse = {
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1312,13 +1315,13 @@ export default function SemanticSimilarityPage() {
                 );
               }
 
-              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
-              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
-              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
-              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score != null);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 != null);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 != null);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel != null);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision != null);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall != null);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 != null);
 
               setBatchTestResult({
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1339,13 +1342,13 @@ export default function SemanticSimilarityPage() {
                 llm_model_used: data.llm_model_used || (selectedLlmModel ? `${selectedLlmProvider}/${selectedLlmModel}` : undefined)
               });
             } else if (data.event === 'complete') {
-              const validResults = results.filter((r): r is StreamingResult => r.similarity_score !== undefined);
-              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 !== undefined);
-              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 !== undefined);
-              const rougelResults = results.filter((r): r is StreamingResult => r.rougel !== undefined);
-              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision !== undefined);
-              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall !== undefined);
-              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 !== undefined);
+              const validResults = results.filter((r): r is StreamingResult => r.similarity_score != null);
+              const rouge1Results = results.filter((r): r is StreamingResult => r.rouge1 != null);
+              const rouge2Results = results.filter((r): r is StreamingResult => r.rouge2 != null);
+              const rougelResults = results.filter((r): r is StreamingResult => r.rougel != null);
+              const origBertPrecisionResults = results.filter((r): r is StreamingResult => r.original_bertscore_precision != null);
+              const origBertRecallResults = results.filter((r): r is StreamingResult => r.original_bertscore_recall != null);
+              const origBertF1Results = results.filter((r): r is StreamingResult => r.original_bertscore_f1 != null);
 
               const finalResult: SemanticSimilarityBatchTestResponse = {
                 results: results as SemanticSimilarityBatchTestResponse['results'],
@@ -1393,16 +1396,16 @@ export default function SemanticSimilarityPage() {
     // Combine all results from all runs
     const allResults = runs.flatMap(r => r.results);
     
-    const validResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.similarity_score !== undefined);
-    const rouge1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rouge1 !== undefined);
-    const rouge2Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rouge2 !== undefined);
-    const rougelResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rougel !== undefined);
-    const bertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_precision !== undefined);
-    const bertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_recall !== undefined);
-    const bertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_f1 !== undefined);
-    const origBertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_precision !== undefined);
-    const origBertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_recall !== undefined);
-    const origBertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_f1 !== undefined);
+    const validResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.similarity_score != null);
+    const rouge1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rouge1 != null);
+    const rouge2Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rouge2 != null);
+    const rougelResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.rougel != null);
+    const bertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_precision != null);
+    const bertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_recall != null);
+    const bertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.bertscore_f1 != null);
+    const origBertPrecisionResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_precision != null);
+    const origBertRecallResults = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_recall != null);
+    const origBertF1Results = allResults.filter((r): r is SemanticSimilarityBatchTestResponse['results'][number] => r.original_bertscore_f1 != null);
 
     return {
       avg_similarity: validResults.reduce((sum, r) => sum + r.similarity_score!, 0) / validResults.length,
@@ -1446,6 +1449,9 @@ export default function SemanticSimilarityPage() {
         bertscore_precision: quickTestResult.bertscore_precision,
         bertscore_recall: quickTestResult.bertscore_recall,
         bertscore_f1: quickTestResult.bertscore_f1,
+        original_bertscore_precision: quickTestResult.original_bertscore_precision,
+        original_bertscore_recall: quickTestResult.original_bertscore_recall,
+        original_bertscore_f1: quickTestResult.original_bertscore_f1,
         latency_ms: quickTestResult.latency_ms,
         embedding_model_used: quickTestResult.embedding_model_used,
         llm_model_used: quickTestResult.llm_model_used,

@@ -18,6 +18,7 @@ ENV NLTK_DATA=/usr/share/nltk_data
 RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True, download_dir='/usr/share/nltk_data')"
 # Pre-download BERTScore model to avoid runtime download issues
 ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
+ENV HF_HOME=/app/.cache/huggingface
 RUN mkdir -p /app/.cache/huggingface && \
     python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('bert-base-multilingual-cased'); AutoModel.from_pretrained('bert-base-multilingual-cased')" && \
     chmod -R 777 /app/.cache/huggingface

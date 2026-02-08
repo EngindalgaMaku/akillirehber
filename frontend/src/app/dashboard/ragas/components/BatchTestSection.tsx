@@ -608,13 +608,24 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
     }
 
     try {
-      const parsedData = JSON.parse(batchTestJson);
-      await api.saveTestDataset({
+      const testCases = normalizeTestCasesFromJson(batchTestJson);
+
+      // 1. Create test set via RAGAS API
+      const testSet = await api.createTestSet({
         course_id: selectedCourseId,
         name: datasetName,
         description: datasetDescription,
-        test_cases: parsedData
       });
+
+      // 2. Import questions into the test set
+      const questions = testCases.map((tc: any) => ({
+        question: tc.question,
+        ground_truth: tc.ground_truth,
+        alternative_ground_truths: tc.alternative_ground_truths || [],
+        expected_contexts: tc.expected_contexts || [],
+      }));
+
+      await api.importQuestions(testSet.id, questions);
 
       toast.success("Veri seti başarıyla kaydedildi");
       setShowSaveDatasetDialog(false);
@@ -630,7 +641,7 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
     if (!confirm("Bu veri setini silmek istediğinizden emin misiniz?")) return;
 
     try {
-      await api.deleteTestDataset(datasetId);
+      await api.deleteTestSet(datasetId);
       toast.success("Veri seti silindi");
       loadTestDatasets();
       if (selectedDataset === datasetId.toString()) {

@@ -29,6 +29,7 @@ RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True, download_dir=
 
 # Pre-download BERTScore model to avoid runtime download issues
 ENV TRANSFORMERS_CACHE=/tmp/huggingface_cache
+ENV HF_HOME=/tmp/huggingface_cache
 RUN mkdir -p /tmp/huggingface_cache && \
     python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('bert-base-multilingual-cased'); AutoModel.from_pretrained('bert-base-multilingual-cased')" && \
     chmod -R 777 /tmp/huggingface_cache

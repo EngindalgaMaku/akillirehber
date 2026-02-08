@@ -142,8 +142,13 @@ export default function TestSetEditorPage() {
     if (!testSet) return;
     setIsDatasetsLoading(true);
     try {
-      const data = await api.getTestDatasets(testSet.course_id);
-      setTestDatasets(data.datasets);
+      const testSets = await api.getTestSets(testSet.course_id);
+      const datasets = testSets.map(ts => ({
+        id: ts.id,
+        name: ts.name,
+        total_test_cases: ts.question_count,
+      }));
+      setTestDatasets(datasets);
     } catch {
       console.error("Test veri setleri yüklenirken hata oluştu");
     } finally {
@@ -172,13 +177,21 @@ export default function TestSetEditorPage() {
   const handleLoadDataset = async (datasetId: string) => {
     if (!datasetId) return;
     try {
-      const dataset = await api.getTestDataset(parseInt(datasetId));
-      setImportJson(JSON.stringify(dataset.test_cases, null, 2));
+      const testSetData = await api.getTestSet(parseInt(datasetId));
+      const testCases = testSetData.questions
+        .sort((a, b) => a.question.localeCompare(b.question, 'tr-TR'))
+        .map(q => ({
+          question: q.question,
+          ground_truth: q.ground_truth,
+          alternative_ground_truths: q.alternative_ground_truths || [],
+          expected_contexts: q.expected_contexts || [],
+        }));
+      setImportJson(JSON.stringify(testCases, null, 2));
       setSelectedDataset(datasetId);
-      toast.success(`"${dataset.name}" veri seti yüklendi`);
+      toast.success(`"${testSetData.name}" test seti yüklendi (${testCases.length} soru)`);
     } catch (error) {
       console.error("Load dataset error:", error);
-      toast.error(error instanceof Error ? error.message : "Veri seti yüklenemedi");
+      toast.error(error instanceof Error ? error.message : "Test seti yüklenemedi");
     }
   };
 
