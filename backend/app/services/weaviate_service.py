@@ -64,8 +64,8 @@ class WeaviateService:
         Automatically detects local vs remote URLs and uses the
         appropriate connection method. Supports HTTPS with API key auth.
         
-        For remote connections, tries gRPC first. If gRPC port is
-        unreachable, falls back to REST-only mode (skip_init_checks).
+        IMPORTANT: gRPC port (50051) must be open on the remote server.
+        The v4 Python client requires gRPC for all query operations.
         """
         if self._client is None:
             parsed = urlparse(self._url)
@@ -73,49 +73,27 @@ class WeaviateService:
             host = parsed.hostname or "localhost"
             
             if is_https or (host not in ("localhost", "127.0.0.1")):
-                # Remote connection
+                # Remote connection — gRPC required for queries
                 grpc_port = 50051
                 http_port = parsed.port or (443 if is_https else 8080)
                 
                 auth = Auth.api_key(self._api_key) if self._api_key else None
                 
                 logger.info(f"Connecting to remote Weaviate at {host} (https={is_https})")
-                
-                # First try with gRPC
-                try:
-                    client = weaviate.connect_to_custom(
-                        http_host=host,
-                        http_port=http_port,
-                        http_secure=is_https,
-                        grpc_host=host,
-                        grpc_port=grpc_port,
-                        grpc_secure=is_https,
-                        auth_credentials=auth,
-                        additional_config=weaviate.config.AdditionalConfig(
-                            timeout=(10, 120),
-                        ),
-                    )
-                    # Quick check — if gRPC is broken this will fail
-                    client.collections.list_all()
-                    self._client = client
-                    logger.info("Connected to Weaviate with gRPC")
-                except Exception as e:
-                    logger.warning(f"gRPC connection failed ({e}), falling back to REST-only")
-                    # Fallback: skip gRPC init checks, use REST only
-                    self._client = weaviate.connect_to_custom(
-                        http_host=host,
-                        http_port=http_port,
-                        http_secure=is_https,
-                        grpc_host=host,
-                        grpc_port=grpc_port,
-                        grpc_secure=is_https,
-                        auth_credentials=auth,
-                        additional_config=weaviate.config.AdditionalConfig(
-                            timeout=(10, 120),
-                        ),
-                        skip_init_checks=True,
-                    )
-                    logger.info("Connected to Weaviate in REST-only mode")
+                self._client = weaviate.connect_to_custom(
+                    http_host=host,
+                    http_port=http_port,
+                    http_secure=is_https,
+                    grpc_host=host,
+                    grpc_port=grpc_port,
+                    grpc_secure=False,  # gRPC port is plain TCP, TLS is handled by reverse proxy for HTTP only
+                    auth_credentials=auth,
+                    additional_config=weaviate.config.AdditionalConfig(
+                        timeout=(30, 120),
+                    ),
+                    skip_init_checks=True,
+                )
+                logger.info("Connected to remote Weaviate (skip_init_checks=True)")
             else:
                 # Local connection
                 port = parsed.port or 8080
