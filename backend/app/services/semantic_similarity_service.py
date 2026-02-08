@@ -463,6 +463,8 @@ class SemanticSimilarityService:
                 result['bertscore_precision'] = bertscore['precision']
                 result['bertscore_recall'] = bertscore['recall']
                 result['bertscore_f1'] = bertscore['f1']
+            else:
+                logger.warning("compute_bertscore returned None for question: %s...", generated_answer[:50])
 
             # Compute original BERTScore (bert-score library)
             try:
@@ -483,7 +485,7 @@ class SemanticSimilarityService:
                 result['original_bertscore_recall'] = original_bertscore['recall']
                 result['original_bertscore_f1'] = original_bertscore['f1']
             except Exception as e:
-                logger.error(f"Failed to compute original BERTScore, skipping: {e}", exc_info=True)
+                logger.error("Failed to compute original BERTScore, skipping: %s", e, exc_info=True)
                 # Leave as None - already initialized in result dict
 
         return result

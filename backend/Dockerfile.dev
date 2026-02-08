@@ -27,6 +27,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV NLTK_DATA=/usr/share/nltk_data
 RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True, download_dir='/usr/share/nltk_data')"
 
+# Pre-download BERTScore model to avoid runtime download issues
+ENV TRANSFORMERS_CACHE=/tmp/huggingface_cache
+RUN mkdir -p /tmp/huggingface_cache && \
+    python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('bert-base-multilingual-cased'); AutoModel.from_pretrained('bert-base-multilingual-cased')" && \
+    chmod -R 777 /tmp/huggingface_cache
+
 # Set up Numba cache directory for UMAP
 ENV NUMBA_CACHE_DIR=/tmp/numba_cache
 RUN mkdir -p /tmp/numba_cache && \

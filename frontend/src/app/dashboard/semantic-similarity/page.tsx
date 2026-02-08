@@ -401,18 +401,18 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
     setIsDatasetsLoading(true);
     try {
-      const response = await api.getTestDatasets(selectedCourseId);
-      const datasets = response.datasets.map(ds => ({
-        id: ds.id,
-        name: ds.name,
-        description: ds.description,
-        total_test_cases: ds.total_test_cases,
-        created_at: ds.created_at,
-        updated_at: ds.updated_at,
+      const testSets = await api.getTestSets(selectedCourseId);
+      const datasets = testSets.map(ts => ({
+        id: ts.id,
+        name: ts.name,
+        description: ts.description,
+        course_id: ts.course_id,
+        question_count: ts.question_count,
+        created_at: ts.created_at,
       }));
       setTestDatasets(datasets);
     } catch (error) {
-      console.log("Failed to load test datasets:", error);
+      console.log("Failed to load test sets:", error);
       toast.error("Test setleri yüklenirken hata oluştu");
     } finally {
       setIsDatasetsLoading(false);
@@ -903,16 +903,25 @@ export default function SemanticSimilarityPage() {
           question: q.question || q,
           ground_truth: q.ground_truth || q.answer || "",
           alternative_ground_truths: q.alternative_ground_truths || [],
-          generated_answer: q.generated_answer || ""
         }));
       }
 
-      await api.saveTestDataset({
+      // 1. Create test set via RAGAS API
+      const testSet = await api.createTestSet({
         course_id: selectedCourseId,
         name: datasetName,
         description: datasetDescription,
-        test_cases: testCases
       });
+
+      // 2. Import questions into the test set
+      const questions = testCases.map((tc: any) => ({
+        question: tc.question,
+        ground_truth: tc.ground_truth,
+        alternative_ground_truths: tc.alternative_ground_truths || [],
+        expected_contexts: tc.expected_contexts || [],
+      }));
+
+      await api.importQuestions(testSet.id, questions);
 
       toast.success("Veri seti başarıyla kaydedildi");
       setShowSaveDatasetDialog(false);
@@ -929,23 +938,23 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
 
     try {
-      const dataset = await api.getTestDataset(parseInt(datasetId));
+      const testSet = await api.getTestSet(parseInt(datasetId));
       
-      // Sort test cases alphabetically by question
-      const testCases = dataset.test_cases
+      // Convert test set questions to test cases format and sort alphabetically
+      const testCases = testSet.questions
         .sort((a, b) => a.question.localeCompare(b.question, 'tr-TR'))
         .map(q => ({
           question: q.question,
           ground_truth: q.ground_truth,
           alternative_ground_truths: q.alternative_ground_truths || [],
-          generated_answer: q.generated_answer || "",
+          expected_contexts: q.expected_contexts || [],
         }));
       
       setBatchTestJson(JSON.stringify(testCases, null, 2));
       setSelectedDataset(datasetId);
-      toast.success(`"${dataset.name}" test seti yüklendi (${testCases.length} soru)`);
+      toast.success(`"${testSet.name}" test seti yüklendi (${testCases.length} soru)`);
     } catch (error) {
-      console.error("Load test dataset error:", error);
+      console.error("Load test set error:", error);
       toast.error(error instanceof Error ? error.message : "Test seti yüklenemedi");
     }
   };
