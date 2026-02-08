@@ -2605,6 +2605,30 @@ async def batch_test_stream(
             
             def process_single_test(idx, test_case):
                 """Process a single test case with retry for missing metrics and low scores - runs in thread pool"""
+                # Check cancellation before starting
+                if is_batch_test_cancelled(test_id):
+                    return {
+                        "success": False,
+                        "idx": idx,
+                        "question": test_case.get("question", ""),
+                        "ground_truth": test_case.get("ground_truth", ""),
+                        "error": "cancelled",
+                        "cancelled": True,
+                    }
+                
+                # Wait while paused
+                while is_batch_test_paused(test_id):
+                    time.sleep(0.5)
+                    if is_batch_test_cancelled(test_id):
+                        return {
+                            "success": False,
+                            "idx": idx,
+                            "question": test_case.get("question", ""),
+                            "ground_truth": test_case.get("ground_truth", ""),
+                            "error": "cancelled",
+                            "cancelled": True,
+                        }
+                
                 MAX_RETRIES = 2  # Reduced from 3 to 2 for speed
                 
                 # Metric-specific thresholds
@@ -2616,6 +2640,30 @@ async def batch_test_stream(
                 previous_answer = None  # Track previous answer to avoid infinite loops
                 
                 while retry_count <= MAX_RETRIES:
+                    # Check cancellation at each retry
+                    if is_batch_test_cancelled(test_id):
+                        return {
+                            "success": False,
+                            "idx": idx,
+                            "question": test_case.get("question", ""),
+                            "ground_truth": test_case.get("ground_truth", ""),
+                            "error": "cancelled",
+                            "cancelled": True,
+                        }
+                    
+                    # Wait while paused
+                    while is_batch_test_paused(test_id):
+                        time.sleep(0.5)
+                        if is_batch_test_cancelled(test_id):
+                            return {
+                                "success": False,
+                                "idx": idx,
+                                "question": test_case.get("question", ""),
+                                "ground_truth": test_case.get("ground_truth", ""),
+                                "error": "cancelled",
+                                "cancelled": True,
+                            }
+                    
                     try:
                         start_time = time.time()
                         
@@ -2896,8 +2944,10 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                 
                 # Process results as they complete
                 for future in concurrent.futures.as_completed(future_to_idx):
-                    # Check for cancellation
-                    if is_batch_test_cancelled(test_id):
+                    result_data = future.result()
+                    
+                    # Check if task was cancelled internally
+                    if result_data.get("cancelled"):
                         logger.info(f"Batch test {test_id} cancelled, stopping...")
                         # Cancel remaining futures
                         for f in future_to_idx.keys():
@@ -2913,23 +2963,12 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                         await asyncio.sleep(0)
                         break
                     
-                    # Check for pause - wait until resumed
-                    while is_batch_test_paused(test_id):
-                        pause_event = {
-                            "event": "paused",
-                            "test_id": test_id,
-                            "completed": completed_count,
-                            "total": total_to_run
-                        }
-                        yield f"data: {json.dumps(pause_event, ensure_ascii=True)}\n\n"
-                        await asyncio.sleep(1)
-                        
-                        # Check if cancelled while paused
-                        if is_batch_test_cancelled(test_id):
-                            break
-                    
-                    # If cancelled while paused, break out
+                    # Check for cancellation at loop level too
                     if is_batch_test_cancelled(test_id):
+                        logger.info(f"Batch test {test_id} cancelled at loop level, stopping...")
+                        for f in future_to_idx.keys():
+                            f.cancel()
+                        
                         cancel_event = {
                             "event": "cancelled",
                             "test_id": test_id,
@@ -2940,7 +2979,6 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                         await asyncio.sleep(0)
                         break
                     
-                    result_data = future.result()
                     idx = result_data["idx"]
                     completed_count += 1
                     
