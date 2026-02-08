@@ -401,20 +401,18 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
     setIsDatasetsLoading(true);
     try {
-      // Use RAGAS test sets instead of old test_datasets
-      const testSets = await api.getTestSets(selectedCourseId);
-      // Convert test sets to dataset format for compatibility
-      const datasets = testSets.map(ts => ({
-        id: ts.id,
-        name: ts.name,
-        description: ts.description,
-        course_id: ts.course_id,
-        question_count: ts.question_count,
-        created_at: ts.created_at,
+      const response = await api.getTestDatasets(selectedCourseId);
+      const datasets = response.datasets.map(ds => ({
+        id: ds.id,
+        name: ds.name,
+        description: ds.description,
+        total_test_cases: ds.total_test_cases,
+        created_at: ds.created_at,
+        updated_at: ds.updated_at,
       }));
       setTestDatasets(datasets);
     } catch (error) {
-      console.log("Failed to load test sets:", error);
+      console.log("Failed to load test datasets:", error);
       toast.error("Test setleri yüklenirken hata oluştu");
     } finally {
       setIsDatasetsLoading(false);
@@ -931,24 +929,23 @@ export default function SemanticSimilarityPage() {
     if (!selectedCourseId) return;
 
     try {
-      // Use RAGAS test set instead of old test_dataset
-      const testSet = await api.getTestSet(parseInt(datasetId));
+      const dataset = await api.getTestDataset(parseInt(datasetId));
       
-      // Convert test set questions to test cases format and sort alphabetically
-      const testCases = testSet.questions
+      // Sort test cases alphabetically by question
+      const testCases = dataset.test_cases
         .sort((a, b) => a.question.localeCompare(b.question, 'tr-TR'))
         .map(q => ({
           question: q.question,
           ground_truth: q.ground_truth,
-          alternative_ground_truths: q.alternative_ground_truths,
-          expected_contexts: q.expected_contexts,
+          alternative_ground_truths: q.alternative_ground_truths || [],
+          generated_answer: q.generated_answer || "",
         }));
       
       setBatchTestJson(JSON.stringify(testCases, null, 2));
       setSelectedDataset(datasetId);
-      toast.success(`"${testSet.name}" test seti yüklendi (${testCases.length} soru)`);
+      toast.success(`"${dataset.name}" test seti yüklendi (${testCases.length} soru)`);
     } catch (error) {
-      console.error("Load test set error:", error);
+      console.error("Load test dataset error:", error);
       toast.error(error instanceof Error ? error.message : "Test seti yüklenemedi");
     }
   };

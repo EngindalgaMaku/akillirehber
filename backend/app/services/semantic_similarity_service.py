@@ -9,6 +9,7 @@ from typing import List, Tuple, Dict, Any, Optional
 from functools import lru_cache
 import os
 import re
+import threading
 import numpy as np
 from sqlalchemy.orm import Session
 import logging
@@ -24,6 +25,38 @@ logger = logging.getLogger(__name__)
 
 # Initialize embedding cache
 _embedding_cache = EmbeddingCache(ttl=3600, max_entries=10000)
+
+# Thread lock for BERTScore computation (model loading is not thread-safe)
+_bertscore_lock = threading.Lock()
+
+# Module-level cache for original BERTScore (shared across threads)
+@lru_cache(maxsize=256)
+def _cached_bertscore(
+    cands: Tuple[str, ...],
+    refs: Tuple[str, ...],
+    model: str,
+    language: str,
+    use_rescale: bool,
+) -> Tuple[float, float, float]:
+    from bert_score import score as bert_score
+    logger.info(f"Computing BERTScore with lang={language}, model={model}")
+    P, R, F1 = bert_score(
+        list(cands),
+        list(refs),
+        lang=language,
+        model_type=model,
+        verbose=False,
+        rescale_with_baseline=use_rescale,
+    )
+    logger.info(
+        f"BERTScore computed: P={P.mean().item():.4f}, "
+        f"R={R.mean().item():.4f}, F1={F1.mean().item():.4f}"
+    )
+    return (
+        float(P.mean().item()),
+        float(R.mean().item()),
+        float(F1.mean().item()),
+    )
 
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -252,7 +285,6 @@ class SemanticSimilarityService:
         try:
             logger.info("Starting original BERTScore computation...")
             from transformers.utils import logging as hf_logging
-            from bert_score import score as bert_score
             import bert_score as bert_score_pkg
 
             hf_logging.set_verbosity_error()
@@ -275,35 +307,15 @@ class SemanticSimilarityService:
             use_rescale = os.path.exists(baseline_path)
             logger.info(f"Baseline path: {baseline_path}, exists: {use_rescale}")
 
-            @lru_cache(maxsize=8)
-            def _cached_score(
-                cands: Tuple[str, ...],
-                refs: Tuple[str, ...],
-                model: str,
-                language: str,
-            ) -> Tuple[float, float, float]:
-                logger.info(f"Computing BERTScore with lang={language}, model={model}")
-                P, R, F1 = bert_score(
-                    list(cands),
-                    list(refs),
-                    lang=language,
-                    model_type=model,
-                    verbose=False,
-                    rescale_with_baseline=use_rescale,
+            # Use module-level lock to prevent concurrent model loading
+            with _bertscore_lock:
+                p, r, f1 = _cached_bertscore(
+                    (generated_answer,),
+                    (ground_truth,),
+                    model_type,
+                    lang,
+                    use_rescale,
                 )
-                logger.info(f"BERTScore computed: P={P.mean().item():.4f}, R={R.mean().item():.4f}, F1={F1.mean().item():.4f}")
-                return (
-                    float(P.mean().item()),
-                    float(R.mean().item()),
-                    float(F1.mean().item()),
-                )
-
-            p, r, f1 = _cached_score(
-                (generated_answer,),
-                (ground_truth,),
-                model_type,
-                lang,
-            )
 
             logger.info(f"Original BERTScore result: P={p:.4f}, R={r:.4f}, F1={f1:.4f}")
             return {
