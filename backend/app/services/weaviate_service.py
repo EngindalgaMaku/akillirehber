@@ -63,10 +63,23 @@ class WeaviateService:
         
         Automatically detects local vs remote URLs and uses the
         appropriate connection method. Supports HTTPS with API key auth.
+        Includes automatic reconnection on stale connections.
         
         IMPORTANT: gRPC port (50051) must be open on the remote server.
         The v4 Python client requires gRPC for all query operations.
         """
+        if self._client is not None:
+            # Check if existing connection is still alive
+            try:
+                self._client.is_ready()
+            except Exception:
+                logger.warning("Weaviate connection is stale, reconnecting...")
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+                self._client = None
+
         if self._client is None:
             parsed = urlparse(self._url)
             is_https = parsed.scheme == "https"

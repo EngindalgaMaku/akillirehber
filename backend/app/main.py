@@ -128,5 +128,34 @@ async def system_diagnostics():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "environment": settings.environment}
+    """Health check endpoint - verifies critical service connections."""
+    health = {"status": "healthy", "environment": settings.environment}
+    
+    # Check database
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+    except Exception as e:
+        health["status"] = "unhealthy"
+        health["database"] = str(e)
+    
+    # Check Weaviate
+    try:
+        from app.services.weaviate_service import get_weaviate_service
+        ws = get_weaviate_service()
+        client = ws._get_client()
+        if not client.is_ready():
+            health["status"] = "unhealthy"
+            health["weaviate"] = "not ready"
+    except Exception as e:
+        health["status"] = "unhealthy"
+        health["weaviate"] = str(e)
+    
+    if health["status"] == "unhealthy":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=health)
+    
+    return health
