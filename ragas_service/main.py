@@ -618,109 +618,6 @@ def _parse_ragas_result(result, input_data: EvaluationInput) -> EvaluationOutput
     )
 
 
-def evaluate_simple(input_data: EvaluationInput) -> EvaluationOutput:
-    """Simple heuristic-based evaluation as fallback."""
-    try:
-        question = input_data.question.lower()
-        answer = input_data.generated_answer.lower()
-        ground_truth = input_data.ground_truth.lower()
-        contexts = " ".join(input_data.retrieved_contexts).lower()
-
-        # Tokenize
-        answer_words = set(answer.split())
-        context_words = set(contexts.split())
-        question_words = set(question.split())
-        ground_truth_words = set(ground_truth.split())
-
-        # Remove common stop words
-        stop_words = _get_stop_words()
-
-        answer_words -= stop_words
-        context_words -= stop_words
-        question_words -= stop_words
-        ground_truth_words -= stop_words
-
-        # Calculate metrics
-        faithfulness = _calc_faithfulness(answer_words, context_words)
-        relevancy = _calc_relevancy(answer_words, question_words)
-        precision = _calc_precision(context_words, ground_truth_words)
-        recall = _calc_recall(context_words, ground_truth_words)
-        correctness = _calc_correctness(answer_words, ground_truth_words)
-
-        return EvaluationOutput(
-            faithfulness=min(faithfulness, 1.0),
-            answer_relevancy=min(relevancy, 1.0),
-            context_precision=min(precision, 1.0),
-            context_recall=min(recall, 1.0),
-            answer_correctness=min(correctness, 1.0),
-            reranker_used=bool(input_data.reranker_provider),
-            reranker_provider=input_data.reranker_provider,
-            reranker_model=input_data.reranker_model,
-        )
-
-    except Exception as e:
-        logger.error("Simple evaluation error: %s", e)
-        return EvaluationOutput(error=str(e))
-
-
-def _get_stop_words():
-    """Get combined English and Turkish stop words."""
-    return {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "do", "does", "did", "will",
-        "would", "could", "should", "may", "might", "must", "shall",
-        "can", "need", "dare", "ought", "used", "to", "of", "in",
-        "for", "on", "with", "at", "by", "from", "as", "into",
-        "through", "during", "before", "after", "above", "below",
-        "between", "under", "again", "further", "then", "once",
-        "here", "there", "when", "where", "why", "how", "all",
-        "each", "few", "more", "most", "other", "some", "such",
-        "no", "nor", "not", "only", "own", "same", "so", "than",
-        "too", "very", "just", "and", "but", "if", "or", "because",
-        "until", "while", "this", "that", "these", "those", "what",
-        "which", "who",
-        # Turkish stop words
-        "bir", "ve", "bu", "da", "de", "ile", "icin", "gibi", "kadar",
-        "daha", "en", "cok", "var", "yok", "olan", "olarak", "ise",
-        "ancak", "ama", "fakat", "veya", "ya", "hem", "ne", "ki",
-    }
-
-
-def _calc_faithfulness(answer_words, context_words):
-    """Calculate faithfulness score."""
-    if answer_words and context_words:
-        return len(answer_words & context_words) / len(answer_words)
-    return 0.0
-
-
-def _calc_relevancy(answer_words, question_words):
-    """Calculate answer relevancy score."""
-    if question_words and answer_words:
-        relevancy = len(answer_words & question_words) / max(len(question_words), 1)
-        return min(relevancy * 1.5, 1.0) if len(answer_words) > 5 else relevancy
-    return 0.0
-
-
-def _calc_precision(context_words, ground_truth_words):
-    """Calculate context precision score."""
-    if context_words and ground_truth_words:
-        return len(context_words & ground_truth_words) / max(len(context_words), 1)
-    return 0.0
-
-
-def _calc_recall(context_words, ground_truth_words):
-    """Calculate context recall score."""
-    if ground_truth_words and context_words:
-        return len(context_words & ground_truth_words) / max(len(ground_truth_words), 1)
-    return 0.0
-
-
-def _calc_correctness(answer_words, ground_truth_words):
-    """Calculate answer correctness score."""
-    if ground_truth_words and answer_words:
-        return len(answer_words & ground_truth_words) / max(len(ground_truth_words), 1)
-    return 0.0
-
 
 # ==================== Endpoints ====================
 
@@ -742,9 +639,11 @@ async def health_check():
 @app.post("/evaluate", response_model=EvaluationOutput)
 async def evaluate_question(input_data: EvaluationInput):
     """Evaluate a single question using RAGAS metrics."""
+    import time as _time
+
     llm_config = get_llm_config()
 
-    # Try RAGAS first if available and API key exists
+    # Try RAGAS with retry on failure (rate limits, transient errors)
     if RAGAS_AVAILABLE and (llm_config or input_data.evaluation_model):
         if input_data.evaluation_model:
             logger.info(
@@ -759,14 +658,33 @@ async def evaluate_question(input_data: EvaluationInput):
                 llm_config['model'],
                 free_info
             )
-        result = evaluate_with_ragas(input_data)
-        if not result.error:
-            return result
-        logger.warning("RAGAS failed, falling back to simple: %s", result.error)
 
-    # Fallback to simple evaluation
-    logger.info("Using simple heuristic evaluation")
-    return evaluate_simple(input_data)
+        max_ragas_retries = 3
+        for attempt in range(max_ragas_retries):
+            result = evaluate_with_ragas(input_data)
+            if not result.error:
+                return result
+            logger.warning(
+                "RAGAS attempt %d/%d failed: %s",
+                attempt + 1, max_ragas_retries, result.error
+            )
+            if attempt < max_ragas_retries - 1:
+                _time.sleep(2 * (attempt + 1))  # Backoff: 2s, 4s
+
+        logger.error(
+            "RAGAS failed after %d attempts. Returning null metrics (no fallback).",
+            max_ragas_retries
+        )
+        return EvaluationOutput(
+            error=f"RAGAS evaluation failed after {max_ragas_retries} attempts",
+            reranker_used=bool(input_data.reranker_provider),
+            reranker_provider=input_data.reranker_provider,
+            reranker_model=input_data.reranker_model,
+        )
+
+    # No RAGAS available and no LLM configured
+    logger.error("No RAGAS or LLM available for evaluation")
+    return EvaluationOutput(error="No evaluation method available")
 
 
 @app.post("/evaluate-batch", response_model=BatchEvaluationOutput)

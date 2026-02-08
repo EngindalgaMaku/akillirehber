@@ -2781,7 +2781,7 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             # This provides speedup without the instability of 10 workers
             import concurrent.futures
             
-            PARALLEL_WORKERS = int(os.getenv("BATCH_PARALLEL_WORKERS", 5))  # 5 parallel workers for faster batch processing
+            PARALLEL_WORKERS = int(os.getenv("BATCH_PARALLEL_WORKERS", 3))  # Conservative parallelism to avoid LLM rate limits
             logger.info(f"[BATCH TEST] Using {PARALLEL_WORKERS} parallel workers")
             
             indices_to_run: List[int]
