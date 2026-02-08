@@ -1534,6 +1534,42 @@ class ApiClient {
     });
   }
 
+  async saveSemanticSimilarityResultsBatch(data: {
+    course_id: number;
+    group_name?: string;
+    results: Array<{
+      question: string;
+      ground_truth: string;
+      generated_answer: string;
+      similarity_score: number;
+      best_match_ground_truth: string;
+      rouge1?: number | null;
+      rouge2?: number | null;
+      rougel?: number | null;
+      bertscore_precision?: number | null;
+      bertscore_recall?: number | null;
+      bertscore_f1?: number | null;
+      original_bertscore_precision?: number | null;
+      original_bertscore_recall?: number | null;
+      original_bertscore_f1?: number | null;
+      latency_ms?: number;
+      embedding_model_used?: string;
+      llm_model_used?: string;
+      retrieved_contexts?: string[];
+      system_prompt_used?: string;
+      search_top_k?: number;
+      search_alpha?: number;
+      reranker_used?: boolean;
+      reranker_provider?: string;
+      reranker_model?: string;
+    }>;
+  }): Promise<{ saved_count: number; failed_count: number; group_name?: string }> {
+    return this.request("/api/semantic-similarity/results/batch", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
   async getSemanticSimilarityResults(
     courseId: number,
     groupName?: string,

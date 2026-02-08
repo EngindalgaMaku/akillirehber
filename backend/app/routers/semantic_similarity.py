@@ -28,6 +28,8 @@ from app.models.schemas import (
     SemanticSimilarityResultCreate,
     SemanticSimilarityResultResponse,
     SemanticSimilarityResultListResponse,
+    SemanticSimilarityBatchResultCreate,
+    SemanticSimilarityBatchSaveResponse,
     AggregateStatistics,
     BatchTestSessionResponse,
     BatchTestSessionListResponse,
@@ -817,6 +819,96 @@ async def save_result(
         created_by=result.created_by,
         created_at=result.created_at,
     )
+
+
+@router.post(
+    "/results/batch",
+    response_model=SemanticSimilarityBatchSaveResponse,
+    status_code=status.HTTP_201_CREATED
+)
+async def save_results_batch(
+    data: SemanticSimilarityBatchResultCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Save multiple semantic similarity test results in a single transaction.
+    
+    This is much more efficient than saving results one by one,
+    especially for batch tests with 100+ results.
+    """
+    verify_course_access(db, data.course_id, current_user)
+
+    saved_count = 0
+    failed_count = 0
+
+    try:
+        db_results = []
+        for item in data.results:
+            try:
+                all_scores_dicts = None
+                if item.all_scores:
+                    all_scores_dicts = [
+                        score.model_dump() if hasattr(score, 'model_dump') else score
+                        for score in item.all_scores
+                    ]
+
+                db_result = SemanticSimilarityResult(
+                    course_id=data.course_id,
+                    group_name=data.group_name,
+                    question=item.question,
+                    ground_truth=item.ground_truth,
+                    alternative_ground_truths=item.alternative_ground_truths,
+                    generated_answer=item.generated_answer,
+                    bloom_level=item.bloom_level,
+                    similarity_score=item.similarity_score,
+                    best_match_ground_truth=item.best_match_ground_truth,
+                    all_scores=all_scores_dicts,
+                    rouge1=item.rouge1,
+                    rouge2=item.rouge2,
+                    rougel=item.rougel,
+                    bertscore_precision=item.bertscore_precision,
+                    bertscore_recall=item.bertscore_recall,
+                    bertscore_f1=item.bertscore_f1,
+                    original_bertscore_precision=item.original_bertscore_precision,
+                    original_bertscore_recall=item.original_bertscore_recall,
+                    original_bertscore_f1=item.original_bertscore_f1,
+                    hit_at_1=item.hit_at_1,
+                    mrr=item.mrr,
+                    retrieved_contexts=item.retrieved_contexts,
+                    system_prompt_used=item.system_prompt_used,
+                    embedding_model_used=item.embedding_model_used or "N/A",
+                    llm_model_used=item.llm_model_used,
+                    latency_ms=item.latency_ms,
+                    search_top_k=item.search_top_k,
+                    search_alpha=item.search_alpha,
+                    reranker_used=item.reranker_used,
+                    reranker_provider=item.reranker_provider,
+                    reranker_model=item.reranker_model,
+                    created_by=current_user.id,
+                )
+                db_results.append(db_result)
+                saved_count += 1
+            except Exception as e:
+                logger.error("Failed to create result object: %s", str(e))
+                failed_count += 1
+
+        if db_results:
+            db.add_all(db_results)
+            db.commit()
+
+        return SemanticSimilarityBatchSaveResponse(
+            saved_count=saved_count,
+            failed_count=failed_count,
+            group_name=data.group_name,
+        )
+
+    except Exception as e:
+        db.rollback()
+        logger.error("Batch save error: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch save failed: {str(e)}"
+        ) from e
 
 
 @router.get(

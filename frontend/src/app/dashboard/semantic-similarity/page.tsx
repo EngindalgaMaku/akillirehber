@@ -731,10 +731,11 @@ export default function SemanticSimilarityPage() {
   };
 
   const copyTableToExcel = () => {
-    const headers = ["#", "Soru", "ROUGE-1 (%)", "ROUGE-2 (%)", "ROUGE-L (%)", "BERTScore P (%)", "BERTScore R (%)", "BERTScore F1 (%)", "Gecikme (ms)"];
+    const headers = ["#", "Soru", "Cosine Sim. (%)", "ROUGE-1 (%)", "ROUGE-2 (%)", "ROUGE-L (%)", "BERTScore P (%)", "BERTScore R (%)", "BERTScore F1 (%)", "Gecikme (ms)"];
     const rows = statisticsModalResults.map((r, idx) => [
       idx + 1,
         `"${r.question.replace(/"/g, '""')}"`,
+        r.similarity_score != null ? (r.similarity_score * 100).toFixed(2) : "-",
         r.rouge1 != null ? (r.rouge1 * 100).toFixed(2) : "-",
         r.rouge2 != null ? (r.rouge2 * 100).toFixed(2) : "-",
         r.rougel != null ? (r.rougel * 100).toFixed(2) : "-",
@@ -1155,64 +1156,53 @@ export default function SemanticSimilarityPage() {
               toast.success(`Test tamamlandı: ${data.completed}/${data.total}`);
               setCurrentTestId(null);
               
-              // Auto-save results with timestamp-based group name
+              // Auto-save results with batch endpoint (single request)
               try {
                 const autoGroupName = `batch_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}`;
                 const settings = await api.getCourseSettings(selectedCourseId!);
+                const isDirectLlm = isDirectLlmEnabled || settings.enable_direct_llm;
                 
-                let savedCount = 0;
-                for (const result of results) {
-                  try {
-                    // Debug: Log BERTScore values before saving
-                    console.log('Saving result with BERTScore:', {
-                      question: result.question?.substring(0, 50),
-                      bertscore_precision: result.bertscore_precision,
-                      bertscore_recall: result.bertscore_recall,
-                      bertscore_f1: result.bertscore_f1,
-                      original_bertscore_precision: result.original_bertscore_precision,
-                      original_bertscore_recall: result.original_bertscore_recall,
-                      original_bertscore_f1: result.original_bertscore_f1,
-                    });
-                    
-                    await api.saveSemanticSimilarityResult({
-                      course_id: selectedCourseId!,
-                      group_name: autoGroupName,
+                // Filter only successful results (with valid similarity_score)
+                const validResults = results.filter(r => r.similarity_score != null && r.similarity_score !== undefined);
+                
+                if (validResults.length > 0) {
+                  const batchResponse = await api.saveSemanticSimilarityResultsBatch({
+                    course_id: selectedCourseId!,
+                    group_name: autoGroupName,
+                    results: validResults.map(result => ({
                       question: result.question,
                       ground_truth: result.ground_truth,
-                      alternative_ground_truths: undefined,
                       generated_answer: result.generated_answer,
-                      bloom_level: undefined,
                       similarity_score: result.similarity_score,
-                      best_match_ground_truth: result.best_match_ground_truth,
-                      all_scores: undefined,
-                      rouge1: result.rouge1,
-                      rouge2: result.rouge2,
-                      rougel: result.rougel,
-                      bertscore_precision: result.bertscore_precision,
-                      bertscore_recall: result.bertscore_recall,
-                      bertscore_f1: result.bertscore_f1,
-                      original_bertscore_precision: result.original_bertscore_precision,
-                      original_bertscore_recall: result.original_bertscore_recall,
-                      original_bertscore_f1: result.original_bertscore_f1,
+                      best_match_ground_truth: result.best_match_ground_truth || result.ground_truth,
+                      rouge1: result.rouge1 ?? undefined,
+                      rouge2: result.rouge2 ?? undefined,
+                      rougel: result.rougel ?? undefined,
+                      bertscore_precision: result.bertscore_precision ?? undefined,
+                      bertscore_recall: result.bertscore_recall ?? undefined,
+                      bertscore_f1: result.bertscore_f1 ?? undefined,
+                      original_bertscore_precision: result.original_bertscore_precision ?? undefined,
+                      original_bertscore_recall: result.original_bertscore_recall ?? undefined,
+                      original_bertscore_f1: result.original_bertscore_f1 ?? undefined,
                       latency_ms: result.latency_ms || 0,
-                      embedding_model_used: finalResult.embedding_model_used,
+                      embedding_model_used: isDirectLlm ? "N/A (Direct LLM)" : finalResult.embedding_model_used,
                       llm_model_used: finalResult.llm_model_used,
                       retrieved_contexts: result.retrieved_contexts,
-                      system_prompt_used: result.system_prompt_used,
-                      search_top_k: settings.search_top_k,
-                      search_alpha: settings.search_alpha,
-                      reranker_used: settings.enable_reranker,
-                      reranker_provider: settings.reranker_provider,
-                      reranker_model: settings.reranker_model
-                    });
-                    savedCount++;
-                  } catch (saveError) {
-                    console.error("Failed to save individual result:", saveError);
+                      system_prompt_used: isDirectLlm ? "Direct LLM - No system prompt" : result.system_prompt_used,
+                      search_top_k: isDirectLlm ? undefined : settings.search_top_k,
+                      search_alpha: isDirectLlm ? undefined : settings.search_alpha,
+                      reranker_used: isDirectLlm ? false : settings.enable_reranker,
+                      reranker_provider: isDirectLlm ? undefined : settings.reranker_provider,
+                      reranker_model: isDirectLlm ? undefined : settings.reranker_model,
+                    })),
+                  });
+                  
+                  toast.success(`${batchResponse.saved_count} sonuç otomatik kaydedildi (Grup: ${autoGroupName})`);
+                  if (batchResponse.failed_count > 0) {
+                    toast.warning(`${batchResponse.failed_count} sonuç kaydedilemedi`);
                   }
-                }
-                
-                if (savedCount > 0) {
-                  toast.success(`${savedCount} sonuç otomatik kaydedildi (Grup: ${autoGroupName})`);
+                } else {
+                  toast.warning("Kaydedilecek geçerli sonuç bulunamadı");
                 }
               } catch (autoSaveError) {
                 console.error("Auto-save failed:", autoSaveError);
@@ -1447,6 +1437,7 @@ export default function SemanticSimilarityPage() {
     try {
       // Get course settings for search and reranker config
       const settings = await api.getCourseSettings(selectedCourseId);
+      const isDirectLlm = isDirectLlmEnabled || settings.enable_direct_llm;
       
       await api.saveSemanticSimilarityResult({
         course_id: selectedCourseId,
@@ -1468,15 +1459,15 @@ export default function SemanticSimilarityPage() {
         original_bertscore_recall: quickTestResult.original_bertscore_recall,
         original_bertscore_f1: quickTestResult.original_bertscore_f1,
         latency_ms: quickTestResult.latency_ms,
-        embedding_model_used: quickTestResult.embedding_model_used,
+        embedding_model_used: isDirectLlm ? "N/A (Direct LLM)" : quickTestResult.embedding_model_used,
         llm_model_used: quickTestResult.llm_model_used,
         retrieved_contexts: quickTestResult.retrieved_contexts,
-        system_prompt_used: quickTestResult.system_prompt_used,
-        search_top_k: settings.search_top_k,
-        search_alpha: settings.search_alpha,
-        reranker_used: settings.enable_reranker,
-        reranker_provider: settings.reranker_provider,
-        reranker_model: settings.reranker_model
+        system_prompt_used: isDirectLlm ? "Direct LLM - No system prompt" : quickTestResult.system_prompt_used,
+        search_top_k: isDirectLlm ? undefined : settings.search_top_k,
+        search_alpha: isDirectLlm ? undefined : settings.search_alpha,
+        reranker_used: isDirectLlm ? false : settings.enable_reranker,
+        reranker_provider: isDirectLlm ? undefined : settings.reranker_provider,
+        reranker_model: isDirectLlm ? undefined : settings.reranker_model
       });
       toast.success("Sonuç kaydedildi");
       setIsSaveDialogOpen(false);
@@ -1495,53 +1486,49 @@ export default function SemanticSimilarityPage() {
     try {
       // Get course settings for search and reranker config
       const settings = await api.getCourseSettings(selectedCourseId);
+      const isDirectLlm = isDirectLlmEnabled || settings.enable_direct_llm;
       
-      let successCount = 0;
-      let failCount = 0;
-
-      // Her test sonucunu ayrı ayrı kaydet
-      for (const result of batchTestResult.results) {
-        try {
-          await api.saveSemanticSimilarityResult({
-            course_id: selectedCourseId,
-            group_name: saveGroupName || undefined,
-            question: result.question,
-            ground_truth: result.ground_truth,
-            alternative_ground_truths: undefined,
-            generated_answer: result.generated_answer,
-            bloom_level: result.bloom_level || undefined,
-            similarity_score: result.similarity_score,
-            best_match_ground_truth: result.best_match_ground_truth,
-            all_scores: undefined,
-            rouge1: result.rouge1,
-            rouge2: result.rouge2,
-            rougel: result.rougel,
-            bertscore_precision: result.bertscore_precision,
-            bertscore_recall: result.bertscore_recall,
-            bertscore_f1: result.bertscore_f1,
-            original_bertscore_precision: result.original_bertscore_precision,
-            original_bertscore_recall: result.original_bertscore_recall,
-            original_bertscore_f1: result.original_bertscore_f1,
-            latency_ms: result.latency_ms || 0,
-            embedding_model_used: batchTestResult.embedding_model_used || selectedEmbeddingModel || "unknown",
-            llm_model_used: batchTestResult.llm_model_used,
-            retrieved_contexts: result.retrieved_contexts,
-            system_prompt_used: result.system_prompt_used,
-            search_top_k: settings.search_top_k,
-            search_alpha: settings.search_alpha,
-            reranker_used: settings.enable_reranker,
-            reranker_provider: settings.reranker_provider,
-            reranker_model: settings.reranker_model
-          });
-          successCount++;
-        } catch (error) {
-          console.error("Failed to save result:", error);
-          failCount++;
-        }
+      // Filter only valid results (with similarity_score)
+      const validResults = batchTestResult.results.filter(r => r.similarity_score != null);
+      
+      if (validResults.length === 0) {
+        toast.error("Kaydedilecek geçerli sonuç bulunamadı");
+        return;
       }
 
-      if (successCount > 0) {
-        toast.success(`${successCount} sonuç kaydedildi${failCount > 0 ? `, ${failCount} başarısız` : ""}`);
+      const batchResponse = await api.saveSemanticSimilarityResultsBatch({
+        course_id: selectedCourseId,
+        group_name: saveGroupName || undefined,
+        results: validResults.map(result => ({
+          question: result.question,
+          ground_truth: result.ground_truth,
+          generated_answer: result.generated_answer,
+          similarity_score: result.similarity_score,
+          best_match_ground_truth: result.best_match_ground_truth || result.ground_truth,
+          rouge1: result.rouge1 ?? undefined,
+          rouge2: result.rouge2 ?? undefined,
+          rougel: result.rougel ?? undefined,
+          bertscore_precision: result.bertscore_precision ?? undefined,
+          bertscore_recall: result.bertscore_recall ?? undefined,
+          bertscore_f1: result.bertscore_f1 ?? undefined,
+          original_bertscore_precision: result.original_bertscore_precision ?? undefined,
+          original_bertscore_recall: result.original_bertscore_recall ?? undefined,
+          original_bertscore_f1: result.original_bertscore_f1 ?? undefined,
+          latency_ms: result.latency_ms || 0,
+          embedding_model_used: isDirectLlm ? "N/A (Direct LLM)" : (batchTestResult.embedding_model_used || selectedEmbeddingModel || "unknown"),
+          llm_model_used: batchTestResult.llm_model_used,
+          retrieved_contexts: result.retrieved_contexts,
+          system_prompt_used: isDirectLlm ? "Direct LLM - No system prompt" : result.system_prompt_used,
+          search_top_k: isDirectLlm ? undefined : settings.search_top_k,
+          search_alpha: isDirectLlm ? undefined : settings.search_alpha,
+          reranker_used: isDirectLlm ? false : settings.enable_reranker,
+          reranker_provider: isDirectLlm ? undefined : settings.reranker_provider,
+          reranker_model: isDirectLlm ? undefined : settings.reranker_model,
+        })),
+      });
+
+      if (batchResponse.saved_count > 0) {
+        toast.success(`${batchResponse.saved_count} sonuç kaydedildi${batchResponse.failed_count > 0 ? `, ${batchResponse.failed_count} başarısız` : ""}`);
       } else {
         toast.error("Hiçbir sonuç kaydedilemedi");
       }
@@ -1621,6 +1608,7 @@ export default function SemanticSimilarityPage() {
       // CSV başlıkları - sadece skorlar
       const headers = [
         "Soru No",
+        "Cosine Sim. (%)",
         "ROUGE-1 (%)",
         "ROUGE-2 (%)",
         "ROUGE-L (%)",
@@ -1632,6 +1620,7 @@ export default function SemanticSimilarityPage() {
 
       const rows = data.results.map((r, idx) => [
         idx + 1,
+        r.similarity_score != null ? (r.similarity_score * 100).toFixed(2) : "-",
         r.rouge1 != null ? (r.rouge1 * 100).toFixed(2) : "-",
         r.rouge2 != null ? (r.rouge2 * 100).toFixed(2) : "-",
         r.rougel != null ? (r.rougel * 100).toFixed(2) : "-",
@@ -2116,13 +2105,21 @@ export default function SemanticSimilarityPage() {
                         )}
 
                         {/* ROUGE and BERTScore Metrics */}
-                        {(quickTestResult.rouge1 != null || quickTestResult.rouge2 != null || quickTestResult.rougel != null || 
+                        {(quickTestResult.similarity_score != null || quickTestResult.rouge1 != null || quickTestResult.rouge2 != null || quickTestResult.rougel != null || 
                           quickTestResult.bertscore_f1 != null || quickTestResult.original_bertscore_f1 != null) && (
                           <div>
                             <Label className="text-sm font-medium text-slate-700">
                               Ek Metrikler
                             </Label>
                             <div className="mt-2 grid grid-cols-2 gap-3">
+                              {quickTestResult.similarity_score != null && (
+                                <div className="p-4 bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl border border-blue-200 shadow-sm">
+                                  <p className="text-xs text-blue-600 font-medium">Cosine Similarity</p>
+                                  <p className={`text-2xl font-bold ${getMetricColor(quickTestResult.similarity_score)}`}>
+                                    {(quickTestResult.similarity_score * 100).toFixed(1)}%
+                                  </p>
+                                </div>
+                              )}
                               {quickTestResult.rouge1 != null && (
                                 <div className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl border border-purple-200 shadow-sm">
                                   <p className="text-xs text-purple-600 font-medium">ROUGE-1</p>
@@ -2399,6 +2396,14 @@ export default function SemanticSimilarityPage() {
                                 {batchTestElapsedTime}
                               </p>
                             </div>
+                            {batchTestResult.aggregate.avg_similarity != null && (
+                              <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200 shadow-sm">
+                                <p className="text-xs text-blue-600 font-medium">Ort. Cosine Sim.</p>
+                                <p className="text-xl font-bold text-blue-700">
+                                  {(batchTestResult.aggregate.avg_similarity * 100).toFixed(1)}%
+                                </p>
+                              </div>
+                            )}
                             {batchTestResult.aggregate.avg_rouge1 != null && (
                               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-200 shadow-sm">
                                 <p className="text-xs text-purple-600 font-medium">Ort. ROUGE-1</p>
@@ -2485,6 +2490,9 @@ export default function SemanticSimilarityPage() {
                                     Soru
                                   </th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-600">
+                                    Cos. Sim.
+                                  </th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-600">
                                     ROUGE-1
                                   </th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-600">
@@ -2506,6 +2514,15 @@ export default function SemanticSimilarityPage() {
                                   >
                                     <td className="px-3 py-2 text-slate-700 truncate max-w-[200px]">
                                       {result.question}
+                                    </td>
+                                    <td className="px-3 py-2 text-center">
+                                      {result.similarity_score !== null && result.similarity_score !== undefined ? (
+                                        <span className={`font-medium ${getMetricColor(result.similarity_score)}`}>
+                                          {(result.similarity_score * 100).toFixed(0)}%
+                                        </span>
+                                      ) : (
+                                        <span className="text-slate-400">-</span>
+                                      )}
                                     </td>
                                     <td className="px-3 py-2 text-center">
                                       {result.rouge1 !== null && result.rouge1 !== undefined ? (
@@ -2908,11 +2925,19 @@ export default function SemanticSimilarityPage() {
                   </div>
 
                   {/* ROUGE ve BERTScore Metrikleri */}
-                  {(viewingResult.rouge1 != null || viewingResult.rouge2 != null ||
+                  {(viewingResult.similarity_score != null || viewingResult.rouge1 != null || viewingResult.rouge2 != null ||
                     viewingResult.rougel != null || viewingResult.bertscore_f1 != null) && (
                     <div>
                       <Label className="text-sm font-medium">Metrikler</Label>
                       <div className="mt-2 grid grid-cols-2 gap-3">
+                        {viewingResult.similarity_score != null && (
+                          <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+                            <p className="text-xs text-blue-600 font-medium mb-1">Cosine Similarity</p>
+                            <p className={`text-2xl font-bold ${getMetricColor(viewingResult.similarity_score)}`}>
+                              {(viewingResult.similarity_score * 100).toFixed(1)}%
+                            </p>
+                          </div>
+                        )}
                         {viewingResult.rouge1 != null && (
                           <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-200">
                             <p className="text-xs text-purple-600 font-medium mb-1">ROUGE-1</p>
@@ -3195,6 +3220,17 @@ export default function SemanticSimilarityPage() {
                             </td>
                             <td className="px-4 py-3 text-slate-600">Toplam test sayısı</td>
                           </tr>
+                          {savedResultsAggregate.avg_similarity != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-900">Ortalama Cosine Similarity</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-3 py-1 rounded-full font-bold ${getMetricBgColor(savedResultsAggregate.avg_similarity)}`}>
+                                  {(savedResultsAggregate.avg_similarity * 100).toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">Embedding tabanlı semantik benzerlik</td>
+                            </tr>
+                          )}
                           {savedResultsAggregate.avg_rouge1 != null && (
                             <tr className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-medium text-slate-900">Ortalama ROUGE-1</td>
@@ -3391,6 +3427,7 @@ export default function SemanticSimilarityPage() {
                                 <tr>
                                   <th className="px-3 py-2 text-left font-medium text-slate-700">#</th>
                                   <th className="px-3 py-2 text-left font-medium text-slate-700">Soru</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-700">Cos. Sim.</th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-1</th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-2</th>
                                   <th className="px-3 py-2 text-center font-medium text-slate-700">ROUGE-L</th>
@@ -3416,6 +3453,15 @@ export default function SemanticSimilarityPage() {
                                     <Eye className="w-3 h-3 text-teal-600 flex-shrink-0" />
                                     <span>{result.question}</span>
                                   </div>
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {result.similarity_score != null ? (
+                                    <span className={`font-medium ${getMetricColor(result.similarity_score)}`}>
+                                      {(result.similarity_score * 100).toFixed(1)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
                                 </td>
                                 <td className="px-3 py-2 text-center">
                                   {result.rouge1 != null ? (
@@ -3498,6 +3544,20 @@ export default function SemanticSimilarityPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
+                          {savedResultsAggregate.avg_similarity != null && (
+                            <tr className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-blue-700">Cosine Similarity</td>
+                              <td className="px-4 py-3 text-center text-emerald-600 font-bold">
+                                {(Math.max(...savedResults.filter(r => r.similarity_score != null).map(r => r.similarity_score!)) * 100).toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center text-red-600 font-bold">
+                                {(Math.min(...savedResults.filter(r => r.similarity_score != null).map(r => r.similarity_score!)) * 100).toFixed(1)}%
+                              </td>
+                              <td className="px-4 py-3 text-center font-bold">
+                                {(savedResultsAggregate.avg_similarity * 100).toFixed(1)}%
+                              </td>
+                            </tr>
+                          )}
                           {savedResultsAggregate.avg_rouge1 != null && (
                             <tr className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-medium text-purple-700">ROUGE-1</td>

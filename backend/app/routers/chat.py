@@ -227,24 +227,12 @@ async def chat_with_course(
         
         # Build messages for LLM (no context, no system prompt override)
         direct_messages = [
-            {"role": "system", "content": "Sen yardımcı bir asistansın. Soruları kendi bilginle yanıtla."},
+            {"role": "system", "content": "Sen yardımcı bir asistansın. Soruları kendi bilginle yanıtla. Ders dokümanlarına veya bağlam bilgilerine atıfta bulunma, sadece kendi bilginle cevap ver."},
         ]
         
-        # Add chat history from memory (if available)
-        short_term_context = []
-        if memory_enabled and memory_service:
-            try:
-                short_term_context = memory_service.get_short_term_context(
-                    user_id=current_user.id,
-                    course_id=course_id,
-                    limit=30
-                )
-            except Exception as e:
-                print(f"[CHAT] Failed to get short-term context: {e}")
-        
-        if short_term_context:
-            for msg in short_term_context:
-                direct_messages.append({"role": msg['role'], "content": msg['content']})
+        # Direct LLM modunda eski RAG cevaplarını memory'den ALMIYORUZ
+        # çünkü eski RAG cevapları LLM'i "ders dokümanlarında..." tarzında
+        # cevap vermeye yönlendiriyor
         
         direct_messages.append({"role": "user", "content": request.message})
         
@@ -271,29 +259,6 @@ async def chat_with_course(
                 )
             )
             db.commit()
-            
-            # Add to memory
-            if memory_enabled and memory_service:
-                try:
-                    session_id_mem = str(uuid.uuid4())
-                    memory_service.add_message_to_short_term(
-                        user_id=current_user.id,
-                        course_id=course_id,
-                        role="user",
-                        content=request.message,
-                        session_id=session_id_mem,
-                        embedding_model=settings.default_embedding_model
-                    )
-                    memory_service.add_message_to_short_term(
-                        user_id=current_user.id,
-                        course_id=course_id,
-                        role="assistant",
-                        content=assistant_message,
-                        session_id=session_id_mem,
-                        embedding_model=settings.default_embedding_model
-                    )
-                except Exception as e:
-                    print(f"[CHAT] Failed to add messages to memory: {e}")
             
             return ChatResponse(message=assistant_message, sources=[])
         

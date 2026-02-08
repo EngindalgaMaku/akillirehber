@@ -1207,6 +1207,56 @@ class SemanticSimilarityBatchTestResponse(BaseModel):
     llm_model_used: Optional[str] = None
 
 
+class SemanticSimilarityBatchResultCreate(BaseModel):
+    """Schema for batch saving multiple semantic similarity results at once."""
+
+    course_id: int
+    group_name: Optional[str] = None
+    results: List['SemanticSimilarityResultItemCreate']
+
+
+class SemanticSimilarityBatchSaveResponse(BaseModel):
+    """Response for batch save operation."""
+
+    saved_count: int
+    failed_count: int
+    group_name: Optional[str] = None
+
+
+class SemanticSimilarityResultItemCreate(BaseModel):
+    """Schema for a single result item within a batch save."""
+
+    question: str
+    ground_truth: str
+    alternative_ground_truths: Optional[List[str]] = None
+    generated_answer: str
+    bloom_level: Optional[str] = None
+    similarity_score: float
+    best_match_ground_truth: str
+    all_scores: Optional[List[ScoreDetail]] = None
+    rouge1: Optional[float] = None
+    rouge2: Optional[float] = None
+    rougel: Optional[float] = None
+    bertscore_precision: Optional[float] = None
+    bertscore_recall: Optional[float] = None
+    bertscore_f1: Optional[float] = None
+    original_bertscore_precision: Optional[float] = None
+    original_bertscore_recall: Optional[float] = None
+    original_bertscore_f1: Optional[float] = None
+    hit_at_1: Optional[float] = None
+    mrr: Optional[float] = None
+    latency_ms: int = 0
+    embedding_model_used: Optional[str] = None
+    llm_model_used: Optional[str] = None
+    retrieved_contexts: Optional[List[str]] = None
+    system_prompt_used: Optional[str] = None
+    search_top_k: Optional[int] = None
+    search_alpha: Optional[float] = None
+    reranker_used: Optional[bool] = None
+    reranker_provider: Optional[str] = None
+    reranker_model: Optional[str] = None
+
+
 class SemanticSimilarityResultCreate(BaseModel):
     """Schema for creating a semantic similarity result."""
 
@@ -1249,6 +1299,62 @@ class SemanticSimilarityResultCreate(BaseModel):
     # These fields are set automatically by the backend
     # created_by: int  # Set from current_user
     # created_at: datetime  # Set automatically by database
+
+    class SemanticSimilarityBatchResultCreate(BaseModel):
+        """Schema for batch saving multiple semantic similarity results at once."""
+
+        course_id: int
+        group_name: Optional[str] = None
+        results: List['SemanticSimilarityResultCreate']
+
+
+    class SemanticSimilarityBatchSaveResponse(BaseModel):
+        """Response for batch save operation."""
+
+        saved_count: int
+        failed_count: int
+        group_name: Optional[str] = None
+
+
+    class SemanticSimilarityResultCreate(BaseModel):
+        """Schema for creating a semantic similarity result."""
+
+        course_id: int
+        group_name: Optional[str] = None
+        question: str
+        ground_truth: str
+        alternative_ground_truths: Optional[List[str]] = None
+        generated_answer: str
+        bloom_level: Optional[str] = None
+        similarity_score: float
+        best_match_ground_truth: str
+        all_scores: Optional[List[ScoreDetail]] = None
+        # ROUGE metrics
+        rouge1: Optional[float] = None
+        rouge2: Optional[float] = None
+        rougel: Optional[float] = None
+        bertscore_precision: Optional[float] = None
+        bertscore_recall: Optional[float] = None
+        bertscore_f1: Optional[float] = None
+        original_bertscore_precision: Optional[float] = None
+        original_bertscore_recall: Optional[float] = None
+        original_bertscore_f1: Optional[float] = None
+        # Retrieval metrics
+        hit_at_1: Optional[float] = None
+        mrr: Optional[float] = None
+        # Metadata
+        latency_ms: int
+        embedding_model_used: str
+        llm_model_used: Optional[str] = None
+        retrieved_contexts: Optional[List[str]] = None
+        system_prompt_used: Optional[str] = None
+        # Search configuration
+        search_top_k: Optional[int] = None
+        search_alpha: Optional[float] = None
+        # Reranker configuration
+        reranker_used: Optional[bool] = None
+        reranker_provider: Optional[str] = None
+        reranker_model: Optional[str] = None
 
 
 class SemanticSimilarityResultResponse(BaseModel):
