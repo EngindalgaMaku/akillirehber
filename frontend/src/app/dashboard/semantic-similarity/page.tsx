@@ -407,6 +407,7 @@ export default function SemanticSimilarityPage() {
         name: ts.name,
         description: ts.description,
         course_id: ts.course_id,
+        total_test_cases: ts.question_count,
         question_count: ts.question_count,
         created_at: ts.created_at,
       }));
