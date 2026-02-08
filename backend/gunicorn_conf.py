@@ -26,9 +26,9 @@ max_requests = int(os.getenv("MAX_REQUESTS", 1000))
 max_requests_jitter = int(os.getenv("MAX_REQUESTS_JITTER", 100))
 
 # Timeout settings
-timeout = int(os.getenv("GUNICORN_TIMEOUT", 300))  # 5 minutes for long-running tasks
+timeout = int(os.getenv("GUNICORN_TIMEOUT", 1800))  # 30 minutes for long-running batch tests
 keepalive = int(os.getenv("GUNICORN_KEEPALIVE", 5))
-graceful_timeout = int(os.getenv("GUNICORN_GRACEFUL_TIMEOUT", 30))
+graceful_timeout = int(os.getenv("GUNICORN_GRACEFUL_TIMEOUT", 120))
 
 # Process naming
 proc_name = "rag-backend"
