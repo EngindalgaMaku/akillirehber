@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models.db_models import User, UserRole, TemporaryPassword
 from app.models.schemas import (
     AdminUserListResponse,
+    AdminUserCreate,
     AdminUserUpdate,
     AdminUserUpdateResponse,
     AdminUserDeleteResponse,
@@ -26,6 +27,61 @@ from app.services.audit_service import log_admin_action
 from app.services.email_service import send_password_reset_email
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@router.post("/users", response_model=AdminUserUpdateResponse)
+async def create_user(
+    user_data: AdminUserCreate,
+    request: Request,
+    admin_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Create a new user as admin (no registration key required).
+    """
+    from sqlalchemy import exists
+
+    # Check if email already exists
+    email_exists = db.query(
+        exists().where(User.email == user_data.email)
+    ).scalar()
+    if email_exists:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bu e-posta zaten kayıtlı: {user_data.email}",
+        )
+
+    hashed_password = get_password_hash(user_data.password)
+    new_user = User(
+        email=user_data.email,
+        hashed_password=hashed_password,
+        full_name=user_data.full_name,
+        role=user_data.role,
+        is_active=True,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    # Log admin action
+    client_ip = request.client.host if request.client else None
+    log_admin_action(
+        db=db,
+        admin_user_id=admin_user.id,
+        action="create",
+        target_user_id=new_user.id,
+        details={
+            "user_email": new_user.email,
+            "user_role": new_user.role.value,
+        },
+        ip_address=client_ip,
+    )
+
+    return AdminUserUpdateResponse(
+        success=True,
+        user=new_user,
+        message=f"Kullanıcı {new_user.email} başarıyla oluşturuldu",
+    )
 
 
 @router.get("/users", response_model=AdminUserListResponse)

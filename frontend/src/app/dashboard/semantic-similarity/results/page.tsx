@@ -524,15 +524,8 @@ export default function SemanticSimilarityResultsPage() {
                               </span>
                             </td>
                             <td className="px-3 py-2">
-                              <div className="text-xs flex gap-2 flex-wrap">
+                              <div className="flex flex-nowrap gap-1.5 text-xs">
                                 {(() => {
-                                  console.log('Group data:', {
-                                    name: g.name,
-                                    avg_rouge1: g.avg_rouge1,
-                                    avg_original_bertscore_f1: g.avg_original_bertscore_f1,
-                                    hasOriginalBert: typeof g.avg_original_bertscore_f1 === "number",
-                                    isFinite: Number.isFinite(g.avg_original_bertscore_f1)
-                                  });
                                   return null;
                                 })()}
                                 {typeof g.avg_rouge1 === "number" && Number.isFinite(g.avg_rouge1) && (
@@ -561,21 +554,21 @@ export default function SemanticSimilarityResultsPage() {
                                 )}
                               </div>
                             </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700 border border-indigo-200 text-[11px]">
-                                {g.llm_model || "-"}
+                            <td className="px-3 py-2 max-w-[120px]">
+                              <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700 border border-indigo-200 text-[11px] truncate max-w-full" title={g.llm_model || "-"}>
+                                {g.llm_model ? g.llm_model.split("/").pop() : "-"}
                               </span>
                             </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              <span className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200 text-[11px]">
-                                {g.embedding_model || "-"}
+                            <td className="px-3 py-2 max-w-[120px]">
+                              <span className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200 text-[11px] truncate max-w-full" title={g.embedding_model || "-"}>
+                                {g.embedding_model ? g.embedding_model.split("/").pop() : "-"}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-right text-slate-700">{g.search_top_k ?? "-"}</td>
                             <td className="px-3 py-2 text-right text-slate-700">
                               {g.search_alpha !== null && g.search_alpha !== undefined ? g.search_alpha.toFixed(2) : "-"}
                             </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
+                            <td className="px-3 py-2 max-w-[110px]">
                               {(() => {
                                 if (!g.reranker_used) {
                                   return (
@@ -584,12 +577,13 @@ export default function SemanticSimilarityResultsPage() {
                                     </span>
                                   );
                                 }
-                                const rerankerText = g.reranker_provider && g.reranker_model
+                                const fullText = g.reranker_provider && g.reranker_model
                                   ? `${g.reranker_provider}/${g.reranker_model}`
                                   : "Var";
+                                const shortText = g.reranker_model ? g.reranker_model.split("/").pop() : "Var";
                                 return (
-                                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 border border-emerald-200 text-[11px]">
-                                    {rerankerText}
+                                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 border border-emerald-200 text-[11px] truncate max-w-full" title={fullText}>
+                                    {shortText}
                                   </span>
                                 );
                               })()}

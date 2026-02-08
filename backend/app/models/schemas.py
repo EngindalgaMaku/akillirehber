@@ -1356,6 +1356,15 @@ class AdminUserUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class AdminUserCreate(BaseModel):
+    """Schema for creating a user by admin."""
+
+    full_name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    role: UserRole = UserRole.STUDENT
+
+
 class AdminUserUpdateResponse(BaseModel):
     """Schema for admin user update response."""
 

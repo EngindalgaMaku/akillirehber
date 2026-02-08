@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { RoleBadge } from "@/components/ui/role-badge";
-import { Brain, BookOpen, Home, LogOut, Settings, User, Loader2, ChevronLeft, ChevronRight, FlaskConical } from "lucide-react";
+import { Brain, BookOpen, Home, LogOut, Settings, User, Users, Loader2, ChevronLeft, ChevronRight, FlaskConical } from "lucide-react";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -64,6 +64,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const bottomNavItems = [
     { href: "/dashboard/profile", icon: User, label: "Profil" },
     ...(user.role === "admin" ? [
+      { href: "/dashboard/users", icon: Users, label: "Kullanıcı Yönetimi" },
       { href: "/dashboard/settings", icon: Settings, label: "Ayarlar" }
     ] : []),
   ];

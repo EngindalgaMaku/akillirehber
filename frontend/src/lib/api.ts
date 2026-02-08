@@ -1210,6 +1210,14 @@ class ApiClient {
 
   // ==================== Admin User Management Endpoints ====================
 
+  async createAdminUser(data: AdminUserCreate): Promise<AdminUser> {
+    const res = await this.request<{ success: boolean; user: AdminUser; message: string }>("/api/admin/users", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return res.user;
+  }
+
   async getAdminUsers(params?: {
     page?: number;
     limit?: number;
@@ -2667,6 +2675,13 @@ export interface AdminUserUpdate {
   email?: string;
   role?: "admin" | "teacher" | "student";
   is_active?: boolean;
+}
+
+export interface AdminUserCreate {
+  full_name: string;
+  email: string;
+  password: string;
+  role: "teacher" | "student";
 }
 
 export interface AdminStatistics {
