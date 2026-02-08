@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FileJson, ChevronDown, Loader2, Save, Download, Trash2, Zap, TrendingUp } from "lucide-react";
+import { FileJson, ChevronDown, Loader2, Save, Download, Trash2, Zap, TrendingUp, Pause, Play, X } from "lucide-react";
 import { toast } from "sonner";
 
 interface BatchTestSectionProps {
@@ -74,6 +74,10 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
   const [resumeState, setResumeState] = useState<BatchResumeState | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const MAX_RETRY_ATTEMPTS = 3;
+  
+  // Pause/Cancel support
+  const [currentTestId, setCurrentTestId] = useState<string | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
   
   // Dataset Management
   const [testDatasets, setTestDatasets] = useState<Array<{
@@ -211,6 +215,62 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
     });
   };
 
+  const handlePauseBatchTest = async () => {
+    if (!currentTestId) return;
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const token = localStorage.getItem("akilli_rehber_token");
+      const response = await fetch(`${API_URL}/api/ragas/batch-test/${currentTestId}/pause`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      if (response.ok) {
+        setIsPaused(true);
+        toast.info("Test duraklatıldı");
+      }
+    } catch (error) {
+      toast.error("Duraklatma başarısız");
+    }
+  };
+
+  const handleResumePausedTest = async () => {
+    if (!currentTestId) return;
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const token = localStorage.getItem("akilli_rehber_token");
+      const response = await fetch(`${API_URL}/api/ragas/batch-test/${currentTestId}/resume`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      if (response.ok) {
+        setIsPaused(false);
+        toast.success("Test devam ediyor");
+      }
+    } catch (error) {
+      toast.error("Devam ettirme başarısız");
+    }
+  };
+
+  const handleCancelBatchTest = async () => {
+    if (!currentTestId) return;
+    if (!confirm("Testi iptal etmek istediğinizden emin misiniz?")) return;
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const token = localStorage.getItem("akilli_rehber_token");
+      const response = await fetch(`${API_URL}/api/ragas/batch-test/${currentTestId}/cancel`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      if (response.ok) {
+        toast.warning("Test iptal edildi");
+        setCurrentTestId(null);
+        setIsPaused(false);
+      }
+    } catch (error) {
+      toast.error("İptal başarısız");
+    }
+  };
+
   const startBatchStream = async (opts: {
     testCases: BatchTestCase[];
     groupName: string;
@@ -278,7 +338,30 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
         try {
           const data = JSON.parse(jsonStr);
 
+          // Handle init event - get test_id for pause/cancel
+          if (data.event === "init") {
+            if (data.test_id) {
+              setCurrentTestId(data.test_id);
+            }
+            continue;
+          }
+          
+          // Handle paused event
+          if (data.event === "paused") {
+            setIsPaused(true);
+            continue;
+          }
+          
+          // Handle cancelled event
+          if (data.event === "cancelled") {
+            toast.warning(`Test iptal edildi. ${data.completed}/${data.total} tamamlandı.`);
+            setCurrentTestId(null);
+            setIsPaused(false);
+            return;
+          }
+
           if (data.event === "progress") {
+            setIsPaused(false); // Clear paused state on progress
             const idx = Number(data.index);
             const result: BatchTestResult = {
               question: data.result.question,
@@ -339,6 +422,10 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
             }
           } else if (data.event === "complete") {
             wandbUrl = data.wandb_url;
+            
+            // Clear pause/cancel state
+            setCurrentTestId(null);
+            setIsPaused(false);
 
             // Check if there are any failed tests that need retry
             if (base) {
@@ -1043,19 +1130,56 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
                     {isBatchTesting && (
                       <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-medium text-blue-900">İlerleme</span>
+                          <span className="text-sm font-medium text-blue-900">
+                            {isPaused ? "⏸️ Duraklatıldı" : "İlerleme"}
+                          </span>
                           <span className="text-xs text-blue-600">{currentTestIndex}/{totalTests}</span>
                         </div>
                         <div className="w-full bg-blue-200 rounded-full h-2 mb-2">
                           <div
-                            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                            className={`h-2 rounded-full transition-all duration-300 ${isPaused ? 'bg-amber-500' : 'bg-blue-600'}`}
                             style={{ width: `${(currentTestIndex / totalTests) * 100}%` }}
                           />
                         </div>
-                        <div className="flex items-center justify-between text-xs text-blue-600">
+                        <div className="flex items-center justify-between text-xs text-blue-600 mb-3">
                           <span>Geçen Süre: {batchTestElapsedTime}</span>
                           <span>{Math.round((currentTestIndex / totalTests) * 100)}%</span>
                         </div>
+                        
+                        {/* Pause/Resume/Cancel Buttons */}
+                        {currentTestId && (
+                          <div className="flex gap-2">
+                            {isPaused ? (
+                              <Button
+                                onClick={handleResumePausedTest}
+                                size="sm"
+                                className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                              >
+                                <Play className="w-4 h-4 mr-1" />
+                                Devam Et
+                              </Button>
+                            ) : (
+                              <Button
+                                onClick={handlePauseBatchTest}
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 border-amber-400 text-amber-700 hover:bg-amber-50"
+                              >
+                                <Pause className="w-4 h-4 mr-1" />
+                                Duraklat
+                              </Button>
+                            )}
+                            <Button
+                              onClick={handleCancelBatchTest}
+                              size="sm"
+                              variant="outline"
+                              className="border-red-400 text-red-700 hover:bg-red-50"
+                            >
+                              <X className="w-4 h-4 mr-1" />
+                              İptal
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     )}
 

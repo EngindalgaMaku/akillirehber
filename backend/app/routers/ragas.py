@@ -4,8 +4,9 @@ import asyncio
 import json
 import logging
 import os
-from typing import List, Optional
-from datetime import datetime
+import uuid
+from typing import List, Optional, Dict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -45,6 +46,73 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ragas", tags=["ragas"])
+
+
+# ==================== Cancellation Manager ====================
+# Global dictionary to track active batch tests and their cancellation/pause flags
+_active_batch_tests: Dict[str, Dict] = {}
+
+def create_batch_test_id() -> str:
+    """Generate a unique batch test ID."""
+    return str(uuid.uuid4())
+
+def register_batch_test(test_id: str) -> None:
+    """Register a new batch test with cancellation and pause flags."""
+    _active_batch_tests[test_id] = {
+        "cancelled": False,
+        "paused": False,
+        "start_time": datetime.now(timezone.utc)
+    }
+    logger.info(f"Batch test registered: {test_id}")
+
+def is_batch_test_cancelled(test_id: str) -> bool:
+    """Check if a batch test has been cancelled."""
+    return _active_batch_tests.get(test_id, {}).get("cancelled", False)
+
+def is_batch_test_paused(test_id: str) -> bool:
+    """Check if a batch test is paused."""
+    return _active_batch_tests.get(test_id, {}).get("paused", False)
+
+def cancel_batch_test(test_id: str) -> bool:
+    """Cancel a running batch test."""
+    if test_id in _active_batch_tests:
+        _active_batch_tests[test_id]["cancelled"] = True
+        logger.info(f"Batch test cancelled: {test_id}")
+        return True
+    return False
+
+def pause_batch_test(test_id: str) -> bool:
+    """Pause a running batch test."""
+    if test_id in _active_batch_tests:
+        _active_batch_tests[test_id]["paused"] = True
+        logger.info(f"Batch test paused: {test_id}")
+        return True
+    return False
+
+def resume_batch_test(test_id: str) -> bool:
+    """Resume a paused batch test."""
+    if test_id in _active_batch_tests:
+        _active_batch_tests[test_id]["paused"] = False
+        logger.info(f"Batch test resumed: {test_id}")
+        return True
+    return False
+
+def unregister_batch_test(test_id: str) -> None:
+    """Remove batch test from active tests."""
+    if test_id in _active_batch_tests:
+        del _active_batch_tests[test_id]
+        logger.info(f"Batch test unregistered: {test_id}")
+
+def get_active_batch_tests() -> Dict[str, Dict]:
+    """Get all active batch tests."""
+    return {
+        test_id: {
+            "paused": info["paused"],
+            "cancelled": info["cancelled"],
+            "start_time": info["start_time"].isoformat()
+        }
+        for test_id, info in _active_batch_tests.items()
+    }
 
 
 def clean_context_text(text: str) -> str:
@@ -2344,9 +2412,13 @@ async def batch_test_stream(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Stream batch RAGAS test results with W&B logging."""
+    """Stream batch RAGAS test results with W&B logging and cancellation/pause support."""
     verify_course_access(db, data.course_id, current_user)
     course_settings = get_or_create_settings(db, data.course_id)
+    
+    # Generate unique test ID for cancellation/pause
+    test_id = create_batch_test_id()
+    register_batch_test(test_id)
 
     async def generate():
         try:
@@ -2805,6 +2877,15 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                 ]
 
             total_to_run = len(indices_to_run)
+            
+            # Send init event with test_id for cancellation/pause support
+            init_event = {
+                "event": "init",
+                "test_id": test_id,
+                "total": total_to_run
+            }
+            yield f"data: {json.dumps(init_event, ensure_ascii=True)}\n\n"
+            await asyncio.sleep(0)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
                 # Submit selected tasks
@@ -2815,6 +2896,50 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                 
                 # Process results as they complete
                 for future in concurrent.futures.as_completed(future_to_idx):
+                    # Check for cancellation
+                    if is_batch_test_cancelled(test_id):
+                        logger.info(f"Batch test {test_id} cancelled, stopping...")
+                        # Cancel remaining futures
+                        for f in future_to_idx.keys():
+                            f.cancel()
+                        
+                        cancel_event = {
+                            "event": "cancelled",
+                            "test_id": test_id,
+                            "completed": completed_count,
+                            "total": total_to_run
+                        }
+                        yield f"data: {json.dumps(cancel_event, ensure_ascii=True)}\n\n"
+                        await asyncio.sleep(0)
+                        break
+                    
+                    # Check for pause - wait until resumed
+                    while is_batch_test_paused(test_id):
+                        pause_event = {
+                            "event": "paused",
+                            "test_id": test_id,
+                            "completed": completed_count,
+                            "total": total_to_run
+                        }
+                        yield f"data: {json.dumps(pause_event, ensure_ascii=True)}\n\n"
+                        await asyncio.sleep(1)
+                        
+                        # Check if cancelled while paused
+                        if is_batch_test_cancelled(test_id):
+                            break
+                    
+                    # If cancelled while paused, break out
+                    if is_batch_test_cancelled(test_id):
+                        cancel_event = {
+                            "event": "cancelled",
+                            "test_id": test_id,
+                            "completed": completed_count,
+                            "total": total_to_run
+                        }
+                        yield f"data: {json.dumps(cancel_event, ensure_ascii=True)}\n\n"
+                        await asyncio.sleep(0)
+                        break
+                    
                     result_data = future.result()
                     idx = result_data["idx"]
                     completed_count += 1
@@ -2955,43 +3080,46 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                 f"Embedding cache size: {len(embedding_cache)} entries"
             )
             
-            # W&B finalize
-            if wb_enabled and wb_run is not None:
-                avg_metrics = {
-                    f"aggregate/avg_{key}": (
-                        sum_metrics[key] / cnt_metrics[key]
-                        if cnt_metrics[key] > 0 else None
+            # Only finalize if not cancelled
+            if not is_batch_test_cancelled(test_id):
+                # W&B finalize
+                if wb_enabled and wb_run is not None:
+                    avg_metrics = {
+                        f"aggregate/avg_{key}": (
+                            sum_metrics[key] / cnt_metrics[key]
+                            if cnt_metrics[key] > 0 else None
+                        )
+                        for key in sum_metrics.keys()
+                    }
+                    avg_metrics["aggregate/avg_latency_ms"] = (
+                        sum_latency / cnt_latency if cnt_latency > 0 else None
                     )
-                    for key in sum_metrics.keys()
+                    avg_metrics["total_tests"] = len(data.test_cases)
+                    
+                    wandb.log(avg_metrics)
+                    if wb_table is not None:
+                        wandb.log({"results": wb_table})
+                    
+                    wb_run_url = getattr(wb_run, "url", None)
+                    wb_run.finish()
+                else:
+                    wb_run_url = None
+                
+                # Send completion
+                completion = {
+                    "event": "complete",
+                    "test_id": test_id,
+                    "total": total_to_run,
+                    "completed": completed_count,
+                    "wandb_url": wb_run_url,
                 }
-                avg_metrics["aggregate/avg_latency_ms"] = (
-                    sum_latency / cnt_latency if cnt_latency > 0 else None
-                )
-                avg_metrics["total_tests"] = len(data.test_cases)
-                
-                wandb.log(avg_metrics)
-                if wb_table is not None:
-                    wandb.log({"results": wb_table})
-                
-                wb_run_url = getattr(wb_run, "url", None)
-                wb_run.finish()
-            else:
-                wb_run_url = None
-            
-            # Send completion
-            completion = {
-                "event": "complete",
-                "total": total_to_run,
-                "completed": total_to_run,
-                "wandb_url": wb_run_url,
-            }
-            # ✅ ensure_ascii=True to prevent JSON parse errors
-            yield f"data: {json.dumps(completion, ensure_ascii=True)}\n\n"
-            await asyncio.sleep(0)
+                # ✅ ensure_ascii=True to prevent JSON parse errors
+                yield f"data: {json.dumps(completion, ensure_ascii=True)}\n\n"
+                await asyncio.sleep(0)
             
         except Exception as e:
             logger.error(f"Batch stream error: {e}")
-            error = {"event": "error", "error": str(e)}
+            error = {"event": "error", "test_id": test_id, "error": str(e)}
             if "wb_run" in locals() and wb_run is not None:
                 try:
                     wb_run.finish(exit_code=1)
@@ -3000,6 +3128,9 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             # ✅ ensure_ascii=True to prevent JSON parse errors
             yield f"data: {json.dumps(error, ensure_ascii=True)}\n\n"
             await asyncio.sleep(0)
+        finally:
+            # Clean up
+            unregister_batch_test(test_id)
     
     return StreamingResponse(
         generate(),
@@ -3009,6 +3140,49 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ==================== Batch Test Control Endpoints ====================
+
+@router.post("/batch-test/{test_id}/cancel")
+async def cancel_batch_test_endpoint(
+    test_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Cancel a running batch test."""
+    if cancel_batch_test(test_id):
+        return {"success": True, "message": f"Batch test {test_id} cancelled"}
+    raise HTTPException(status_code=404, detail="Batch test not found or already completed")
+
+
+@router.post("/batch-test/{test_id}/pause")
+async def pause_batch_test_endpoint(
+    test_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Pause a running batch test."""
+    if pause_batch_test(test_id):
+        return {"success": True, "message": f"Batch test {test_id} paused"}
+    raise HTTPException(status_code=404, detail="Batch test not found or already completed")
+
+
+@router.post("/batch-test/{test_id}/resume")
+async def resume_batch_test_endpoint(
+    test_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Resume a paused batch test."""
+    if resume_batch_test(test_id):
+        return {"success": True, "message": f"Batch test {test_id} resumed"}
+    raise HTTPException(status_code=404, detail="Batch test not found or already completed")
+
+
+@router.get("/batch-test/active")
+async def get_active_batch_tests_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Get all active batch tests."""
+    return {"tests": get_active_batch_tests()}
 
 
 @router.post("/runs/{run_id}/fix-summary")
