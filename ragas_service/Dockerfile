@@ -18,9 +18,14 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
 # Copy application code
 COPY . .
 
-# Create non-root user
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+# Create non-root user with writable home directory (needed for HuggingFace cache)
+RUN groupadd -r appgroup && useradd -r -g appgroup -m appuser
 RUN chown -R appuser:appgroup /app
+
+# Set HuggingFace cache to writable location
+ENV HF_HOME=/app/.cache/huggingface
+RUN mkdir -p /app/.cache/huggingface && chown -R appuser:appgroup /app/.cache
+
 USER appuser
 
 EXPOSE 8001
