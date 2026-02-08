@@ -883,6 +883,7 @@ class QuickTestRequest(BaseModel):
     system_prompt: Optional[str] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    ragas_embedding_model: Optional[str] = None
 
 
 class RetrievedContext(BaseModel):

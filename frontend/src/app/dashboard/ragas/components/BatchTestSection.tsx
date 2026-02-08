@@ -17,6 +17,7 @@ interface BatchTestSectionProps {
   selectedCourseId: number;
   onBatchTestComplete: () => void;
   savedResultsGroups: RagasGroupInfo[];
+  ragasEmbeddingModel?: string;
 }
 
 interface BatchTestResult {
@@ -52,7 +53,7 @@ interface BatchResumeState {
   lastUpdatedAtMs: number;
 }
 
-export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedResultsGroups }: BatchTestSectionProps) {
+export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedResultsGroups, ragasEmbeddingModel }: BatchTestSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [batchTestJson, setBatchTestJson] = useState("");
   const [isBatchTesting, setIsBatchTesting] = useState(false);
@@ -296,6 +297,7 @@ export function BatchTestSection({ selectedCourseId, onBatchTestComplete, savedR
         group_name: opts.groupName,
         enable_wandb: false,
         only_indices: opts.onlyIndices,
+        ragas_embedding_model: ragasEmbeddingModel || undefined,
       }),
     });
 

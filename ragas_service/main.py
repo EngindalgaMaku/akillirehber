@@ -388,6 +388,9 @@ class VoyageDirectEmbeddings:
     def embed_query(self, text: str) -> list:
         return self._call_api([text], input_type="query")[0]
     
+    def embed_text(self, text: str) -> list:
+        return self.embed_query(text)
+    
     def embed_documents(self, texts: list) -> list:
         if not texts:
             return []

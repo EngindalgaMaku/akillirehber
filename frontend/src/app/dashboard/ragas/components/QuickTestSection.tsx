@@ -17,6 +17,7 @@ interface QuickTestSectionProps {
   setQuickTestResult: (result: QuickTestResponse | null) => void;
   onResultSaved: () => void;
   savedResultsGroups: RagasGroupInfo[];
+  ragasEmbeddingModel?: string;
 }
 
 export function QuickTestSection({ 
@@ -24,7 +25,8 @@ export function QuickTestSection({
   quickTestResult, 
   setQuickTestResult,
   onResultSaved,
-  savedResultsGroups
+  savedResultsGroups,
+  ragasEmbeddingModel
 }: QuickTestSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [question, setQuestion] = useState("");
@@ -71,7 +73,8 @@ export function QuickTestSection({
         alternative_ground_truths: alternatives.filter(a => a.trim() !== ""),
         system_prompt: systemPrompt || undefined,
         llm_provider: llmModel ? "openrouter" : undefined,
-        llm_model: llmModel || undefined
+        llm_model: llmModel || undefined,
+        ragas_embedding_model: ragasEmbeddingModel || undefined
       });
       setQuickTestResult(result);
       toast.success("Test tamamlandı");

@@ -22,6 +22,12 @@ export default function RagasPage() {
   // Settings State
   const [ragasSettings, setRagasSettings] = useState<RagasSettings | null>(null);
   const [ragasProviders, setRagasProviders] = useState<RagasProvider[]>([]);
+  const [ragasEmbeddingModel, setRagasEmbeddingModel] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('ragas_embedding_model') || "";
+    }
+    return "";
+  });
 
   // Quick Test Result
   const [quickTestResult, setQuickTestResult] = useState<QuickTestResponse | null>(null);
@@ -123,6 +129,11 @@ export default function RagasPage() {
                 ragasSettings={ragasSettings}
                 ragasProviders={ragasProviders}
                 onSettingsUpdate={loadRagasSettings}
+                selectedEmbeddingModel={ragasEmbeddingModel}
+                onEmbeddingModelChange={(model) => {
+                  setRagasEmbeddingModel(model);
+                  localStorage.setItem('ragas_embedding_model', model);
+                }}
               />
 
               <Link href="/dashboard/ragas/results">
@@ -208,12 +219,14 @@ export default function RagasPage() {
             setQuickTestResult={setQuickTestResult}
             onResultSaved={loadSavedResultsGroups}
             savedResultsGroups={savedResultsGroups}
+            ragasEmbeddingModel={ragasEmbeddingModel}
           />
 
           <BatchTestSection
             selectedCourseId={selectedCourseId}
             onBatchTestComplete={loadSavedResultsGroups}
             savedResultsGroups={savedResultsGroups}
+            ragasEmbeddingModel={ragasEmbeddingModel}
           />
         </div>
       )}

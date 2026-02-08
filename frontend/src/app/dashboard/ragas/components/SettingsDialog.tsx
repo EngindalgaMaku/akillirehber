@@ -14,13 +14,16 @@ interface SettingsDialogProps {
   ragasSettings: RagasSettings | null;
   ragasProviders: RagasProvider[];
   onSettingsUpdate: () => void;
+  selectedEmbeddingModel: string;
+  onEmbeddingModelChange: (model: string) => void;
 }
 
-export function SettingsDialog({ ragasSettings, ragasProviders, onSettingsUpdate }: SettingsDialogProps) {
-  const { getLLMProviders, getLLMModels, isLoading: providersLoading } = useModelProviders();
+export function SettingsDialog({ ragasSettings, ragasProviders, onSettingsUpdate, selectedEmbeddingModel, onEmbeddingModelChange }: SettingsDialogProps) {
+  const { getLLMProviders, getLLMModels, getEmbeddingModels, isLoading: providersLoading } = useModelProviders();
   const [isOpen, setIsOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
+  const [localEmbeddingModel, setLocalEmbeddingModel] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -30,6 +33,10 @@ export function SettingsDialog({ ragasSettings, ragasProviders, onSettingsUpdate
     }
   }, [ragasSettings]);
 
+  useEffect(() => {
+    setLocalEmbeddingModel(selectedEmbeddingModel);
+  }, [selectedEmbeddingModel]);
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
@@ -37,6 +44,7 @@ export function SettingsDialog({ ragasSettings, ragasProviders, onSettingsUpdate
         provider: selectedProvider || "",
         model: selectedModel || ""
       });
+      onEmbeddingModelChange(localEmbeddingModel);
       toast.success("RAGAS ayarları güncellendi");
       setIsOpen(false);
       onSettingsUpdate();
@@ -67,10 +75,43 @@ export function SettingsDialog({ ragasSettings, ragasProviders, onSettingsUpdate
             RAGAS Değerlendirme Ayarları
           </DialogTitle>
           <DialogDescription>
-            RAGAS değerlendirmesi için kullanılacak LLM modelini seçin.
+            RAGAS değerlendirmesi için kullanılacak LLM ve embedding modelini seçin.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
+          {/* Embedding Model Selection */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">RAGAS Embedding Model</Label>
+            <p className="text-xs text-slate-500">answer_relevancy ve answer_correctness metrikleri için kullanılır</p>
+            <Select
+              value={localEmbeddingModel || "course_default"}
+              onValueChange={(v) => setLocalEmbeddingModel(v === "course_default" ? "" : v)}
+            >
+              <SelectTrigger className="h-11">
+                <SelectValue placeholder="Ders embedding modeli (varsayılan)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="course_default">
+                  <span className="flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-amber-500" />
+                    Ders Embedding Modeli (Varsayılan)
+                  </span>
+                </SelectItem>
+                {getEmbeddingModels().map((model) => {
+                  const parts = model.split('/');
+                  const provider = parts[0];
+                  const modelName = parts.slice(1).join('/');
+                  return (
+                    <SelectItem key={model} value={model}>
+                      {provider.charAt(0).toUpperCase() + provider.slice(1)} / {modelName}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* LLM Provider Selection */}
           <div className="space-y-2">
             <Label className="text-sm font-medium">LLM Provider</Label>
             <Select 
@@ -122,14 +163,19 @@ export function SettingsDialog({ ragasSettings, ragasProviders, onSettingsUpdate
             </div>
           )}
 
-          {(selectedProvider || selectedModel) && (
+          {(selectedProvider || selectedModel || localEmbeddingModel) && (
             <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-xl p-4 border border-slate-200">
               <p className="font-semibold text-slate-700 mb-2 flex items-center gap-2">
                 <Activity className="w-4 h-4" />
                 Seçili Ayarlar
               </p>
-              {selectedProvider && (
+              {localEmbeddingModel && (
                 <p className="text-sm text-slate-600">
+                  RAGAS Embedding: <span className="font-medium text-slate-900">{localEmbeddingModel}</span>
+                </p>
+              )}
+              {selectedProvider && (
+                <p className="text-sm text-slate-600 mt-1">
                   Provider: <span className="font-medium text-slate-900">{selectedProvider === "auto" ? "Otomatik" : selectedProvider}</span>
                 </p>
               )}

@@ -1719,6 +1719,14 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
         # Call RAGAS service for metrics (RAGAS expects plain text contexts)
         ragas_service = RagasEvaluationService(db)
         
+        # Determine embedding model for RAGAS metrics
+        ragas_emb_model = data.ragas_embedding_model or course_settings.default_embedding_model
+        ragas_emb_provider = get_embedding_provider_from_model(ragas_emb_model)
+        # Clean provider prefix for embedding model name (e.g., "openai/text-embedding-3-small" -> "text-embedding-3-small" for openai provider)
+        ragas_emb_model_clean = ragas_emb_model
+        if "/" in ragas_emb_model and ragas_emb_provider != "openrouter":
+            ragas_emb_model_clean = ragas_emb_model.split("/", 1)[1] if "/" in ragas_emb_model else ragas_emb_model
+        
         metrics = ragas_service._get_ragas_metrics_sync(
             data.question,
             ground_truths,
@@ -1727,8 +1735,8 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             evaluation_model_used,
             reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
             reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
-            embedding_provider=get_embedding_provider_from_model(course_settings.default_embedding_model),
-            embedding_model=course_settings.default_embedding_model
+            embedding_provider=ragas_emb_provider,
+            embedding_model=ragas_emb_model_clean
         )
 
         logger.info(
@@ -2404,6 +2412,7 @@ class BatchTestStreamRequest(BaseModel):
     group_name: str
     enable_wandb: bool = False
     only_indices: Optional[List[int]] = None
+    ragas_embedding_model: Optional[str] = None
 
 
 @router.post("/quick-test-results/batch-stream")
@@ -2742,14 +2751,21 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                             ground_truths.extend(alternative_ground_truths)
                         
                         # Get RAGAS metrics
+                        # Use ragas_embedding_model override if provided
+                        batch_ragas_emb_model = data.ragas_embedding_model or course_settings.default_embedding_model
+                        batch_ragas_emb_provider = get_embedding_provider_from_model(batch_ragas_emb_model)
+                        batch_ragas_emb_model_clean = batch_ragas_emb_model
+                        if "/" in batch_ragas_emb_model and batch_ragas_emb_provider != "openrouter":
+                            batch_ragas_emb_model_clean = batch_ragas_emb_model.split("/", 1)[1]
+                        
                         metrics = ragas_service._get_ragas_metrics_sync(
                             question,
                             ground_truths,
                             generated_answer,
                             context_texts,
                             evaluation_model_for_batch,
-                            embedding_provider=get_embedding_provider_from_model(course_settings.default_embedding_model),
-                            embedding_model=course_settings.default_embedding_model
+                            embedding_provider=batch_ragas_emb_provider,
+                            embedding_model=batch_ragas_emb_model_clean
                         )
                         
                         # VALIDATE METRICS - Retry if critical metrics are missing or None

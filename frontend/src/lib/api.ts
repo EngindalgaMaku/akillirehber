@@ -2279,6 +2279,7 @@ export interface QuickTestRequest {
   system_prompt?: string;
   llm_provider?: string;
   llm_model?: string;
+  ragas_embedding_model?: string;
 }
 
 export interface QuickTestResponse {
