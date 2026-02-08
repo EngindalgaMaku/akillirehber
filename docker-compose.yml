@@ -45,6 +45,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Numba cache directory for UMAP (required by Giskard)
       - NUMBA_CACHE_DIR=/tmp/numba_cache
+      - WANDB_DATA_DIR=/tmp/wandb
     volumes:
       - ./backend/app:/app/app:ro
       - ./backend/alembic:/app/alembic:ro

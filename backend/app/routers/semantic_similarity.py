@@ -1191,6 +1191,10 @@ async def wandb_export_group(
             ),
         )
 
+    # Sanitize project name - W&B forbids /,\,#,?,%,:
+    import re as _re
+    wb_project = _re.sub(r'[/\\#?%:]', '-', wb_project)
+
     # Load all results for this group
     results = (
         db.query(SemanticSimilarityResult)
@@ -1232,7 +1236,7 @@ async def wandb_export_group(
     course_settings = get_or_create_settings(db, data.course_id)
 
     wb_entity = os.getenv("WANDB_ENTITY")
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_name = (
         f"semantic-similarity-{data.course_id}-{data.group_name}-{timestamp}"
     )
