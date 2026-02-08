@@ -772,7 +772,7 @@ export default function SemanticSimilarityPage() {
         embedding_model: selectedEmbeddingModel || undefined,
         llm_provider: selectedLlmProvider || undefined,
         llm_model: selectedLlmModel || undefined,
-        use_direct_llm: isDirectLlmEnabled || undefined
+        use_direct_llm: isDirectLlmEnabled ? true : undefined
       });
       setQuickTestResult(result);
       toast.success("Test tamamlandı");
@@ -999,7 +999,7 @@ export default function SemanticSimilarityPage() {
         reranker_used: isRerankerEnabled,
         reranker_provider: isRerankerEnabled ? (selectedRerankerProvider || undefined) : undefined,
         reranker_model: isRerankerEnabled ? (selectedRerankerModel || undefined) : undefined,
-        use_direct_llm: isDirectLlmEnabled || undefined
+        use_direct_llm: isDirectLlmEnabled ? true : undefined
       })
     });
 

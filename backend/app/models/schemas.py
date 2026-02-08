@@ -388,6 +388,7 @@ class CourseSettingsBase(BaseModel):
     system_prompt_remembering: Optional[str] = None
     system_prompt_understanding_applying: Optional[str] = None
     system_prompt_analyzing_evaluating: Optional[str] = None
+    enable_direct_llm: bool = False
     enable_reranker: bool = False
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
@@ -435,6 +436,7 @@ class CourseSettingsUpdate(BaseModel):
             max_length=5000,
         )
     )
+    enable_direct_llm: Optional[bool] = None
     enable_reranker: Optional[bool] = None
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
@@ -1070,6 +1072,7 @@ class SemanticSimilarityQuickTestRequest(BaseModel):
     embedding_model: Optional[str] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    use_direct_llm: Optional[bool] = None
 
 
 class ScoreDetail(BaseModel):
@@ -1153,6 +1156,7 @@ class SemanticSimilarityBatchTestRequest(BaseModel):
     reranker_used: Optional[bool] = None  # Override reranker usage
     reranker_provider: Optional[str] = None  # Override reranker provider
     reranker_model: Optional[str] = None  # Override reranker model
+    use_direct_llm: Optional[bool] = None  # Direct LLM mode (bypass RAG)
 
 
 class SemanticSimilarityBatchResult(BaseModel):

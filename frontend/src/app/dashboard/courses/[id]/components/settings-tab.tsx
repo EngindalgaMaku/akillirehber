@@ -376,6 +376,8 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
         reranker_provider: formData.reranker_provider || undefined,
         reranker_model: formData.reranker_model || undefined,
       };
+      console.log("[SAVE] enable_direct_llm:", settingsToSave.enable_direct_llm);
+      console.log("[SAVE] Full payload:", JSON.stringify(settingsToSave, null, 2));
       await api.updateCourseSettings(courseId, settingsToSave);
       toast.success("Ayarlar kaydedildi");
       setValidationErrors([]);

@@ -164,6 +164,9 @@ class CourseSettings(Base):
     system_prompt_understanding_applying = Column(Text, nullable=True)
     system_prompt_analyzing_evaluating = Column(Text, nullable=True)
     
+    # Direct LLM mode (bypass RAG pipeline)
+    enable_direct_llm = Column(Boolean, default=False, nullable=False)
+    
     # Reranker settings
     enable_reranker = Column(Boolean, default=False, nullable=False)
     reranker_provider = Column(String(50), nullable=True)  # cohere/alibaba

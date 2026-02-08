@@ -178,7 +178,10 @@ async def chat_with_course(
     # Debug log for troubleshooting
     print(f"Chunk validation for course {course_id}: {chunk_validation}")
 
-    if not chunk_validation.get("valid", False):
+    # Get course settings for LLM configuration (needed before chunk validation for Direct LLM check)
+    settings = get_or_create_settings(db, course_id)
+
+    if not chunk_validation.get("valid", False) and not getattr(settings, 'enable_direct_llm', False):
         message = (
             "Bu derste henüz sohbet için hazır doküman bulunmuyor. "
             "Lütfen dokümanların işlendiğinden emin olun veya öğretmeninize "
@@ -204,11 +207,102 @@ async def chat_with_course(
         db.commit()
         return ChatResponse(message=message, sources=[])
 
-    # Get course settings for LLM configuration
-    settings = get_or_create_settings(db, course_id)
-    
     # Debug log for embedding model
     print(f"Course embedding model: {settings.default_embedding_model}")
+
+    # ==================== DIRECT LLM MODE ====================
+    # If Direct LLM mode is enabled, bypass RAG pipeline entirely
+    if getattr(settings, 'enable_direct_llm', False):
+        print(f"[CHAT] Direct LLM mode enabled for course {course_id} - bypassing RAG pipeline")
+        
+        # Save user message
+        db.add(
+            ChatMessageDB(
+                course_id=course_id,
+                user_id=current_user.id,
+                role="user",
+                content=request.message,
+            )
+        )
+        
+        # Build messages for LLM (no context, no system prompt override)
+        direct_messages = [
+            {"role": "system", "content": "Sen yardımcı bir asistansın. Soruları kendi bilginle yanıtla."},
+        ]
+        
+        # Add chat history from memory (if available)
+        short_term_context = []
+        if memory_enabled and memory_service:
+            try:
+                short_term_context = memory_service.get_short_term_context(
+                    user_id=current_user.id,
+                    course_id=course_id,
+                    limit=30
+                )
+            except Exception as e:
+                print(f"[CHAT] Failed to get short-term context: {e}")
+        
+        if short_term_context:
+            for msg in short_term_context:
+                direct_messages.append({"role": msg['role'], "content": msg['content']})
+        
+        direct_messages.append({"role": "user", "content": request.message})
+        
+        try:
+            llm_service = get_llm_service(
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens
+            )
+            
+            start_time = time.time()
+            assistant_message = llm_service.generate_response(direct_messages)
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            db.add(
+                ChatMessageDB(
+                    course_id=course_id,
+                    user_id=current_user.id,
+                    role="assistant",
+                    content=assistant_message,
+                    sources=[],
+                    response_time_ms=response_time_ms,
+                )
+            )
+            db.commit()
+            
+            # Add to memory
+            if memory_enabled and memory_service:
+                try:
+                    session_id_mem = str(uuid.uuid4())
+                    memory_service.add_message_to_short_term(
+                        user_id=current_user.id,
+                        course_id=course_id,
+                        role="user",
+                        content=request.message,
+                        session_id=session_id_mem,
+                        embedding_model=settings.default_embedding_model
+                    )
+                    memory_service.add_message_to_short_term(
+                        user_id=current_user.id,
+                        course_id=course_id,
+                        role="assistant",
+                        content=assistant_message,
+                        session_id=session_id_mem,
+                        embedding_model=settings.default_embedding_model
+                    )
+                except Exception as e:
+                    print(f"[CHAT] Failed to add messages to memory: {e}")
+            
+            return ChatResponse(message=assistant_message, sources=[])
+        
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Direct LLM error: {str(e)}"
+            ) from e
+    # ==================== END DIRECT LLM MODE ====================
 
     # Get conversation context from memory (if enabled)
     short_term_context = []

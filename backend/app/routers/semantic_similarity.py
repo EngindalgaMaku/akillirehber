@@ -166,6 +166,24 @@ async def quick_test(
             )
         
         if not generated_answer:
+            # Determine if direct LLM mode should be used
+            use_direct_llm = bool(
+                data.use_direct_llm
+                if data.use_direct_llm is not None
+                else getattr(course_settings, 'enable_direct_llm', False)
+            )
+            
+            logger.info(
+                "Quick test - use_direct_llm resolved to: %s "
+                "(request: %s, course_setting: %s)",
+                use_direct_llm,
+                data.use_direct_llm,
+                getattr(course_settings, 'enable_direct_llm', False)
+            )
+            print(f"[QUICK TEST] use_direct_llm={use_direct_llm}, "
+                  f"data.use_direct_llm={data.use_direct_llm}, "
+                  f"course_settings.enable_direct_llm={getattr(course_settings, 'enable_direct_llm', False)}")
+            
             # Use the service's generate_answer method which includes RAG
             # (retrieves context from Weaviate and generates answer with LLM)
             generated_answer, retrieved_contexts, llm_model_used = (
@@ -173,12 +191,14 @@ async def quick_test(
                     course_id=data.course_id,
                     question=data.question,
                     llm_provider=data.llm_provider,
-                    llm_model=data.llm_model
+                    llm_model=data.llm_model,
+                    use_direct_llm=use_direct_llm,
                 )
             )
             logger.info(
-                "Generated answer using RAG pipeline with %d contexts, "
+                "Generated answer using %s with %d contexts, "
                 "LLM: %s",
+                "Direct LLM" if use_direct_llm else "RAG pipeline",
                 len(retrieved_contexts),
                 llm_model_used
             )
@@ -283,12 +303,18 @@ async def batch_test(
                 retrieved_contexts = []
                 
                 if not generated_answer:
+                    use_direct_llm = bool(
+                        data.use_direct_llm
+                        if data.use_direct_llm is not None
+                        else getattr(course_settings, 'enable_direct_llm', False)
+                    )
                     generated_answer, retrieved_contexts, llm_model_used = (
                         service.generate_answer(
                             course_id=data.course_id,
                             question=test_case.question,
                             llm_provider=data.llm_provider,
-                            llm_model=data.llm_model
+                            llm_model=data.llm_model,
+                            use_direct_llm=use_direct_llm,
                         )
                     )
                 
@@ -451,7 +477,12 @@ async def batch_test_stream(
                         data.search_alpha,
                         data.reranker_used,
                         data.reranker_provider,
-                        data.reranker_model
+                        data.reranker_model,
+                        bool(
+                            data.use_direct_llm
+                            if data.use_direct_llm is not None
+                            else getattr(course_settings, 'enable_direct_llm', False)
+                        )
                     ): idx
                     for idx, test_case in enumerate(data.test_cases)
                 }
@@ -511,7 +542,8 @@ def _process_test_case(
     search_alpha: float = None,
     reranker_used: bool = None,
     reranker_provider: str = None,
-    reranker_model: str = None
+    reranker_model: str = None,
+    use_direct_llm: bool = False
 ) -> dict:
     """Process a single test case with retry mechanism."""
     retry_count = 0
@@ -541,6 +573,7 @@ def _process_test_case(
                         llm_provider=llm_provider,
                         llm_model=llm_model,
                         embedding_model=embedding_model,
+                        use_direct_llm=use_direct_llm,
                     )
                 )
                 force_regenerate = False
@@ -2005,6 +2038,7 @@ async def resume_batch_test_session(
                                 llm_provider=fresh_session.llm_provider,
                                 llm_model=fresh_session.llm_model,
                                 embedding_model=embedding_model,
+                                use_direct_llm=getattr(course_settings, 'enable_direct_llm', False),
                             )
                             force_regenerate = False
 
@@ -2850,7 +2884,12 @@ async def batch_test_stream_cancellable(
                         data.search_alpha,
                         data.reranker_used,
                         data.reranker_provider,
-                        data.reranker_model
+                        data.reranker_model,
+                        bool(
+                            data.use_direct_llm
+                            if data.use_direct_llm is not None
+                            else getattr(course_settings, 'enable_direct_llm', False)
+                        )
                     ): idx
                     for idx, test_case in enumerate(data.test_cases)
                 }
@@ -2938,7 +2977,8 @@ def _process_test_case_cancellable(
     search_alpha: float = None,
     reranker_used: bool = None,
     reranker_provider: str = None,
-    reranker_model: str = None
+    reranker_model: str = None,
+    use_direct_llm: bool = False
 ) -> dict:
     """Process a single test case with cancellation support."""
     # CRITICAL: Create a new database session for this thread
@@ -2988,6 +3028,7 @@ def _process_test_case_cancellable(
                             llm_provider=llm_provider,
                             llm_model=llm_model,
                             embedding_model=embedding_model,
+                            use_direct_llm=use_direct_llm,
                         )
                     )
                     force_regenerate = False

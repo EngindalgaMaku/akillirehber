@@ -497,6 +497,7 @@ class SemanticSimilarityService:
         llm_provider: Optional[str] = None,
         llm_model: Optional[str] = None,
         embedding_model: Optional[str] = None,
+        use_direct_llm: bool = False,
     ) -> Tuple[str, List[str], str]:
         """Generate an answer using the RAG pipeline.
 
@@ -508,6 +509,7 @@ class SemanticSimilarityService:
             question: Question to answer
             llm_provider: Optional LLM provider override
             llm_model: Optional LLM model override
+            use_direct_llm: If True, bypass RAG and call LLM directly
 
         Returns:
             Tuple of (generated_answer, retrieved_contexts, llm_model_used)
@@ -530,6 +532,31 @@ class SemanticSimilarityService:
             llm_provider or settings.llm_provider
         )
         actual_model = llm_model or settings.llm_model
+        llm_model_used = f"{actual_provider}/{actual_model}"
+
+        # ==================== DIRECT LLM MODE ====================
+        if use_direct_llm:
+            logger.info(
+                "Direct LLM mode: bypassing RAG for course %d", course_id
+            )
+            print(f"[DIRECT LLM] *** DIRECT LLM MODE ACTIVE *** Course: {course_id}, Question: {question[:80]}...")
+            messages = [
+                {"role": "system", "content": "Sen yardımcı bir asistansın. Soruları kendi bilginle yanıtla."},
+                {"role": "user", "content": question},
+            ]
+            llm_service = get_llm_service(
+                provider=actual_provider,
+                model=actual_model,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
+            )
+            generated_answer = llm_service.generate_response(messages)
+            print(f"[DIRECT LLM] Answer (first 200 chars): {generated_answer[:200]}...")
+            print(f"[DIRECT LLM] Contexts returned: [] (empty - no RAG)")
+            return generated_answer, [], llm_model_used
+        else:
+            print(f"[DIRECT LLM] RAG mode active for course {course_id}")
+        # ==================== END DIRECT LLM MODE ====================
 
         # Get query embedding
         query_embedding_model = (
