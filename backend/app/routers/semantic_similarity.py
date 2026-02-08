@@ -17,7 +17,8 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.models.db_models import (
-    User, SemanticSimilarityResult, BatchTestSession, TestDataset
+    User, SemanticSimilarityResult, BatchTestSession, TestDataset,
+    TestSet, TestQuestion
 )
 from app.models.schemas import (
     SemanticSimilarityQuickTestRequest,
@@ -2552,11 +2553,16 @@ async def save_test_dataset(
     current_user: User = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
-    """Save a test dataset for batch testing."""
+    """Save a test dataset for batch testing.
+    
+    Also creates a corresponding TestSet + TestQuestions in the RAGAS tables
+    so the dataset appears in the unified test set dropdown.
+    """
+
     # Verify course access
     verify_course_access(db, data.course_id, current_user)
     
-    # Create dataset
+    # 1. Save to legacy test_datasets table
     dataset = TestDataset(
         course_id=data.course_id,
         user_id=current_user.id,
@@ -2567,12 +2573,44 @@ async def save_test_dataset(
     )
 
     db.add(dataset)
+    db.flush()
+
+    # 2. Also create in new test_sets + test_questions tables
+    test_set = TestSet(
+        course_id=data.course_id,
+        name=data.name,
+        description=data.description,
+        created_by=current_user.id,
+    )
+    db.add(test_set)
+    db.flush()
+
+    for tc in data.test_cases:
+        question_text = tc.get("question", "")
+        ground_truth_text = tc.get("ground_truth", "")
+        if not question_text or not ground_truth_text:
+            continue
+        alt_gts = tc.get("alternative_ground_truths")
+        expected_ctx = tc.get("expected_contexts")
+        metadata = {}
+        if tc.get("bloom_level"):
+            metadata["bloom_level"] = tc["bloom_level"]
+        tq = TestQuestion(
+            test_set_id=test_set.id,
+            question=question_text,
+            ground_truth=ground_truth_text,
+            alternative_ground_truths=alt_gts if alt_gts else None,
+            expected_contexts=expected_ctx if expected_ctx else None,
+            question_metadata=metadata if metadata else None,
+        )
+        db.add(tq)
+
     db.commit()
     db.refresh(dataset)
 
     logger.info(
-        "Test dataset saved - id: %s, name: %s, course_id: %s, test_cases: %d",
-        dataset.id, dataset.name, data.course_id, len(data.test_cases)
+        "Test dataset saved - id: %s, test_set_id: %s, name: %s, course_id: %s, test_cases: %d",
+        dataset.id, test_set.id, dataset.name, data.course_id, len(data.test_cases)
     )
 
     return {
@@ -2591,7 +2629,6 @@ async def get_test_datasets(
     db: Session = Depends(get_db),
 ):
     """Get all test datasets for a course."""
-    from app.models.db_models import TestDataset
     
     # Verify course access
     verify_course_access(db, course_id, current_user)
@@ -2622,7 +2659,6 @@ async def get_test_dataset(
     db: Session = Depends(get_db),
 ):
     """Get a specific test dataset."""
-    from app.models.db_models import TestDataset
     
     dataset = db.query(TestDataset).filter(
         TestDataset.id == dataset_id
@@ -2657,7 +2693,6 @@ async def delete_test_dataset(
     db: Session = Depends(get_db),
 ):
     """Delete a test dataset."""
-    from app.models.db_models import TestDataset
     
     dataset = db.query(TestDataset).filter(
         TestDataset.id == dataset_id
@@ -2678,6 +2713,63 @@ async def delete_test_dataset(
     )
     
     return {"message": "Dataset deleted successfully"}
+
+
+@router.post("/test-datasets/migrate-to-test-sets")
+async def migrate_test_datasets_to_test_sets(
+    course_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Migrate legacy test_datasets to new test_sets + test_questions tables."""
+    verify_course_access(db, course_id, current_user)
+
+    datasets = db.query(TestDataset).filter(
+        TestDataset.course_id == course_id
+    ).all()
+
+    migrated = 0
+    for dataset in datasets:
+        # Check if already migrated (same name exists in test_sets)
+        existing = db.query(TestSet).filter(
+            TestSet.course_id == course_id,
+            TestSet.name == dataset.name,
+        ).first()
+        if existing:
+            continue
+
+        try:
+            test_cases = json.loads(dataset.test_cases)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        ts = TestSet(
+            course_id=course_id,
+            name=dataset.name,
+            description=dataset.description,
+            created_by=current_user.id,
+        )
+        db.add(ts)
+        db.flush()
+
+        for tc in test_cases:
+            q = tc.get("question", "")
+            gt = tc.get("ground_truth", "")
+            if not q or not gt:
+                continue
+            tq = TestQuestion(
+                test_set_id=ts.id,
+                question=q,
+                ground_truth=gt,
+                alternative_ground_truths=tc.get("alternative_ground_truths"),
+                expected_contexts=tc.get("expected_contexts"),
+            )
+            db.add(tq)
+
+        migrated += 1
+
+    db.commit()
+    return {"migrated": migrated, "total_legacy": len(datasets)}
 
 
 # ==================== Cancellable Batch Test Endpoint ====================
