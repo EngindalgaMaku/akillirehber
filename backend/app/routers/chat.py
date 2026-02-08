@@ -255,6 +255,18 @@ async def chat_with_course(
     # Search for relevant chunks using course settings
     weaviate_service = get_weaviate_service()
     
+    # Debug: Check vector availability per document
+    docs_in_course = db.query(Document).filter(
+        Document.course_id == course_id,
+        Document.is_processed.is_(True)
+    ).all()
+    for doc in docs_in_course:
+        vec_count = weaviate_service.get_document_vector_count(course_id, doc.id)
+        if vec_count == 0 and doc.embedding_status and doc.embedding_status.value == "completed":
+            print(f"[CHAT WARNING] Document {doc.id} ({doc.original_filename}) has embedding_status=completed but 0 vectors in Weaviate!")
+        else:
+            print(f"[CHAT DEBUG] Document {doc.id} ({doc.original_filename}): {vec_count} vectors in Weaviate")
+    
     # Use course settings for search parameters
     search_alpha = settings.search_alpha
     search_top_k = settings.search_top_k

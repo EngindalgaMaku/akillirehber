@@ -104,11 +104,35 @@ async def embed_document(
         )
         print(f"Successfully stored {len(chunks_with_embeddings)} embeddings in {vector_store_name}")
 
+        # Verify vectors were actually stored in Weaviate
+        actual_count = vector_store.get_document_vector_count(
+            document.course_id, document_id
+        )
+        print(f"Verification: {actual_count} vectors found in {vector_store_name} for document {document_id}")
+        
+        if actual_count == 0:
+            document.embedding_status = EmbeddingStatus.ERROR
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Vectors were not persisted in {vector_store_name}. "
+                    f"Expected {len(chunks_with_embeddings)} but found 0. "
+                    "Please check vector store connection and try again."
+                )
+            )
+        
+        if actual_count < len(chunks_with_embeddings):
+            print(
+                f"⚠️ WARNING: Only {actual_count}/{len(chunks_with_embeddings)} "
+                f"vectors persisted for document {document_id}"
+            )
+
         # Update document status
         document.embedding_status = EmbeddingStatus.COMPLETED
         document.embedding_model = request.model
         document.embedded_at = datetime.utcnow()
-        document.vector_count = len(chunks_with_embeddings)
+        document.vector_count = actual_count
         db.commit()
 
         return EmbedResponse(

@@ -17,6 +17,7 @@ from app.models.db_models import (
     ProcessingStatusEnum,
     ProcessingStatus,
     DiagnosticReport,
+    EmbeddingStatus,
 )
 from app.services.document_processor import (
     DocumentProcessor,
@@ -47,12 +48,38 @@ def get_documents_by_course(db: Session, course_id: int) -> List[Document]:
 
 
 def get_document_with_chunk_count(db: Session, document: Document) -> dict:
-    """Get document data with chunk count."""
+    """Get document data with chunk count and verified vector count."""
     chunk_count = (
         db.query(func.count(Chunk.id))
         .filter(Chunk.document_id == document.id)
         .scalar()
     )
+    
+    # Verify vector count against Weaviate if document has embeddings
+    vector_count = document.vector_count or 0
+    if document.embedding_status and document.embedding_status.value == "completed" and document.course_id:
+        try:
+            from app.services.vector_store_factory import get_vector_store_for_course
+            vector_store = get_vector_store_for_course(document.course_id, db)
+            actual_count = vector_store.get_document_vector_count(
+                document.course_id, document.id
+            )
+            if actual_count != vector_count:
+                logger.warning(
+                    "Vector count mismatch for document %d: DB=%d, Weaviate=%d",
+                    document.id, vector_count, actual_count
+                )
+                # Update DB to reflect reality
+                document.vector_count = actual_count
+                if actual_count == 0:
+                    document.embedding_status = EmbeddingStatus.PENDING
+                    document.embedding_model = None
+                    document.embedded_at = None
+                db.commit()
+                vector_count = actual_count
+        except Exception as e:
+            logger.debug("Could not verify vector count for document %d: %s", document.id, e)
+    
     return {
         "id": document.id,
         "filename": document.filename,
@@ -67,7 +94,7 @@ def get_document_with_chunk_count(db: Session, document: Document) -> dict:
         "embedding_status": document.embedding_status,
         "embedding_model": document.embedding_model,
         "embedded_at": document.embedded_at,
-        "vector_count": document.vector_count,
+        "vector_count": vector_count,
     }
 
 

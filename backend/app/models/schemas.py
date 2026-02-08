@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict, Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models.db_models import UserRole
 
@@ -1112,18 +1112,34 @@ class SemanticSimilarityQuickTestResponse(BaseModel):
 
 
 class SemanticSimilarityTestCase(BaseModel):
-    """Schema for a single test case in batch testing."""
+    """Schema for a single test case in batch testing.
+    
+    Supports both English and Turkish field names:
+    - question / Soru
+    - ground_truth / İdeal Cevap (GT)
+    - context / Bağlam (Context)
+    - bloom_level / Bloom Seviyesi
+    - topic / Konu
+    - chunk_id / Chunk_ID
+    """
 
-    question: str
-    ground_truth: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    question: str = Field(..., validation_alias=AliasChoices("question", "Soru"))
+    ground_truth: str = Field(..., validation_alias=AliasChoices("ground_truth", "İdeal Cevap (GT)"))
     alternative_ground_truths: Optional[List[str]] = None
     generated_answer: Optional[str] = None
-    bloom_level: Optional[str] = None
+    bloom_level: Optional[str] = Field(default=None, validation_alias=AliasChoices("bloom_level", "Bloom Seviyesi"))
     question_metadata: Optional[Dict[str, Any]] = None
+    expected_contexts: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices("expected_contexts", "Bağlam (Context)"))
+    topic: Optional[str] = Field(default=None, validation_alias=AliasChoices("topic", "Konu"))
+    chunk_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("chunk_id", "Chunk_ID"))
 
 
 class SemanticSimilarityBatchTestRequest(BaseModel):
     """Schema for semantic similarity batch test request."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     course_id: int
     test_cases: List[SemanticSimilarityTestCase]
@@ -1426,6 +1442,8 @@ class BatchTestSessionListResponse(BaseModel):
 
 class BatchTestSessionCreate(BaseModel):
     """Schema for creating a batch test session."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     course_id: int
     test_cases: List[SemanticSimilarityTestCase]

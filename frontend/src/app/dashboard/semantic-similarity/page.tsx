@@ -814,6 +814,30 @@ export default function SemanticSimilarityPage() {
         }
       }
 
+      // Normalize test cases: convert Turkish field names to English and fix data types
+      testCases = testCases.map((tc: any) => ({
+        question: tc.question || tc["Soru"],
+        ground_truth: tc.ground_truth || tc["İdeal Cevap (GT)"],
+        alternative_ground_truths: tc.alternative_ground_truths,
+        generated_answer: tc.generated_answer,
+        bloom_level: tc.bloom_level || tc["Bloom Seviyesi"] || null,
+        question_metadata: tc.question_metadata,
+        // Convert string context to array, handle Turkish field name
+        expected_contexts: (() => {
+          const ctx = tc.expected_contexts || tc["Bağlam (Context)"];
+          if (!ctx) return null;
+          if (Array.isArray(ctx)) return ctx;
+          return [ctx]; // Wrap string in array
+        })(),
+        topic: tc.topic || tc["Konu"] || null,
+        // Convert chunk_id to string, handle Turkish field name
+        chunk_id: (() => {
+          const cid = tc.chunk_id || tc["Chunk_ID"];
+          if (cid === null || cid === undefined) return null;
+          return String(cid);
+        })(),
+      }));
+
       console.log(`Starting ${totalRuns} repeated batch tests with ${testCases.length} test cases each`);
       
       const token = localStorage.getItem('akilli_rehber_token');
