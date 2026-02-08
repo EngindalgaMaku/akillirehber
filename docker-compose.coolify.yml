@@ -69,6 +69,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - CLAUDEGG_API_KEY=${CLAUDEGG_API_KEY:-}
       - APICLAUDEGG_API_KEY=${APICLAUDEGG_API_KEY:-}
+      # Embedding Provider API Keys
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       # Optional: Force specific provider (groq, openrouter, openai, claudegg, apiclaudegg)
       - RAGAS_PROVIDER=${RAGAS_PROVIDER:-}
       # Optional: Override default model

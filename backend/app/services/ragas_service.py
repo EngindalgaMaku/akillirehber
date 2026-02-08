@@ -500,7 +500,9 @@ Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamda
             retrieved_contexts,
             evaluation_model,
             reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
-            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None
+            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
+            embedding_provider=course_settings.embedding_provider,
+            embedding_model=course_settings.default_embedding_model
         )
         
         latency_ms = int((time.time() - start_time) * 1000)
@@ -543,7 +545,9 @@ Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamda
         retrieved_contexts: list,
         evaluation_model: str = None,
         reranker_provider: str = None,
-        reranker_model: str = None
+        reranker_model: str = None,
+        embedding_provider: str = None,
+        embedding_model: str = None
     ) -> dict:
         """Get RAGAS metrics from evaluation service (sync version with retry).
         
@@ -555,6 +559,8 @@ Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamda
             evaluation_model: Optional OpenRouter model to use for evaluation
             reranker_provider: Optional reranker provider used (cohere/alibaba)
             reranker_model: Optional reranker model used
+            embedding_provider: Embedding provider to use for RAGAS metrics
+            embedding_model: Embedding model to use for RAGAS metrics
         """
         # Prepare payload with ground_truths list if available
         payload = {
@@ -563,6 +569,12 @@ Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamda
             "generated_answer": generated_answer,
             "retrieved_contexts": retrieved_contexts,
         }
+        
+        # Add embedding info for RAGAS answer_relevancy metric
+        if embedding_provider:
+            payload["embedding_provider"] = embedding_provider
+        if embedding_model:
+            payload["embedding_model"] = embedding_model
         
         # Send all ground truths if we have alternatives
         if ground_truths and len(ground_truths) > 1:

@@ -81,6 +81,8 @@ services:
       - COHERE_API_KEY=${COHERE_API_KEY:-}
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
       - ZAI_API_KEY=${ZAI_API_KEY:-}
+      # Embedding Provider API Keys
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       # Optional: Force specific provider (groq, openrouter, openai, claudegg, apiclaudegg, deepseek, cohere, alibaba, zai)
       - RAGAS_PROVIDER=${RAGAS_PROVIDER:-}
       # Optional: Override default model

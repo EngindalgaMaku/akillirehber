@@ -52,6 +52,10 @@ class EvaluationInput(BaseModel):
     retrieved_contexts: List[str]
     evaluation_model: Optional[str] = None
     
+    # Embedding settings (to match course's embedding model)
+    embedding_provider: Optional[str] = None  # "voyage", "openai", "openrouter", etc.
+    embedding_model: Optional[str] = None     # Model name
+    
     # Reranker metadata (optional, for tracking)
     reranker_provider: Optional[str] = None  # "cohere", "alibaba", or None
     reranker_model: Optional[str] = None     # Model name or None
@@ -334,36 +338,71 @@ def safe_float(value, default=None):
         return default
 
 
-def get_embeddings():
-    """Get embeddings instance - always use OpenRouter for consistency.
-
-    Embeddings must match the model used when creating course documents.
-    We always use OpenRouter with text-embedding-3-small for consistency.
+def get_embeddings(provider: Optional[str] = None, model: Optional[str] = None):
+    """Get embeddings instance based on provider and model.
+    
+    Args:
+        provider: Embedding provider ("voyage", "openai", "openrouter", etc.)
+        model: Embedding model name
+    
+    If provider/model not specified, falls back to OpenRouter text-embedding-3-small.
     """
     from langchain_openai import OpenAIEmbeddings
+    
+    logger.info(f"[EMBEDDINGS] Requested provider: {provider}, model: {model}")
+    
+    # Voyage AI embeddings
+    if provider == "voyage":
+        voyage_key = os.getenv("VOYAGE_API_KEY")
+        if voyage_key:
+            try:
+                from langchain_voyageai import VoyageAIEmbeddings
+                embedding_model = model or "voyage-3"
+                logger.info(f"[EMBEDDINGS] Using Voyage AI: {embedding_model}")
+                return VoyageAIEmbeddings(
+                    voyage_api_key=voyage_key,
+                    model=embedding_model,
+                )
+            except ImportError:
+                logger.warning("[EMBEDDINGS] langchain_voyageai not installed, falling back")
+    
+    # OpenAI embeddings (direct)
+    if provider == "openai":
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            embedding_model = model or "text-embedding-3-small"
+            logger.info(f"[EMBEDDINGS] Using OpenAI: {embedding_model}")
+            return OpenAIEmbeddings(
+                api_key=openai_key,
+                model=embedding_model
+            )
+    
+    # OpenRouter embeddings
+    if provider == "openrouter" or provider is None:
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if openrouter_key:
+            embedding_model = model or "openai/text-embedding-3-small"
+            logger.info(f"[EMBEDDINGS] Using OpenRouter: {embedding_model}")
+            return OpenAIEmbeddings(
+                api_key=openrouter_key,
+                base_url="https://openrouter.ai/api/v1",
+                model=embedding_model,
+                default_headers={
+                    "HTTP-Referer": "http://localhost:8001",
+                    "X-Title": SERVICE_NAME,
+                }
+            )
 
-    # Always use OpenRouter for embeddings (same as course creation)
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    if openrouter_key:
-        return OpenAIEmbeddings(
-            api_key=openrouter_key,
-            base_url="https://openrouter.ai/api/v1",
-            model="openai/text-embedding-3-small",
-            default_headers={
-                "HTTP-Referer": "http://localhost:8001",
-                "X-Title": SERVICE_NAME,
-            }
-        )
-
-    # Fallback to OpenAI if OpenRouter not available
+    # Final fallback to OpenAI
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
+        logger.info("[EMBEDDINGS] Fallback to OpenAI text-embedding-3-small")
         return OpenAIEmbeddings(
             api_key=openai_key,
             model="text-embedding-3-small"
         )
 
-    logger.warning("No embedding API key available (need OPENROUTER or OPENAI)")
+    logger.warning("No embedding API key available")
     return None
 
 
@@ -435,7 +474,11 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
 
         llm = ChatOpenAI(**llm_kwargs)
         
-        embeddings = get_embeddings()
+        # Get embeddings using course's embedding settings
+        embeddings = get_embeddings(
+            provider=input_data.embedding_provider,
+            model=input_data.embedding_model
+        )
 
         if not embeddings:
             return EvaluationOutput(
@@ -499,7 +542,7 @@ def evaluate_with_ragas(input_data: EvaluationInput) -> EvaluationOutput:
             dataset,
             metrics=[
                 faithfulness,
-                answer_relevancy,  # Use original RAGAS metric (works better!)
+                answer_relevancy,
                 context_precision,
                 context_recall,
                 answer_correctness,

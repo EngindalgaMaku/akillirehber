@@ -1658,7 +1658,9 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             context_texts,
             evaluation_model_used,
             reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
-            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None
+            reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
+            embedding_provider=course_settings.embedding_provider,
+            embedding_model=course_settings.default_embedding_model
         )
 
         logger.info(
@@ -2625,7 +2627,9 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                             ground_truths,
                             generated_answer,
                             context_texts,
-                            evaluation_model_for_batch
+                            evaluation_model_for_batch,
+                            embedding_provider=course_settings.embedding_provider,
+                            embedding_model=course_settings.default_embedding_model
                         )
                         
                         # VALIDATE METRICS - Retry if critical metrics are missing or None

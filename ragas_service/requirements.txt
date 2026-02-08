@@ -5,6 +5,7 @@ langchain>=0.3.18
 langchain-core>=0.3.34
 langchain-openai>=0.3.0
 langchain-cohere>=0.3.3
+langchain-voyageai>=0.3.0
 cohere>=5.11.0
 openai>=1.50.0
 pydantic>=2.10.0
