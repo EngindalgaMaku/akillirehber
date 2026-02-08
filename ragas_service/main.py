@@ -16,6 +16,19 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "RAGAS Evaluation Service"
 
+# Check Voyage AI availability at startup
+try:
+    from langchain_voyageai import VoyageAIEmbeddings
+    VOYAGE_AVAILABLE = True
+    logger.info("[STARTUP] langchain_voyageai is available")
+except ImportError as e:
+    VOYAGE_AVAILABLE = False
+    logger.warning(f"[STARTUP] langchain_voyageai NOT available: {e}")
+
+# Check VOYAGE_API_KEY at startup
+voyage_key_present = bool(os.getenv("VOYAGE_API_KEY"))
+logger.info(f"[STARTUP] VOYAGE_API_KEY present: {voyage_key_present}")
+
 app = FastAPI(
     title=SERVICE_NAME,
     description="Service for evaluating RAG systems using RAGAS metrics",
@@ -103,6 +116,8 @@ class HealthResponse(BaseModel):
     timestamp: str
     ragas_available: bool
     llm_provider: str
+    voyage_available: bool = False
+    voyage_api_key_present: bool = False
 
 
 # ==================== LLM Provider Configurations ====================
@@ -354,17 +369,25 @@ def get_embeddings(provider: Optional[str] = None, model: Optional[str] = None):
     # Voyage AI embeddings
     if provider == "voyage":
         voyage_key = os.getenv("VOYAGE_API_KEY")
-        if voyage_key:
+        logger.info(f"[EMBEDDINGS] Voyage provider requested, API key present: {bool(voyage_key)}, VOYAGE_AVAILABLE: {VOYAGE_AVAILABLE}")
+        if voyage_key and VOYAGE_AVAILABLE:
             try:
                 from langchain_voyageai import VoyageAIEmbeddings
+                # Clean model name - remove "voyage/" prefix if present
                 embedding_model = model or "voyage-3"
+                if embedding_model.startswith("voyage/"):
+                    embedding_model = embedding_model.replace("voyage/", "", 1)
                 logger.info(f"[EMBEDDINGS] Using Voyage AI: {embedding_model}")
                 return VoyageAIEmbeddings(
                     voyage_api_key=voyage_key,
                     model=embedding_model,
                 )
-            except ImportError:
-                logger.warning("[EMBEDDINGS] langchain_voyageai not installed, falling back")
+            except ImportError as e:
+                logger.error(f"[EMBEDDINGS] langchain_voyageai import failed: {e}")
+            except Exception as e:
+                logger.error(f"[EMBEDDINGS] Voyage AI initialization failed: {e}")
+        elif not VOYAGE_AVAILABLE:
+            logger.error("[EMBEDDINGS] Voyage AI requested but langchain_voyageai not installed!")
     
     # OpenAI embeddings (direct)
     if provider == "openai":
