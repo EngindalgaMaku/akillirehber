@@ -176,6 +176,7 @@ export interface CourseSettings {
   reranker_provider: string | null;
   reranker_model: string | null;
   reranker_top_k: number;
+  enable_direct_llm: boolean;
   vector_store: string; // "weaviate" or "chromadb"
   created_at: string;
   updated_at: string;
@@ -202,6 +203,7 @@ export interface CourseSettingsUpdate {
   reranker_provider?: string;
   reranker_model?: string;
   reranker_top_k?: number;
+  enable_direct_llm?: boolean;
   vector_store?: string; // "weaviate" or "chromadb"
 }
 
@@ -2455,6 +2457,7 @@ export interface SemanticSimilarityQuickTestRequest {
   generated_answer?: string;
   llm_provider?: string;
   llm_model?: string;
+  use_direct_llm?: boolean;
 }
 
 export interface SemanticSimilarityQuickTestResponse {
@@ -2493,6 +2496,7 @@ export interface SemanticSimilarityBatchTestRequest {
   }>;
   llm_provider?: string;
   llm_model?: string;
+  use_direct_llm?: boolean;
 }
 
 export interface SemanticSimilarityBatchTestResponse {

@@ -41,6 +41,7 @@ export function ChatTab({ courseId }: ChatTabProps) {
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [oldestMessageId, setOldestMessageId] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<ChunkReference | null>(null);
+  const [isDirectLlmMode, setIsDirectLlmMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +96,19 @@ export function ChatTab({ courseId }: ChatTabProps) {
     return () => {
       cancelled = true;
     };
+  }, [courseId]);
+
+  // Load course settings to check Direct LLM mode
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await api.getCourseSettings(courseId);
+        setIsDirectLlmMode(settings.enable_direct_llm || false);
+      } catch {
+        // Settings not available, keep default
+      }
+    };
+    loadSettings();
   }, [courseId]);
 
   const scrollToBottom = () => {
@@ -242,7 +256,14 @@ export function ChatTab({ courseId }: ChatTabProps) {
             <MessageSquare className="w-4 h-4 text-indigo-600" />
           </div>
           <div>
-            <h3 className="font-medium text-slate-900">Ders Asistanı</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="font-medium text-slate-900">Ders Asistanı</h3>
+              {isDirectLlmMode && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
+                  Direct LLM
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-500">{conversationCount} sohbet</p>
           </div>
         </div>

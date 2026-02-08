@@ -33,6 +33,7 @@ import {
   Sparkles,
   Info,
   ChevronDown,
+  Zap,
 } from "lucide-react";
 
 interface SettingsTabProps {
@@ -106,7 +107,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
   
   // Accordion state (only one section open at a time)
   const [expandedSection, setExpandedSection] = useState<
-    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | "vector_store" | null
+    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | "vector_store" | "direct_llm" | null
   >(null);
   
   // Model management state
@@ -146,6 +147,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
     reranker_model: null as string | null,
     reranker_top_k: 10,
     vector_store: "weaviate" as string,
+    enable_direct_llm: false,
   });
 
   const loadSettings = useCallback(async () => {
@@ -171,6 +173,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
         reranker_model: data.reranker_model || null,
         reranker_top_k: data.reranker_top_k || 10,
         vector_store: data.vector_store || "weaviate",
+        enable_direct_llm: data.enable_direct_llm || false,
       };
       console.log("New Form Data:", newFormData);
       setFormData(newFormData);
@@ -1213,6 +1216,78 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
                   Weaviate: Hybrid search (vector + BM25 keyword)
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Direct LLM Mode Section */}
+      <div className={sectionCardStyles}>
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) => (prev === "direct_llm" ? null : "direct_llm"))
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-sm ${
+                formData.enable_direct_llm
+                  ? 'bg-gradient-to-br from-amber-500 to-orange-600'
+                  : 'bg-gradient-to-br from-slate-400 to-slate-500'
+              }`}>
+                <Zap className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Direct LLM Modu</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  RAG pipeline&apos;ı devre dışı bırakarak doğrudan LLM yanıtı al
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {formData.enable_direct_llm && (
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                  Aktif
+                </span>
+              )}
+              <ChevronDown
+                className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                  expandedSection === "direct_llm" ? 'rotate-180' : ''
+                }`}
+              />
+            </div>
+          </div>
+        </div>
+        {expandedSection === "direct_llm" && (
+          <div className={sectionContentStyles}>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium text-slate-700">Direct LLM Modunu Etkinleştir</Label>
+                  <p className="text-xs text-slate-500">
+                    Aktif olduğunda sistem promptu, embedding ve doküman araması devre dışı kalır.
+                    LLM soruları kendi bilgisiyle yanıtlar.
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.enable_direct_llm}
+                  onCheckedChange={(checked) => setFormData({ ...formData, enable_direct_llm: checked })}
+                  disabled={!isOwner}
+                  className="ml-4"
+                />
+              </div>
+              {formData.enable_direct_llm && (
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-amber-700 space-y-1">
+                      <p className="font-medium">Direct LLM modu aktif</p>
+                      <p>Sohbet ve testlerde doküman bağlamı kullanılmayacak. LLM yalnızca kendi eğitim verisine dayanarak yanıt verecek. Bu mod RAG vs yalın LLM karşılaştırması için idealdir.</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

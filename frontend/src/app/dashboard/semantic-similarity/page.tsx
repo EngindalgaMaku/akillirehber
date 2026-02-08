@@ -109,6 +109,12 @@ export default function SemanticSimilarityPage() {
     }
     return false;
   });
+  const [isDirectLlmEnabled, setIsDirectLlmEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('semantic_similarity_direct_llm_enabled') === 'true';
+    }
+    return false;
+  });
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Quick Test State
@@ -217,6 +223,10 @@ export default function SemanticSimilarityPage() {
   useEffect(() => {
     localStorage.setItem('semantic_similarity_reranker_enabled', isRerankerEnabled.toString());
   }, [isRerankerEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem('semantic_similarity_direct_llm_enabled', isDirectLlmEnabled.toString());
+  }, [isDirectLlmEnabled]);
 
   useEffect(() => {
     if (selectedCourseId) {
@@ -353,6 +363,8 @@ export default function SemanticSimilarityPage() {
       setIsRerankerEnabled(settings.enable_reranker || false);
       setSelectedRerankerProvider(settings.reranker_provider || "");
       setSelectedRerankerModel(settings.reranker_model || "");
+      // Direct LLM ayarını yükle
+      setIsDirectLlmEnabled(settings.enable_direct_llm || false);
       console.log("Reranker settings:", {
         enabled: settings.enable_reranker,
         provider: settings.reranker_provider,
@@ -759,7 +771,8 @@ export default function SemanticSimilarityPage() {
         embedding_provider: selectedEmbeddingProvider || undefined,
         embedding_model: selectedEmbeddingModel || undefined,
         llm_provider: selectedLlmProvider || undefined,
-        llm_model: selectedLlmModel || undefined
+        llm_model: selectedLlmModel || undefined,
+        use_direct_llm: isDirectLlmEnabled || undefined
       });
       setQuickTestResult(result);
       toast.success("Test tamamlandı");
@@ -985,7 +998,8 @@ export default function SemanticSimilarityPage() {
         search_alpha: undefined,
         reranker_used: isRerankerEnabled,
         reranker_provider: isRerankerEnabled ? (selectedRerankerProvider || undefined) : undefined,
-        reranker_model: isRerankerEnabled ? (selectedRerankerModel || undefined) : undefined
+        reranker_model: isRerankerEnabled ? (selectedRerankerModel || undefined) : undefined,
+        use_direct_llm: isDirectLlmEnabled || undefined
       })
     });
 
@@ -1858,6 +1872,28 @@ export default function SemanticSimilarityPage() {
                         {selectedLlmModel && <p className="text-sm text-slate-600 mt-1">LLM: <span className="font-medium text-slate-900">{selectedLlmProvider}/{selectedLlmModel}</span></p>}
                       </div>
                     )}
+                    <div className="border-t pt-4 mt-2">
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-1">
+                          <Label className="text-sm font-medium">Direct LLM Modu</Label>
+                          <p className="text-xs text-slate-500">RAG pipeline devre dışı, LLM doğrudan yanıt verir</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isDirectLlmEnabled}
+                            onChange={(e) => setIsDirectLlmEnabled(e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-amber-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                        </label>
+                      </div>
+                      {isDirectLlmEnabled && (
+                        <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                          Doküman bağlamı kullanılmayacak. RAG vs yalın LLM karşılaştırması için idealdir.
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setIsSettingsOpen(false)}>İptal</Button>
