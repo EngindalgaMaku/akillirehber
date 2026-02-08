@@ -30,6 +30,30 @@ except Exception:
     WANDB_AVAILABLE = False
 
 
+def get_embedding_provider_from_model(model_name: str) -> str:
+    """Extract embedding provider from model name.
+    
+    Examples:
+        "voyage-3" -> "voyage"
+        "openai/text-embedding-3-small" -> "openrouter"
+        "text-embedding-3-small" -> "openai"
+    """
+    if not model_name:
+        return "openrouter"
+    
+    model_lower = model_name.lower()
+    
+    if model_lower.startswith("voyage"):
+        return "voyage"
+    elif "/" in model_name:
+        # Format: provider/model (e.g., openai/text-embedding-3-small via OpenRouter)
+        return "openrouter"
+    elif "text-embedding" in model_lower:
+        return "openai"
+    else:
+        return "openrouter"
+
+
 class RagasEvaluationService:
     """Service for running RAGAS evaluations."""
     
@@ -501,7 +525,7 @@ Yukarıdaki bağlam bilgilerini kullanarak soruyu yanıtla. Cevabında bağlamda
             evaluation_model,
             reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
             reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
-            embedding_provider=course_settings.embedding_provider,
+            embedding_provider=get_embedding_provider_from_model(course_settings.default_embedding_model),
             embedding_model=course_settings.default_embedding_model
         )
         

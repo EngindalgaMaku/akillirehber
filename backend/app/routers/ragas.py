@@ -36,7 +36,7 @@ from app.services.course_service import (
     get_or_create_settings,
     DEFAULT_SYSTEM_PROMPT,
 )
-from app.services.ragas_service import RagasEvaluationService
+from app.services.ragas_service import RagasEvaluationService, get_embedding_provider_from_model
 
 try:
     import wandb  # type: ignore
@@ -1727,7 +1727,7 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
             evaluation_model_used,
             reranker_provider=course_settings.reranker_provider if course_settings.enable_reranker else None,
             reranker_model=course_settings.reranker_model if course_settings.enable_reranker else None,
-            embedding_provider=course_settings.embedding_provider,
+            embedding_provider=get_embedding_provider_from_model(course_settings.default_embedding_model),
             embedding_model=course_settings.default_embedding_model
         )
 
@@ -2700,7 +2700,7 @@ Lütfen yukarıdaki bağlama dayanarak soruyu yanıtla."""
                             generated_answer,
                             context_texts,
                             evaluation_model_for_batch,
-                            embedding_provider=course_settings.embedding_provider,
+                            embedding_provider=get_embedding_provider_from_model(course_settings.default_embedding_model),
                             embedding_model=course_settings.default_embedding_model
                         )
                         
