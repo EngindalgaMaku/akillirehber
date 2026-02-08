@@ -353,6 +353,53 @@ def safe_float(value, default=None):
         return default
 
 
+class VoyageDirectEmbeddings:
+    """Direct Voyage AI embeddings via REST API.
+    
+    Avoids langchain_voyageai's HuggingFace tokenizer download
+    which causes permission errors in Docker containers.
+    Implements the same interface RAGAS expects (embed_query, embed_documents).
+    """
+    
+    def __init__(self, api_key: str, model: str = "voyage-3"):
+        self.api_key = api_key
+        self.model = model
+        self.api_url = "https://api.voyageai.com/v1/embeddings"
+    
+    def _call_api(self, texts: list, input_type: str = None) -> list:
+        import httpx
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "input": texts,
+            "model": self.model,
+        }
+        if input_type:
+            payload["input_type"] = input_type
+        
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(self.api_url, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return [item["embedding"] for item in data["data"]]
+    
+    def embed_query(self, text: str) -> list:
+        return self._call_api([text], input_type="query")[0]
+    
+    def embed_documents(self, texts: list) -> list:
+        if not texts:
+            return []
+        # Voyage API max 128 texts per request
+        all_embeddings = []
+        batch_size = 64
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            all_embeddings.extend(self._call_api(batch, input_type="document"))
+        return all_embeddings
+
+
 def get_embeddings(provider: Optional[str] = None, model: Optional[str] = None):
     """Get embeddings instance based on provider and model.
     
@@ -370,24 +417,16 @@ def get_embeddings(provider: Optional[str] = None, model: Optional[str] = None):
     if provider == "voyage":
         voyage_key = os.getenv("VOYAGE_API_KEY")
         logger.info(f"[EMBEDDINGS] Voyage provider requested, API key present: {bool(voyage_key)}, VOYAGE_AVAILABLE: {VOYAGE_AVAILABLE}")
-        if voyage_key and VOYAGE_AVAILABLE:
-            try:
-                from langchain_voyageai import VoyageAIEmbeddings
-                # Clean model name - remove "voyage/" prefix if present
-                embedding_model = model or "voyage-3"
-                if embedding_model.startswith("voyage/"):
-                    embedding_model = embedding_model.replace("voyage/", "", 1)
-                logger.info(f"[EMBEDDINGS] Using Voyage AI: {embedding_model}")
-                return VoyageAIEmbeddings(
-                    voyage_api_key=voyage_key,
-                    model=embedding_model,
-                )
-            except ImportError as e:
-                logger.error(f"[EMBEDDINGS] langchain_voyageai import failed: {e}")
-            except Exception as e:
-                logger.error(f"[EMBEDDINGS] Voyage AI initialization failed: {e}")
-        elif not VOYAGE_AVAILABLE:
-            logger.error("[EMBEDDINGS] Voyage AI requested but langchain_voyageai not installed!")
+        if voyage_key:
+            # Use direct API wrapper to avoid HuggingFace tokenizer download issues
+            embedding_model = model or "voyage-3"
+            if embedding_model.startswith("voyage/"):
+                embedding_model = embedding_model.replace("voyage/", "", 1)
+            logger.info(f"[EMBEDDINGS] Using Voyage AI (direct API): {embedding_model}")
+            return VoyageDirectEmbeddings(
+                api_key=voyage_key,
+                model=embedding_model,
+            )
     
     # OpenAI embeddings (direct)
     if provider == "openai":
