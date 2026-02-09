@@ -50,7 +50,7 @@ export default function DashboardPage() {
         iconBg="bg-indigo-100"
       />
 
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-indigo-50 rounded-lg border border-indigo-200 p-5">
           <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
             <BookOpen className="w-5 h-5 text-indigo-600" />
@@ -81,7 +81,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6 mb-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         <div className="bg-gradient-to-br from-indigo-50 to-white rounded-lg border border-indigo-100 p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 bg-indigo-100 rounded-lg"><GraduationCap className="w-6 h-6 text-indigo-600" /></div>

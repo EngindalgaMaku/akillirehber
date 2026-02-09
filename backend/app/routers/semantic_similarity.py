@@ -1310,9 +1310,9 @@ async def wandb_export_group(
             "aggregate/avg_mrr": _avg(mrr_vals),
             "aggregate/avg_latency_ms": _avg(latency_vals),
             "test_count": len(results),
+            "results": table,
         }
     )
-    wandb.log({"results": table})
 
     run_url = getattr(wb_run, "url", None)
     wb_run.finish()
