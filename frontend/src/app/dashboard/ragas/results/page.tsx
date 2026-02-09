@@ -198,6 +198,7 @@ export default function RagasResultsPage() {
           setSelectedCourseId(parseInt(savedCourseId));
         } else {
           setSelectedCourseId(data[0].id);
+          localStorage.setItem("ragas_selected_course_id", data[0].id.toString());
         }
       }
     } catch {

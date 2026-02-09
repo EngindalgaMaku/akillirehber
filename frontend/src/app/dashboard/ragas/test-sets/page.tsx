@@ -45,6 +45,7 @@ export default function TestSetsPage() {
           setSelectedCourse(Number.parseInt(savedCourseId));
         } else {
           setSelectedCourse(data[0].id);
+          localStorage.setItem("ragas_selected_course_id", data[0].id.toString());
         }
       }
     } catch (error) {

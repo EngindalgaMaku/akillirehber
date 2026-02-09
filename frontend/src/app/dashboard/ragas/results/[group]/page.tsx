@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowLeft, Download, FileText, SquarePen, Trash2, BarChart3 } from "lucide-react";
 
-import { api, QuickTestResult } from "@/lib/api";
+import { api, QuickTestResult, Course } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -66,8 +66,20 @@ export default function RagasGroupResultsPage() {
 
   useEffect(() => {
     const raw = localStorage.getItem("ragas_selected_course_id");
-    const parsed = raw ? Number(raw) : null;
-    setCourseId(Number.isFinite(parsed as number) ? (parsed as number) : null);
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isFinite(parsed)) {
+      setCourseId(parsed);
+    } else {
+      // localStorage'da yoksa kursları yükleyip ilkini seç
+      api.getCourses().then((courses) => {
+        if (courses.length > 0) {
+          setCourseId(courses[0].id);
+          localStorage.setItem("ragas_selected_course_id", courses[0].id.toString());
+        }
+      }).catch(() => {
+        // Kurslar yüklenemezse courseId null kalır
+      });
+    }
   }, []);
 
   useEffect(() => {

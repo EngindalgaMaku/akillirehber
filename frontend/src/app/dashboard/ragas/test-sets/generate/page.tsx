@@ -79,6 +79,7 @@ export default function GenerateTestSetQuestionsPage() {
             setSelectedCourse(parsed);
           } else {
             setSelectedCourse(data[0].id);
+            localStorage.setItem("ragas_selected_course_id", data[0].id.toString());
           }
         } else {
           setSelectedCourse(null);
