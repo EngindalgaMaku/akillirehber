@@ -248,16 +248,16 @@ export function ChatTab({ courseId }: ChatTabProps) {
   };
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 flex flex-col h-[calc(100vh-240px)] min-h-[500px]">
+    <div className="bg-white rounded-lg border border-slate-200 flex flex-col h-[calc(100vh-280px)] lg:h-[calc(100vh-240px)] min-h-[400px]">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center shrink-0">
             <MessageSquare className="w-4 h-4 text-indigo-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="font-medium text-slate-900">Ders Asistanı</h3>
+              <h3 className="font-medium text-slate-900 text-sm sm:text-base">Ders Asistanı</h3>
               {isDirectLlmMode && (
                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
                   Direct LLM
@@ -272,10 +272,10 @@ export function ChatTab({ courseId }: ChatTabProps) {
             size="sm"
             variant="ghost"
             onClick={handleClear}
-            className="text-slate-400 hover:text-red-600 hover:bg-red-50"
+            className="text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0"
           >
-            <Trash2 className="w-4 h-4 mr-1" />
-            Temizle
+            <Trash2 className="w-4 h-4 sm:mr-1" />
+            <span className="hidden sm:inline">Temizle</span>
           </Button>
         )}
       </div>
@@ -283,7 +283,7 @@ export function ChatTab({ courseId }: ChatTabProps) {
       {/* Messages */}
       <div 
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50"
+        className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 bg-slate-50/50"
       >
         {/* Load More Button */}
         {hasMoreMessages && (
@@ -322,16 +322,16 @@ export function ChatTab({ courseId }: ChatTabProps) {
                     ? `msg-${message.id}`
                     : `tmp-${message.timestamp ?? globalIdx}-${message.role}`
                 }
-                className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex gap-2 sm:gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {message.role === "assistant" && (
-                  <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
-                    <Bot className="w-4 h-4 text-indigo-600" />
+                  <div className="w-7 h-7 sm:w-8 sm:h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
+                    <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-600" />
                   </div>
                 )}
                 
                 <div
-                  className={`max-w-[75%] rounded-2xl px-4 py-3 ${
+                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-3 sm:px-4 py-2.5 sm:py-3 ${
                     message.role === "user"
                       ? "bg-indigo-600 text-white rounded-br-md"
                       : "bg-white text-slate-900 border border-slate-200 rounded-bl-md shadow-sm"
@@ -397,8 +397,8 @@ export function ChatTab({ courseId }: ChatTabProps) {
                 </div>
                 
                 {message.role === "user" && (
-                  <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center flex-shrink-0">
-                    <User className="w-4 h-4 text-white" />
+                  <div className="w-7 h-7 sm:w-8 sm:h-8 bg-indigo-600 rounded-full flex items-center justify-center flex-shrink-0">
+                    <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
                   </div>
                 )}
               </div>
@@ -407,9 +407,9 @@ export function ChatTab({ courseId }: ChatTabProps) {
         )}
         
         {isLoading && (
-          <div className="flex gap-3 justify-start">
-            <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <Bot className="w-4 h-4 text-indigo-600" />
+          <div className="flex gap-2 sm:gap-3 justify-start">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-600" />
             </div>
             <div className="bg-white rounded-2xl rounded-bl-md px-4 py-3 border border-slate-200 shadow-sm">
               <div className="flex items-center gap-2">
@@ -424,7 +424,7 @@ export function ChatTab({ courseId }: ChatTabProps) {
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-slate-200 bg-white">
+      <div className="p-3 sm:p-4 border-t border-slate-200 bg-white">
         <div className="flex gap-2">
           <Input
             value={input}
@@ -432,7 +432,7 @@ export function ChatTab({ courseId }: ChatTabProps) {
             onKeyDown={handleKeyDown}
             placeholder="Mesajınızı yazın..."
             disabled={isLoading}
-            className="flex-1 rounded-full px-4"
+            className="flex-1 rounded-full px-4 text-sm sm:text-base h-10 sm:h-10"
           />
           <Button 
             onClick={handleSend} 
@@ -450,15 +450,15 @@ export function ChatTab({ courseId }: ChatTabProps) {
 
       {/* Source Modal */}
       {selectedSource && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl max-w-2xl w-full max-h-[85vh] overflow-hidden shadow-xl flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                  <FileText className="w-5 h-5 text-indigo-600" />
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-xl sm:rounded-xl w-full sm:max-w-2xl max-h-[90vh] sm:max-h-[85vh] overflow-hidden shadow-xl flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 bg-indigo-100 rounded-lg flex items-center justify-center shrink-0">
+                  <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600" />
                 </div>
-                <div>
-                  <h3 className="font-medium text-slate-900">{selectedSource.document_name}</h3>
+                <div className="min-w-0">
+                  <h3 className="font-medium text-slate-900 text-sm sm:text-base truncate">{selectedSource.document_name}</h3>
                   <p className="text-xs text-slate-500">
                     Chunk #{selectedSource.chunk_index + 1} • Benzerlik: {(selectedSource.score * 100).toFixed(1)}%
                   </p>
@@ -466,19 +466,19 @@ export function ChatTab({ courseId }: ChatTabProps) {
               </div>
               <button
                 onClick={() => setSelectedSource(null)}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
               >
                 <X className="w-5 h-5 text-slate-500" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
               <div className="prose prose-sm max-w-none">
-                <p className="text-slate-700 whitespace-pre-wrap leading-relaxed">
+                <p className="text-slate-700 whitespace-pre-wrap leading-relaxed text-sm">
                   {selectedSource.full_content || selectedSource.content_preview}
                 </p>
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-end shrink-0">
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-slate-200 bg-slate-50 flex justify-end shrink-0">
               <Button variant="outline" onClick={() => setSelectedSource(null)}>
                 Kapat
               </Button>

@@ -139,26 +139,26 @@ export function OverviewTab({ courseId, isOwner, onTabChange }: OverviewTabProps
   return (
     <div className="space-y-6">
       {/* Status Card */}
-      <div className={`rounded-xl p-6 border-2 ${
+      <div className={`rounded-xl p-4 sm:p-6 border-2 ${
         isFullyConfigured 
           ? "bg-gradient-to-br from-green-50 to-emerald-50 border-green-200" 
           : "bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200"
       }`}>
-        <div className="flex items-start gap-4">
+        <div className="flex items-start gap-3 sm:gap-4">
           {isFullyConfigured ? (
-            <div className="p-3 bg-green-100 rounded-xl">
-              <CheckCircle2 className="w-8 h-8 text-green-600" />
+            <div className="p-2 sm:p-3 bg-green-100 rounded-xl shrink-0">
+              <CheckCircle2 className="w-6 h-6 sm:w-8 sm:h-8 text-green-600" />
             </div>
           ) : (
-            <div className="p-3 bg-amber-100 rounded-xl">
-              <AlertCircle className="w-8 h-8 text-amber-600" />
+            <div className="p-2 sm:p-3 bg-amber-100 rounded-xl shrink-0">
+              <AlertCircle className="w-6 h-6 sm:w-8 sm:h-8 text-amber-600" />
             </div>
           )}
-          <div className="flex-1">
-            <h2 className="text-xl font-bold text-slate-800 mb-2">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-800 mb-1 sm:mb-2">
               {isFullyConfigured ? "Ders Hazır! 🎉" : "Kurulum Devam Ediyor"}
             </h2>
-            <p className="text-slate-600">
+            <p className="text-slate-600 text-sm">
               {isFullyConfigured 
                 ? "Tüm ayarlar tamamlandı. Artık sohbet edebilirsiniz!" 
                 : "Dersi kullanmaya başlamak için aşağıdaki adımları tamamlayın."}
@@ -176,23 +176,23 @@ export function OverviewTab({ courseId, isOwner, onTabChange }: OverviewTabProps
           {issues.map((issue, index) => (
             <div
               key={index}
-              className={`flex items-center justify-between p-4 rounded-lg border ${
+              className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 sm:p-4 rounded-lg border ${
                 issue.type === "error"
                   ? "bg-red-50 border-red-200"
                   : "bg-amber-50 border-amber-200"
               }`}
             >
-              <div className="flex items-center gap-3">
-                <AlertCircle className={`w-5 h-5 ${
+              <div className="flex items-center gap-3 min-w-0">
+                <AlertCircle className={`w-5 h-5 shrink-0 ${
                   issue.type === "error" ? "text-red-600" : "text-amber-600"
                 }`} />
-                <span className="text-slate-700 font-medium">{issue.message}</span>
+                <span className="text-slate-700 font-medium text-sm sm:text-base">{issue.message}</span>
               </div>
               {issue.action && (
                 <Button
                   size="sm"
                   onClick={() => onTabChange(issue.action!.tab)}
-                  className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300"
+                  className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shrink-0 self-end sm:self-auto"
                 >
                   {issue.action.label}
                   <ArrowRight className="w-4 h-4 ml-1" />

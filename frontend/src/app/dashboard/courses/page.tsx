@@ -237,79 +237,53 @@ export default function CoursesPage() {
         <div className="space-y-4">
           {/* Filter Toggle for Teachers/Admins */}
           {isTeacherOrAdmin && (
-            <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
+            <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 p-3 sm:p-4 shadow-sm">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
                   <FileText className="w-5 h-5 text-slate-600" />
                 </div>
-                <div>
-                  <p className="font-medium text-slate-900">Pasif Dersleri Göster</p>
-                  <p className="text-sm text-slate-500">Aktif olmayan dersleri listede göster</p>
+                <div className="min-w-0">
+                  <p className="font-medium text-slate-900 text-sm sm:text-base">Pasif Dersleri Göster</p>
+                  <p className="text-xs sm:text-sm text-slate-500 hidden sm:block">Aktif olmayan dersleri listede göster</p>
                 </div>
               </div>
               <Switch
                 checked={showInactive}
                 onCheckedChange={setShowInactive}
-                className="data-[state=checked]:bg-indigo-600"
+                className="data-[state=checked]:bg-indigo-600 shrink-0 ml-3"
               />
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div
-            className="bg-white rounded-xl border border-slate-200 p-4
-            flex items-center gap-4 shadow-sm"
-          >
-            <div
-              className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600
-              flex items-center justify-center shadow-lg shadow-indigo-500/20"
-            >
-              <BookOpen className="w-6 h-6 text-white" />
+          <div className="grid grid-cols-3 gap-3 sm:gap-4">
+            <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 flex items-center gap-3 sm:gap-4 shadow-sm">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
+                <BookOpen className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xl sm:text-2xl font-bold text-slate-900">{filteredCourses.length}</p>
+                <p className="text-xs sm:text-sm text-slate-500 truncate">{showInactive ? "Toplam Ders" : "Aktif Ders"}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900">
-                {filteredCourses.length}
-              </p>
-              <p className="text-sm text-slate-500">
-                {showInactive ? "Toplam Ders" : "Aktif Ders"}
-              </p>
+            <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 flex items-center gap-3 sm:gap-4 shadow-sm">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
+                <FileText className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xl sm:text-2xl font-bold text-slate-900">{courses.filter((c) => c.is_active).length}</p>
+                <p className="text-xs sm:text-sm text-slate-500">Aktif</p>
+              </div>
             </div>
-          </div>
-          <div
-            className="bg-white rounded-xl border border-slate-200 p-4
-            flex items-center gap-4 shadow-sm"
-          >
-            <div
-              className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600
-              flex items-center justify-center shadow-lg shadow-emerald-500/20"
-            >
-              <FileText className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900">
-                {courses.filter((c) => c.is_active).length}
-              </p>
-              <p className="text-sm text-slate-500">Aktif</p>
+            <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 flex items-center gap-3 sm:gap-4 shadow-sm">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-slate-500 to-slate-600 flex items-center justify-center shadow-lg shadow-slate-500/20 shrink-0">
+                <FileText className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xl sm:text-2xl font-bold text-slate-900">{courses.filter((c) => !c.is_active).length}</p>
+                <p className="text-xs sm:text-sm text-slate-500">Pasif</p>
+              </div>
             </div>
           </div>
-          <div
-            className="bg-white rounded-xl border border-slate-200 p-4
-            flex items-center gap-4 shadow-sm"
-          >
-            <div
-              className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-500 to-slate-600
-              flex items-center justify-center shadow-lg shadow-slate-500/20"
-            >
-              <FileText className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900">
-                {courses.filter((c) => !c.is_active).length}
-              </p>
-              <p className="text-sm text-slate-500">Pasif</p>
-            </div>
-          </div>
-        </div>
         </div>
       )}
 
@@ -510,10 +484,10 @@ export default function CoursesPage() {
             >
               <div
                 className="bg-slate-50 rounded-2xl border-2 border-dashed
-                border-slate-300 overflow-hidden h-full min-h-[280px]
+                border-slate-300 overflow-hidden h-full min-h-[200px] sm:min-h-[280px]
                 hover:border-indigo-400 hover:bg-indigo-50/50
                 transition-all duration-300 flex flex-col items-center
-                justify-center gap-4"
+                justify-center gap-3 sm:gap-4 p-4"
               >
                 <div
                   className="w-16 h-16 rounded-2xl bg-slate-200
