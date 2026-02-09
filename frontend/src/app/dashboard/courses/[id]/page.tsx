@@ -73,7 +73,7 @@ export default function CourseDetailPage() {
   if (!course) return null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-x-hidden">
       {/* Header with Gradient */}
       <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-xl px-4 sm:px-6 py-4 shadow-lg">
         <div className="flex items-center gap-3 sm:gap-4">

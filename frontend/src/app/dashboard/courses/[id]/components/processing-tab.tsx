@@ -617,7 +617,7 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
         {selectedDocId && (
           <div className="bg-white rounded-lg border border-slate-200">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-              <h3 className="font-medium text-slate-900">
+              <h3 className="font-medium text-slate-900 text-sm sm:text-base">
                 Chunklar ({docChunks.length})
               </h3>
               <div className="flex items-center gap-2">
@@ -627,11 +627,11 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
                   disabled={isProcessing}
                 >
                   {isProcessing ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
                   ) : (
-                    <Zap className="w-4 h-4 mr-2" />
+                    <Zap className="w-4 h-4 sm:mr-2" />
                   )}
-                  {docChunks.length > 0 ? "Yeniden Oluştur" : "Chunkla"}
+                  <span className="hidden sm:inline">{docChunks.length > 0 ? "Yeniden Oluştur" : "Chunkla"}</span>
                 </Button>
                 {docChunks.length > 0 && (
                   <Button
@@ -642,11 +642,11 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
                     className="text-orange-600"
                   >
                     {isDeletingChunks ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
                     ) : (
-                      <Trash2 className="w-4 h-4 mr-2" />
+                      <Trash2 className="w-4 h-4 sm:mr-2" />
                     )}
-                    Temizle
+                    <span className="hidden sm:inline">Temizle</span>
                   </Button>
                 )}
               </div>
@@ -737,27 +737,27 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
         {/* Embedding Section */}
         {selectedDocId && docChunks.length > 0 && (
           <div className="bg-white rounded-lg border border-slate-200">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-              <div>
-                <h3 className="font-medium text-slate-900">Embedding</h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3 border-b border-slate-200">
+              <div className="min-w-0">
+                <h3 className="font-medium text-slate-900 text-sm sm:text-base">Embedding</h3>
                 {selectedDoc?.embedding_status === "completed" && (
-                  <p className="text-xs text-green-600 mt-0.5">
+                  <p className="text-xs text-green-600 mt-0.5 truncate">
                     {selectedDoc.vector_count} vektör • {selectedDoc.embedding_model}
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <Button
                   size="sm"
                   onClick={handleEmbed}
                   disabled={isEmbedding}
                 >
                   {isEmbedding ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
                   ) : (
-                    <Database className="w-4 h-4 mr-2" />
+                    <Database className="w-4 h-4 sm:mr-2" />
                   )}
-                  {selectedDoc?.embedding_status === "completed" ? "Yeniden Embed" : "Embed Et"}
+                  <span className="hidden sm:inline">{selectedDoc?.embedding_status === "completed" ? "Yeniden Embed" : "Embed Et"}</span>
                 </Button>
                 {selectedDoc?.embedding_status === "completed" && (
                   <Button
@@ -768,11 +768,11 @@ export function ProcessingTab({ courseId, isOwner }: ProcessingTabProps) {
                     className="text-orange-600"
                   >
                     {isDeletingVectors ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
                     ) : (
-                      <Trash2 className="w-4 h-4 mr-2" />
+                      <Trash2 className="w-4 h-4 sm:mr-2" />
                     )}
-                    Vektörleri Sil
+                    <span className="hidden sm:inline">Vektörleri Sil</span>
                   </Button>
                 )}
               </div>

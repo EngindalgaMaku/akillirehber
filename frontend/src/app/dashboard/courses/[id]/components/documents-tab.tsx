@@ -187,8 +187,8 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
 
   return (
     <div className="bg-white rounded-lg border border-slate-200">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-        <h2 className="font-medium text-slate-900">Dokümanlar ({documents.length})</h2>
+      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200">
+        <h2 className="font-medium text-slate-900 text-sm sm:text-base">Dokümanlar ({documents.length})</h2>
         {isOwner && (
           <label className="cursor-pointer">
             <input
@@ -215,7 +215,7 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
 
       {/* Upload Progress */}
       {uploadProgress.length > 0 && (
-        <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
+        <div className="px-4 sm:px-6 py-4 bg-slate-50 border-b border-slate-200">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-slate-700">
               Yükleme Durumu ({uploadProgress.length} dosya)
@@ -283,12 +283,12 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
             {currentDocuments.map((doc) => (
               <div
                 key={doc.id}
-                className="px-6 py-4 flex items-center justify-between hover:bg-slate-50"
+                className="px-4 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-0 hover:bg-slate-50"
               >
-                <div className="flex items-center gap-3">
-                  <FileText className="w-5 h-5 text-slate-400" />
-                  <div>
-                    <p className="font-medium text-slate-900">{doc.original_filename}</p>
+                <div className="flex items-center gap-3 min-w-0">
+                  <FileText className="w-5 h-5 text-slate-400 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-900 text-sm truncate">{doc.original_filename}</p>
                     <p className="text-xs text-slate-500">
                       {(doc.file_size / 1024).toFixed(1)} KB •{" "}
                       {doc.char_count ? `${doc.char_count.toLocaleString()} karakter • ` : ""}
@@ -296,7 +296,7 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 sm:gap-3 self-end sm:self-auto shrink-0">
                   {getStatusBadge(doc)}
                   {isOwner && (
                     <Button
@@ -320,10 +320,10 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-slate-600">
-                  Gösteriliyor {showingFrom}-{showingTo} / {documents.length} doküman
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-slate-200 bg-slate-50">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <p className="text-xs sm:text-sm text-slate-600">
+                  {showingFrom}-{showingTo} / {documents.length}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -332,8 +332,7 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                     disabled={currentPage === 1}
                   >
-                    <ChevronLeft className="w-4 h-4 mr-1" />
-                    Önceki
+                    <ChevronLeft className="w-4 h-4" />
                   </Button>
                   <div className="flex items-center gap-1">
                     {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
@@ -366,8 +365,7 @@ export function DocumentsTab({ courseId, isOwner }: DocumentsTabProps) {
                     onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                     disabled={currentPage === totalPages}
                   >
-                    Sonraki
-                    <ChevronRight className="w-4 h-4 ml-1" />
+                    <ChevronRight className="w-4 h-4" />
                   </Button>
                 </div>
               </div>

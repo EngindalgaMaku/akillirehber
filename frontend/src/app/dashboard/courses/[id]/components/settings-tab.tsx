@@ -43,9 +43,9 @@ interface SettingsTabProps {
 }
 
 // Consistent card styling for all sections
-const sectionCardStyles = "bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow duration-200";
-const sectionHeaderStyles = "px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50/50 to-transparent";
-const sectionContentStyles = "p-6";
+const sectionCardStyles = "bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden";
+const sectionHeaderStyles = "px-4 sm:px-6 py-4 sm:py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50/50 to-transparent";
+const sectionContentStyles = "p-4 sm:p-6";
 
 const EMBEDDING_MODELS = [
   { value: "openai/text-embedding-3-small", label: "OpenAI text-embedding-3-small (1536 dim)" },

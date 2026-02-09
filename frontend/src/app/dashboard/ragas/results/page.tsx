@@ -250,40 +250,41 @@ export default function RagasResultsPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm">
+        <div className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-slate-100 rounded-xl">
-              <History className="w-6 h-6 text-slate-700" />
+            <div className="p-2 sm:p-3 bg-slate-100 rounded-xl shrink-0">
+              <History className="w-5 h-5 sm:w-6 sm:h-6 text-slate-700" />
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">RAGAS Test Sonuçları</h1>
-              <p className="text-sm text-slate-600">Önce test listesi, sonra detay</p>
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-2xl font-bold text-slate-900">RAGAS Test Sonuçları</h1>
+              <p className="text-xs sm:text-sm text-slate-600">Önce test listesi, sonra detay</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             {selectedGroupNames.size > 0 && (
               <Button 
                 variant="outline"
+                size="sm"
                 onClick={() => setShowStatisticsModal(true)}
                 className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
               >
-                <BarChart3 className="w-4 h-4 mr-2" />
-                İstatistikler ({selectedGroupNames.size})
+                <BarChart3 className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">İstatistikler</span> ({selectedGroupNames.size})
               </Button>
             )}
 
             <Link href="/dashboard/ragas">
-              <Button variant="outline">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                RAGAS&#39;a Dön
+              <Button variant="outline" size="sm">
+                <ArrowLeft className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">RAGAS&#39;a Dön</span>
               </Button>
             </Link>
 
-            <Button variant="outline" onClick={loadGroups} disabled={!selectedCourseId || isGroupsLoading}>
-              <RefreshCw className={`w-4 h-4 mr-2 ${isGroupsLoading ? "animate-spin" : ""}`} />
-              Yenile
+            <Button variant="outline" size="sm" onClick={loadGroups} disabled={!selectedCourseId || isGroupsLoading}>
+              <RefreshCw className={`w-4 h-4 sm:mr-2 ${isGroupsLoading ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Yenile</span>
             </Button>
 
             <Select
@@ -294,8 +295,8 @@ export default function RagasResultsPage() {
                 localStorage.setItem("ragas_selected_course_id", courseId.toString());
               }}
             >
-              <SelectTrigger className="w-72">
-                <BookOpen className="w-4 h-4 mr-2" />
+              <SelectTrigger className="w-full sm:w-72">
+                <BookOpen className="w-4 h-4 mr-2 shrink-0" />
                 <SelectValue placeholder="Ders seçin" />
               </SelectTrigger>
               <SelectContent>
@@ -323,7 +324,7 @@ export default function RagasResultsPage() {
           <p className="text-slate-500">Bu ders için kayıtlı test grubu bulunamadı.</p>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+        <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-6 shadow-sm">
           {(() => {
             // Apply filters
             let filtered = groups
@@ -392,7 +393,7 @@ export default function RagasResultsPage() {
             return (
               <>
                 {/* Filters */}
-                <div className="mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                <div className="mb-4 p-3 sm:p-4 bg-slate-50 rounded-xl border border-slate-200">
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div>
                       <label className="text-xs font-medium text-slate-700 mb-1 block">Ara</label>
@@ -532,8 +533,8 @@ export default function RagasResultsPage() {
                   </div>
                 </div>
 
-                <div className="overflow-auto border border-slate-200 rounded-xl">
-                  <table className="w-full text-xs">
+                <div className="overflow-auto border border-slate-200 rounded-xl -mx-3 sm:mx-0">
+                  <table className="w-full text-xs min-w-[900px]">
                     <thead className="bg-slate-50 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-slate-600 w-[40px]">
@@ -544,7 +545,7 @@ export default function RagasResultsPage() {
                         </th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">Grup</th>
                         <th className="px-3 py-2 text-right font-medium text-slate-600">Test</th>
-                        <th className="px-3 py-2 text-left font-medium text-slate-600">Ortalama</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600 min-w-[220px]">Ortalama</th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">LLM</th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">Eval</th>
                         <th className="px-3 py-2 text-left font-medium text-slate-600">Embedding</th>
@@ -589,35 +590,35 @@ export default function RagasResultsPage() {
                               </span>
                             </td>
                             <td className="px-3 py-2">
-                              <div className="text-xs flex gap-2 flex-wrap">
+                              <div className="text-xs flex gap-1 flex-nowrap">
                                 {typeof g.avg_faithfulness === "number" && Number.isFinite(g.avg_faithfulness) && (
-                                  <span className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-blue-700 border border-blue-200">
+                                  <span className="inline-flex items-center rounded bg-blue-50 px-1 py-0.5 text-blue-700 border border-blue-200" title="Faithfulness">
                                     <span className="font-medium">F:</span>
-                                    <span>{(g.avg_faithfulness * 100).toFixed(0)}%</span>
+                                    <span>{(g.avg_faithfulness * 100).toFixed(0)}</span>
                                   </span>
                                 )}
                                 {typeof g.avg_answer_relevancy === "number" && Number.isFinite(g.avg_answer_relevancy) && (
-                                  <span className="inline-flex items-center rounded bg-green-50 px-1.5 py-0.5 text-green-700 border border-green-200">
+                                  <span className="inline-flex items-center rounded bg-green-50 px-1 py-0.5 text-green-700 border border-green-200" title="Answer Relevancy">
                                     <span className="font-medium">AR:</span>
-                                    <span>{(g.avg_answer_relevancy * 100).toFixed(0)}%</span>
+                                    <span>{(g.avg_answer_relevancy * 100).toFixed(0)}</span>
                                   </span>
                                 )}
                                 {typeof g.avg_context_precision === "number" && Number.isFinite(g.avg_context_precision) && (
-                                  <span className="inline-flex items-center rounded bg-purple-50 px-1.5 py-0.5 text-purple-700 border border-purple-200">
+                                  <span className="inline-flex items-center rounded bg-purple-50 px-1 py-0.5 text-purple-700 border border-purple-200" title="Context Precision">
                                     <span className="font-medium">CP:</span>
-                                    <span>{(g.avg_context_precision * 100).toFixed(0)}%</span>
+                                    <span>{(g.avg_context_precision * 100).toFixed(0)}</span>
                                   </span>
                                 )}
                                 {typeof g.avg_context_recall === "number" && Number.isFinite(g.avg_context_recall) && (
-                                  <span className="inline-flex items-center rounded bg-orange-50 px-1.5 py-0.5 text-orange-700 border border-orange-200">
+                                  <span className="inline-flex items-center rounded bg-orange-50 px-1 py-0.5 text-orange-700 border border-orange-200" title="Context Recall">
                                     <span className="font-medium">CR:</span>
-                                    <span>{(g.avg_context_recall * 100).toFixed(0)}%</span>
+                                    <span>{(g.avg_context_recall * 100).toFixed(0)}</span>
                                   </span>
                                 )}
                                 {typeof g.avg_answer_correctness === "number" && Number.isFinite(g.avg_answer_correctness) && (
-                                  <span className="inline-flex items-center rounded bg-red-50 px-1.5 py-0.5 text-red-700 border border-red-200">
+                                  <span className="inline-flex items-center rounded bg-red-50 px-1 py-0.5 text-red-700 border border-red-200" title="Answer Correctness">
                                     <span className="font-medium">AC:</span>
-                                    <span>{(g.avg_answer_correctness * 100).toFixed(0)}%</span>
+                                    <span>{(g.avg_answer_correctness * 100).toFixed(0)}</span>
                                   </span>
                                 )}
                               </div>

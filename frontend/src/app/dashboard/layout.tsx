@@ -224,7 +224,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   );
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex overflow-x-hidden">
       {/* Mobil Top Bar */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-40 h-14 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 flex items-center px-4 shadow-lg">
         <button
@@ -282,8 +282,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main Content */}
-      <main className={`flex-1 bg-slate-50 min-h-screen transition-all duration-300 ${isCollapsed ? "lg:ml-16" : "lg:ml-64"} pt-14 lg:pt-0`}>
-        <div className="p-4 sm:p-6 lg:p-8">
+      <main className={`flex-1 bg-slate-50 min-h-screen transition-all duration-300 overflow-x-hidden ${isCollapsed ? "lg:ml-16" : "lg:ml-64"} pt-14 lg:pt-0`}>
+        <div className="p-4 sm:p-6 lg:p-8 max-w-full">
           {children}
         </div>
       </main>
