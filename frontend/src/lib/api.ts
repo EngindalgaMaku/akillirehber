@@ -177,6 +177,7 @@ export interface CourseSettings {
   reranker_model: string | null;
   reranker_top_k: number;
   enable_direct_llm: boolean;
+  enable_pii_filter: boolean;
   vector_store: string; // "weaviate" or "chromadb"
   created_at: string;
   updated_at: string;
@@ -204,6 +205,7 @@ export interface CourseSettingsUpdate {
   reranker_model?: string;
   reranker_top_k?: number;
   enable_direct_llm?: boolean;
+  enable_pii_filter?: boolean;
   vector_store?: string; // "weaviate" or "chromadb"
 }
 

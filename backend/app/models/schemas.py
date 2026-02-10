@@ -389,6 +389,7 @@ class CourseSettingsBase(BaseModel):
     system_prompt_understanding_applying: Optional[str] = None
     system_prompt_analyzing_evaluating: Optional[str] = None
     enable_direct_llm: bool = False
+    enable_pii_filter: bool = False
     enable_reranker: bool = False
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None
@@ -437,6 +438,7 @@ class CourseSettingsUpdate(BaseModel):
         )
     )
     enable_direct_llm: Optional[bool] = None
+    enable_pii_filter: Optional[bool] = None
     enable_reranker: Optional[bool] = None
     reranker_provider: Optional[str] = None
     reranker_model: Optional[str] = None

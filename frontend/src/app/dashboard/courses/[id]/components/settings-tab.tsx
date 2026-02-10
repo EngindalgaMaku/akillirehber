@@ -34,6 +34,7 @@ import {
   Info,
   ChevronDown,
   Zap,
+  Shield,
 } from "lucide-react";
 
 interface SettingsTabProps {
@@ -107,7 +108,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
   
   // Accordion state (only one section open at a time)
   const [expandedSection, setExpandedSection] = useState<
-    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | "vector_store" | "direct_llm" | null
+    "course_info" | "system_prompt" | "chunking" | "search" | "reranker" | "llm" | "vector_store" | "direct_llm" | "pii_filter" | null
   >(null);
   
   // Model management state
@@ -148,6 +149,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
     reranker_top_k: 10,
     vector_store: "weaviate" as string,
     enable_direct_llm: false,
+    enable_pii_filter: false,
   });
 
   const loadSettings = useCallback(async () => {
@@ -174,6 +176,7 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
         reranker_top_k: data.reranker_top_k || 10,
         vector_store: data.vector_store || "weaviate",
         enable_direct_llm: data.enable_direct_llm || false,
+        enable_pii_filter: data.enable_pii_filter || false,
       };
       console.log("New Form Data:", newFormData);
       setFormData(newFormData);
@@ -1286,6 +1289,82 @@ export function SettingsTab({ courseId, isOwner, courseName }: SettingsTabProps)
                     <div className="text-xs text-amber-700 space-y-1">
                       <p className="font-medium">Direct LLM modu aktif</p>
                       <p>Sohbet ve testlerde doküman bağlamı kullanılmayacak. LLM yalnızca kendi eğitim verisine dayanarak yanıt verecek. Bu mod RAG vs yalın LLM karşılaştırması için idealdir.</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* PII Filter Section */}
+      <div className={sectionCardStyles}>
+        <div
+          className={`${sectionHeaderStyles} cursor-pointer hover:bg-slate-100/50 transition-colors`}
+          onClick={() =>
+            setExpandedSection((prev) => (prev === "pii_filter" ? null : "pii_filter"))
+          }
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-sm ${
+                formData.enable_pii_filter
+                  ? 'bg-gradient-to-br from-rose-500 to-pink-600'
+                  : 'bg-gradient-to-br from-slate-400 to-slate-500'
+              }`}>
+                <Shield className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 text-lg">Kişisel Bilgi Filtresi</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Öğrenci mesajlarındaki kişisel bilgileri otomatik tespit et
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {formData.enable_pii_filter && (
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-rose-100 text-rose-700">
+                  Aktif
+                </span>
+              )}
+              <ChevronDown
+                className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                  expandedSection === "pii_filter" ? 'rotate-180' : ''
+                }`}
+              />
+            </div>
+          </div>
+        </div>
+        {expandedSection === "pii_filter" && (
+          <div className={sectionContentStyles}>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium text-slate-700">Kişisel Bilgi Filtresini Etkinleştir</Label>
+                  <p className="text-xs text-slate-500">
+                    Aktif olduğunda öğrenci mesajları LLM&apos;e gönderilmeden önce kişisel bilgi
+                    içerip içermediği kontrol edilir. Kişisel bilgi tespit edilirse mesaj engellenir.
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.enable_pii_filter}
+                  onCheckedChange={(checked) => setFormData({ ...formData, enable_pii_filter: checked })}
+                  disabled={!isOwner}
+                  className="ml-4"
+                />
+              </div>
+              {formData.enable_pii_filter && (
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200">
+                  <div className="flex items-start gap-2">
+                    <Shield className="w-4 h-4 text-rose-600 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-rose-700 space-y-1">
+                      <p className="font-medium">Kişisel bilgi filtresi aktif</p>
+                      <p>
+                        TC kimlik no, telefon, adres, e-posta, şifre, kredi kartı gibi kişisel bilgiler
+                        embedding tabanlı zero-shot classification ile tespit edilir. Dersin embedding modeli
+                        ({formData.default_embedding_model}) kullanılır.
+                      </p>
                     </div>
                   </div>
                 </div>

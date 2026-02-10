@@ -32,6 +32,7 @@ from app.services.weaviate_service import get_weaviate_service, SearchResult
 from app.services.chat_validation_service import ChatValidationService
 from app.services.rerank_service import get_rerank_service
 from app.services.memory_service import get_memory_service
+from app.services.pii_detection_service import detect_pii
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -180,6 +181,43 @@ async def chat_with_course(
 
     # Get course settings for LLM configuration (needed before chunk validation for Direct LLM check)
     settings = get_or_create_settings(db, course_id)
+
+    # ==================== PII FILTER ====================
+    if getattr(settings, 'enable_pii_filter', False):
+        try:
+            is_pii, pii_score, pii_label = detect_pii(
+                message=request.message,
+                embedding_model=settings.default_embedding_model,
+            )
+            if is_pii:
+                pii_warning = (
+                    "⚠️ Mesajınızda kişisel bilgi tespit edildi. "
+                    "Güvenliğiniz için kişisel bilgilerinizi (TC kimlik no, telefon, "
+                    "adres, e-posta, şifre vb.) sohbette paylaşmayınız."
+                )
+                print(f"[PII] Blocked message from user {current_user.id}: score={pii_score:.3f}, label={pii_label}")
+                db.add(
+                    ChatMessageDB(
+                        course_id=course_id,
+                        user_id=current_user.id,
+                        role="user",
+                        content=request.message,
+                    )
+                )
+                db.add(
+                    ChatMessageDB(
+                        course_id=course_id,
+                        user_id=current_user.id,
+                        role="assistant",
+                        content=pii_warning,
+                        sources=[],
+                    )
+                )
+                db.commit()
+                return ChatResponse(message=pii_warning, sources=[])
+        except Exception as e:
+            print(f"[PII] PII detection failed, continuing without filter: {e}")
+    # ==================== END PII FILTER ====================
 
     if not chunk_validation.get("valid", False) and not getattr(settings, 'enable_direct_llm', False):
         message = (
