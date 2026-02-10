@@ -147,12 +147,74 @@ def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
         return 0.0
     return float(dot / (norm_a * norm_b))
 
+def _knn_classify(
+    message_embedding: List[float],
+    pii_embeddings: List[List[float]],
+    non_pii_embeddings: List[List[float]],
+    k: int = KNN_K,
+) -> Tuple[bool, float, str]:
+    """k-NN sınıflandırma mantığı.
+
+    Kullanıcı mesajının embedding'ini tüm örnek cümlelerin embedding'leriyle
+    cosine similarity ile karşılaştırır, en yakın k komşuya göre sınıflandırır.
+
+    Args:
+        message_embedding: Kullanıcı mesajının embedding vektörü
+        pii_embeddings: PII örnek cümlelerinin embedding'leri
+        non_pii_embeddings: Non-PII örnek cümlelerinin embedding'leri
+        k: En yakın komşu sayısı
+
+    Returns:
+        (is_pii, score, matched_category)
+    """
+    # Tüm örneklerle similarity hesapla: (score, is_pii, category)
+    scored: List[Tuple[float, bool, str]] = []
+
+    for i, emb in enumerate(pii_embeddings):
+        score = cosine_similarity(message_embedding, emb)
+        category = PII_EXAMPLES[i][1] if i < len(PII_EXAMPLES) else "pii"
+        scored.append((score, True, category))
+
+    for i, emb in enumerate(non_pii_embeddings):
+        score = cosine_similarity(message_embedding, emb)
+        category = NON_PII_EXAMPLES[i][1] if i < len(NON_PII_EXAMPLES) else "non_pii"
+        scored.append((score, False, category))
+
+    # En yüksek skorlu k örneği seç
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_k = scored[:k]
+
+    # Çoğunluk oylaması
+    pii_count = sum(1 for _, is_pii, _ in top_k if is_pii)
+    non_pii_count = k - pii_count
+
+    if pii_count > non_pii_count:
+        # PII çoğunlukta — ortalama similarity skoru
+        avg_score = sum(s for s, _, _ in top_k) / k
+        # En yakın PII komşunun kategorisini döndür
+        matched_category = next(cat for _, is_pii, cat in top_k if is_pii)
+
+        # Threshold kontrolü
+        if avg_score < PII_THRESHOLD:
+            return False, avg_score, ""
+
+        return True, avg_score, matched_category
+    else:
+        # Non-PII çoğunlukta
+        avg_score = sum(s for s, _, _ in top_k) / k
+        return False, avg_score, ""
+
+
 
 def detect_pii(
     message: str,
     embedding_model: str,
 ) -> Tuple[bool, float, str]:
     """Mesajda kişisel bilgi olup olmadığını tespit et.
+
+    Few-shot embedding classification ile k-NN tabanlı sınıflandırma yapar.
+    Örnek cümlelerin embedding'leri cache'den gelir, sadece kullanıcı mesajının
+    embedding'i hesaplanır.
 
     Args:
         message: Kullanıcı mesajı
@@ -164,56 +226,53 @@ def detect_pii(
     if not message or not message.strip():
         return False, 0.0, ""
 
-    embedding_service = get_embedding_service()
+    try:
+        embedding_service = get_embedding_service()
 
-    # Örnek cümle metinlerini çıkar (geçici — Task 4'te k-NN'e dönüşecek)
-    pii_texts = [text for text, _ in PII_EXAMPLES]
-    non_pii_texts = [text for text, _ in NON_PII_EXAMPLES]
-    pii_categories = [cat for _, cat in PII_EXAMPLES]
-    non_pii_categories = [cat for _, cat in NON_PII_EXAMPLES]
+        # Cache'i kontrol et, gerekirse initialize et
+        cached = _embedding_cache.get_embeddings(embedding_model)
+        if cached is None:
+            success = _embedding_cache.initialize(embedding_model, embedding_service)
+            if not success:
+                logger.warning("[PII] Cache initialization failed, skipping PII check")
+                return False, 0.0, ""
+            cached = _embedding_cache.get_embeddings(embedding_model)
+            if cached is None:
+                logger.warning("[PII] Cache unavailable after initialization, skipping PII check")
+                return False, 0.0, ""
 
-    # Tüm metinleri tek seferde embed et
-    all_texts = [message] + pii_texts + non_pii_texts
-    all_embeddings = embedding_service.get_embeddings(
-        all_texts,
-        model=embedding_model,
-        input_type="query",
-    )
+        pii_embeddings, non_pii_embeddings = cached
 
-    if not all_embeddings or len(all_embeddings) < len(all_texts):
-        logger.warning("[PII] Embedding generation failed, skipping PII check")
+        # Sadece kullanıcı mesajının embedding'ini hesapla
+        msg_embeddings = embedding_service.get_embeddings(
+            [message],
+            model=embedding_model,
+            input_type="query",
+        )
+
+        if not msg_embeddings or len(msg_embeddings) < 1:
+            logger.warning("[PII] Message embedding failed, skipping PII check")
+            return False, 0.0, ""
+
+        message_embedding = msg_embeddings[0]
+
+        # k-NN sınıflandırma
+        is_pii, score, matched_category = _knn_classify(
+            message_embedding, pii_embeddings, non_pii_embeddings
+        )
+
+        logger.info(
+            "[PII] message=%s... | score=%.3f | matched=%s | is_pii=%s",
+            message[:50],
+            score,
+            matched_category,
+            is_pii,
+        )
+
+        return is_pii, score, matched_category
+
+    except Exception as e:
+        logger.warning("[PII] Detection error: %s", e)
         return False, 0.0, ""
 
-    message_embedding = all_embeddings[0]
-    pii_embeddings = all_embeddings[1 : 1 + len(pii_texts)]
-    non_pii_embeddings = all_embeddings[1 + len(pii_texts) :]
 
-    # PII örnekleriyle similarity hesapla
-    pii_scores = []
-    for i, emb in enumerate(pii_embeddings):
-        score = cosine_similarity(message_embedding, emb)
-        pii_scores.append((score, pii_categories[i]))
-
-    # Non-PII örnekleriyle similarity hesapla
-    non_pii_scores = []
-    for i, emb in enumerate(non_pii_embeddings):
-        score = cosine_similarity(message_embedding, emb)
-        non_pii_scores.append((score, non_pii_categories[i]))
-
-    # En yüksek PII ve non-PII skorlarını bul
-    max_pii_score, max_pii_label = max(pii_scores, key=lambda x: x[0])
-    max_non_pii_score, _ = max(non_pii_scores, key=lambda x: x[0])
-
-    # PII skoru non-PII skorundan yüksekse ve eşik değerinin üstündeyse → PII
-    is_pii = max_pii_score > max_non_pii_score and max_pii_score >= PII_THRESHOLD
-
-    logger.info(
-        "[PII] message=%s... | pii_score=%.3f (%s) | non_pii_score=%.3f | is_pii=%s",
-        message[:50],
-        max_pii_score,
-        max_pii_label,
-        max_non_pii_score,
-        is_pii,
-    )
-
-    return is_pii, max_pii_score, max_pii_label
