@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import weaviate
 from weaviate.classes.config import Configure, Property, DataType
-from weaviate.classes.query import MetadataQuery, Filter
+from weaviate.classes.query import MetadataQuery, Filter, Fusion
 from weaviate.classes.init import Auth
 
 from app.config import get_settings
@@ -494,6 +494,7 @@ class WeaviateService:
             vector=query_vector,
             alpha=alpha,
             limit=limit,
+            fusion_type=Fusion.RELATIVE_SCORE,
             return_metadata=MetadataQuery(score=True)
         )
 
