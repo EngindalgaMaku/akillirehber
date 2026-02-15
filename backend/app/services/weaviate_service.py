@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import weaviate
 from weaviate.classes.config import Configure, Property, DataType
 from weaviate.classes.query import MetadataQuery, Filter
-from weaviate.classes.enums import HybridFusion
+from weaviate.collections.classes.grpc import HybridFusion
 from weaviate.classes.init import Auth
 
 from app.config import get_settings
