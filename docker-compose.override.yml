@@ -1,0 +1,72 @@
+# Development override configuration
+# This file automatically extends docker-compose.yml when present
+# Run with: docker-compose up --build (or docker-compose up)
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+      # Development worker settings - increased for parallel processing
+      - WORKERS=2  # Increased from 1 to 2 for better concurrency
+      - THREADS=4  # Increased from 1 to 4 for parallel RAGAS/semantic tests
+      # Numba cache directory for UMAP (required by Giskard)
+      - NUMBA_CACHE_DIR=/tmp/numba_cache
+      # W&B needs a writable directory for artifact staging
+      - WANDB_DATA_DIR=/tmp/wandb
+    volumes:
+      # Mount source code for hot reload (writable)
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/requirements.txt:/app/requirements.txt
+      - ./backend/requirements-base.txt:/app/requirements-base.txt
+      # Mount backups directory for backup/restore functionality
+      - ./backups:/app/backups
+    # Override restart policy for development
+    restart: unless-stopped
+    # Use development command (uvicorn with --reload is set in docker-entrypoint.sh)
+    command: []
+
+  ragas:
+    environment:
+      - LOG_LEVEL=debug
+    volumes:
+      # Mount source code for hot reload (writable)
+      - ./ragas_service:/app
+    restart: unless-stopped
+
+  # ===========================================
+  # Frontend Service - Next.js (Development)
+  # ===========================================
+  # NOTE: Frontend is currently running locally with npm run dev for hot-reload
+  # To enable Docker frontend, uncomment the service below
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile.dev
+  #   container_name: rag-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NODE_ENV=development
+  #     - NEXT_PUBLIC_API_URL=http://localhost:8000
+  #   volumes:
+  #     # Mount source code for hot reload (writable)
+  #     - ./frontend/src:/app/src
+  #     - ./frontend/public:/app/public
+  #     - ./frontend/package.json:/app/package.json
+  #     - ./frontend/next.config.ts:/app/next.config.ts
+  #     - ./frontend/tsconfig.json:/app/tsconfig.json
+  #     # Mount node_modules to avoid conflicts
+  #     - /app/node_modules
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - rag-network
+  #   restart: unless-stopped
+  #   # Development server with hot reload
+  #   command: []

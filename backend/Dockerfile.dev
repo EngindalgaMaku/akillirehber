@@ -1,0 +1,70 @@
+# Development Dockerfile - RAG Educational Chatbot
+# Optimized for development with faster builds and hot reload support
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install build and runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    libpq5 \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+# First install large packages that rarely change (for better caching)
+COPY requirements-base.txt .
+# Disable hash checking to avoid version conflicts
+RUN pip install --no-cache-dir --use-deprecated=legacy-resolver -r requirements-base.txt
+
+# Then install other packages that may change more frequently
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Download NLTK data
+ENV NLTK_DATA=/usr/share/nltk_data
+RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True, download_dir='/usr/share/nltk_data')"
+
+# Pre-download BERTScore model to avoid runtime download issues
+ENV TRANSFORMERS_CACHE=/tmp/huggingface_cache
+ENV HF_HOME=/tmp/huggingface_cache
+RUN mkdir -p /tmp/huggingface_cache && \
+    python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('bert-base-multilingual-cased'); AutoModel.from_pretrained('bert-base-multilingual-cased')" && \
+    chmod -R 777 /tmp/huggingface_cache
+
+# Set up Numba cache directory for UMAP
+ENV NUMBA_CACHE_DIR=/tmp/numba_cache
+RUN mkdir -p /tmp/numba_cache && \
+    chmod 777 /tmp/numba_cache
+
+# Set up W&B data directory (writable staging for artifacts)
+ENV WANDB_DATA_DIR=/tmp/wandb
+RUN mkdir -p /tmp/wandb/artifacts/staging && \
+    mkdir -p /home/appuser/.local/share/wandb/artifacts/staging && \
+    chmod -R 777 /tmp/wandb && \
+    chmod -R 777 /home/appuser/.local/share/wandb || true
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security (but keep write permissions for development)
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+# Set permissions for development (writable volumes)
+RUN chown -R appuser:appgroup /app
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
+
+# Run the application using entrypoint script
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

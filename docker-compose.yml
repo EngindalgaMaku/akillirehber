@@ -1,0 +1,108 @@
+# Production mode with multiple workers for backend
+# For development with frontend in Docker, use: docker-compose -f docker-compose.dev.yml up -d
+
+services:
+  # ===========================================
+  # Backend Service - FastAPI
+  # ===========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-}
+      - WEAVIATE_URL=${WEAVIATE_URL:-}
+      - RAGAS_URL=http://rag-ragas:8001
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CLAUDEGG_API_KEY=${CLAUDEGG_API_KEY:-}
+      - APICLAUDEGG_API_KEY=${APICLAUDEGG_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
+      # Worker configuration for production
+      - WORKERS=${WORKERS:-4}
+      - THREADS=${THREADS:-4}
+      - WORKER_CONNECTIONS=${WORKER_CONNECTIONS:-1000}
+      - MAX_REQUESTS=${MAX_REQUESTS:-1000}
+      - MAX_REQUESTS_JITTER=${MAX_REQUESTS_JITTER:-100}
+      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-300}
+      - GUNICORN_KEEPALIVE=${GUNICORN_KEEPALIVE:-5}
+      - GUNICORN_GRACEFUL_TIMEOUT=${GUNICORN_GRACEFUL_TIMEOUT:-30}
+      - GUNICORN_BIND=${GUNICORN_BIND:-0.0.0.0:8000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Numba cache directory for UMAP (required by Giskard)
+      - NUMBA_CACHE_DIR=/tmp/numba_cache
+      - WANDB_DATA_DIR=/tmp/wandb
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/alembic:/app/alembic:ro
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+      - ./backups:/app/backups
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================
+  # RAGAS Evaluation Service
+  # ===========================================
+  ragas:
+    build:
+      context: ./ragas_service
+      dockerfile: Dockerfile
+    container_name: rag-ragas
+    ports:
+      - "8001:8001"
+    environment:
+      # LLM Provider API Keys
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CLAUDEGG_API_KEY=${CLAUDEGG_API_KEY:-}
+      - APICLAUDEGG_API_KEY=${APICLAUDEGG_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      # Embedding Provider API Keys
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      # Optional: Force specific provider (groq, openrouter, openai, claudegg, apiclaudegg, deepseek, cohere, alibaba, zai)
+      - RAGAS_PROVIDER=${RAGAS_PROVIDER:-}
+      # Optional: Override default model
+      - RAGAS_MODEL=${RAGAS_MODEL:-}
+    volumes:
+      - ./ragas_service:/app:ro
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  rag-network:
+    driver: bridge
+    name: rag-educational-network
+
+volumes: {}

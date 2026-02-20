@@ -1,0 +1,59 @@
+# Coolify Frontend-Only Deployment
+# Bu dosyayı Coolify'da ayrı bir Docker Compose resource olarak kullanın
+# Backend ayrı bir resource olarak deploy edilmelidir
+
+services:
+  # ===========================================
+  # Frontend Service - Next.js (Ayrı Deploy)
+  # ===========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    container_name: rag-frontend
+    expose:
+      - "3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    # Network kullanmıyoruz - default bridge kullan
+    restart: unless-stopped
+    # Healthcheck kaldırıldı - node:alpine'da curl/wget yok
+    # Coolify kendi healthcheck'i kullanır
+    labels:
+      - "coolify.managed=true"
+      # Coolify Traefik labels - v4 için gerekli
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`akillirehber.kodleon.com`)"
+      - "traefik.http.routers.frontend.entrypoints=https"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.routers.frontend-http.rule=Host(`akillirehber.kodleon.com`)"
+      - "traefik.http.routers.frontend-http.entrypoints=http"
+      - "traefik.http.middlewares.frontend-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.frontend-http.middlewares=frontend-redirect"
+
+# ===========================================
+# Coolify Deployment Notes - Frontend Only
+# ===========================================
+# 
+# 1. Coolify'da yeni bir "Docker Compose" resource oluşturun
+# 2. Bu dosyayı repository'den seçin veya yapıştırın
+# 3. Aşağıdaki environment variable'ları Coolify'da ayarlayın:
+#
+# ZORUNLU:
+#   - NEXT_PUBLIC_API_URL: Backend API URL'i 
+#     (örn: https://api.yourdomain.com veya backend Coolify domain'i)
+#
+# 4. Port mapping'leri Coolify'ın reverse proxy'sine göre ayarlayın
+# 5. Bu frontend servisi backend'den bağımsız olarak scale edilebilir
+#
+# ÖNEMLİ:
+# - Backend ayrı bir Docker Compose resource olarak deploy edilmeli
+# - Backend ve frontend aynı Coolify instance'ında olabilir ama 
+#   farklı resource'lar olarak
+# - NEXT_PUBLIC_API_URL backend'in dış URL'si olmalı (iç network değil)
+#
+# Deployment sonrası:
+# - Frontend: https://yourdomain.com (Coolify domain)

@@ -1,0 +1,15 @@
+{
+  "api_base_url": "http://localhost:8000",
+  "ragas_service_url": "http://localhost:8001",
+  "course_id": 1,
+  "test_set_id": 1,
+  "llm_provider": "openrouter",
+  "llm_model": "openai/gpt-4o-mini",
+  "embedding_model": "openai/text-embedding-3-small",
+  "search_type": "hybrid",
+  "search_alpha": 0.5,
+  "search_top_k": 5,
+  "llm_temperature": 0.7,
+  "llm_max_tokens": 1000,
+  "results_dir": "results"
+}

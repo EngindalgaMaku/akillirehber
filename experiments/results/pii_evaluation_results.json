@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-02-20T22:53:15.910005",
+  "test_count": 34,
+  "regex_layer": {
+    "metrics": {
+      "tp": 15,
+      "fp": 0,
+      "fn": 3,
+      "tn": 16,
+      "precision": 1.0,
+      "recall": 0.8333333333333334,
+      "f1": 0.9090909090909091,
+      "total": 34
+    },
+    "false_positives": [],
+    "false_negatives": [
+      {
+        "message": "Şifrem abc123456 olarak ayarladım",
+        "category": "sifre"
+      },
+      {
+        "message": "Ev adresim Atatürk Caddesi No:15 Kadıköy İstanbul",
+        "category": "adres"
+      },
+      {
+        "message": "Doğum tarihim 15 Mart 1995",
+        "category": "dogum_tarihi"
+      }
+    ]
+  }
+}

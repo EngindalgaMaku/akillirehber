@@ -1,0 +1,126 @@
+# Coolify Backend-Only Deployment
+# Bu dosyayı Coolify'da Docker Compose resource olarak kullanın
+# Frontend ayrı bir resource olarak deploy edilmelidir
+
+services:
+  # ===========================================
+  # Backend Service - FastAPI
+  # ===========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: rag-backend
+    expose:
+      - "8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-}
+      - WEAVIATE_URL=${WEAVIATE_URL:-}
+      - RAGAS_URL=http://ragas:8001
+      - SECRET_KEY=${SECRET_KEY}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-30}
+      - ENVIRONMENT=production
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CLAUDEGG_API_KEY=${CLAUDEGG_API_KEY:-}
+      - APICLAUDEGG_API_KEY=${APICLAUDEGG_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+    volumes:
+      - ./backups:/app/backups
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "coolify.managed=true"
+      # Traefik labels for Coolify v4
+      - "traefik.enable=true"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolalloworiginlist=https://akillirehber.kodleon.com"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowheaders=*"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowcredentials=true"
+      - "traefik.http.routers.backend.middlewares=backend-cors"
+
+  # ===========================================
+  # RAGAS Evaluation Service
+  # ===========================================
+  ragas:
+    build:
+      context: ./ragas_service
+      dockerfile: Dockerfile.prod
+    container_name: rag-ragas
+    expose:
+      - "8001"
+    environment:
+      # LLM Provider API Keys
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CLAUDEGG_API_KEY=${CLAUDEGG_API_KEY:-}
+      - APICLAUDEGG_API_KEY=${APICLAUDEGG_API_KEY:-}
+      # Embedding Provider API Keys
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      # Optional: Force specific provider (groq, openrouter, openai, claudegg, apiclaudegg)
+      - RAGAS_PROVIDER=${RAGAS_PROVIDER:-}
+      # Optional: Override default model
+      - RAGAS_MODEL=${RAGAS_MODEL:-}
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "coolify.managed=true"
+
+networks:
+  rag-network:
+    driver: bridge
+
+volumes:
+  {}
+
+# ===========================================
+# Coolify Deployment Notes
+# ===========================================
+# 
+# 1. Coolify'da yeni bir "Docker Compose" resource oluşturun
+# 2. Bu dosyayı repository'den seçin veya yapıştırın
+# 3. Aşağıdaki environment variable'ları Coolify'da ayarlayın:
+#
+# ZORUNLU:
+#   - SECRET_KEY: JWT için güçlü bir secret key (openssl rand -hex 32)
+#   - POSTGRES_PASSWORD: PostgreSQL şifresi
+#   - NEXT_PUBLIC_API_URL: Backend API URL'i (örn: https://api.yourdomain.com)
+#
+# OPSIYONEL (En az bir LLM provider gerekli):
+#   - OPENROUTER_API_KEY: OpenRouter API key (önerilen)
+#   - CLAUDEGG_API_KEY: Claude.gg API key
+#   - GROQ_API_KEY: Groq API key
+#   - OPENAI_API_KEY: OpenAI API key
+#   - COHERE_API_KEY: Cohere API key (reranker için)
+#   - DASHSCOPE_API_KEY: Alibaba DashScope API key
+#
+# 4. Port mapping'leri Coolify'ın reverse proxy'sine göre ayarlayın
+# 5. Volume'lar otomatik olarak persist edilecektir
+# 6. Health check'ler servislerin hazır olmasını bekler
+#
+# Deployment sonrası:
+# - Frontend: https://yourdomain.com
+# - Backend API: https://api.yourdomain.com
+# - API Docs: https://api.yourdomain.com/docs
+#
